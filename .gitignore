@@ -1,0 +1,45 @@
+# --- Secrets & user data (NEVER commit) ---
+calliope-backend/calliope_config.json
+calliope-backend/data/
+backups/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+calliope-backend/build/
+calliope-backend/dist/
+*.egg-info/
+
+# --- Node / Svelte ---
+node_modules/
+calliope-web/build/
+calliope-web/.svelte-kit/
+electron/dist/
+electron/builder-debug.yml
+
+# --- Build artifacts (generated, not source) ---
+calliope-backend/src/calliope/static/
+*.zip
+
+# --- Tooling / QA ---
+.playwright-mcp/
+.cursor/
+*.log
+
+# --- Local-only files (not part of the public repo) ---
+electron/
+AGENTS.md
+start.bat
+end.bat
+ScreenShots/
+docs/
+prototype/
+2026-*.md

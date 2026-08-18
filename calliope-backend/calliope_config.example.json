@@ -1,0 +1,15 @@
+{
+  "host": "127.0.0.1",
+  "port": 8247,
+  "data_dir": "./data",
+  "assets_dir": "./data/assets",
+  "db_name": "calliope.db",
+  "llm_base_url": "http://127.0.0.1:11434/v1",
+  "llm_model": "Qwen3.8-27B",
+  "llm_api_key": "",
+  "comfyui_base_url": "http://127.0.0.1:8188",
+  "queue_concurrency": 1,
+  "queue_poll_interval_sec": 2.0,
+  "queue_max_retries": 4,
+  "dry_run": false
+}

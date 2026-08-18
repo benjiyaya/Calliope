@@ -1,0 +1,351 @@
+{
+  "115": {
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 0.8,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector (Size)"
+    }
+  },
+  "131": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "132",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "132": {
+    "inputs": {
+      "value": 5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "(input:duration) Duration"
+    }
+  },
+  "138": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "(input:prompt) Text Prompt"
+    }
+  },
+  "148": {
+    "inputs": {
+      "image": "CharSheet_00002_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "(input:image) Ref 1"
+    }
+  },
+  "149": {
+    "inputs": {
+      "image": "CharSheet_00005_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "(input:image) Ref 2"
+    }
+  },
+  "160": {
+    "inputs": {
+      "string_a": "r34l1sm , create realism style cinematic video. ",
+      "string_b": [
+        "138",
+        0
+      ],
+      "delimiter": " "
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "161": {
+    "inputs": {
+      "unet_name": "minimax-h3\\minimax_h3_ref2va_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "162": {
+    "inputs": {
+      "lora_name": "minimax-h3\\minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "161",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "163": {
+    "inputs": {
+      "clip_name": "minimax-h3\\qwen3vl_32b_minimax_h3_int8_convrot.comfy.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "164": {
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "165": {
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "166": {
+    "inputs": {
+      "shift_video": 12,
+      "shift_audio": 3,
+      "model": [
+        "167",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SigmaShift",
+    "_meta": {
+      "title": "ModelSamplingMiniMaxH3"
+    }
+  },
+  "167": {
+    "inputs": {
+      "sage_attention": "auto",
+      "allow_compile": false,
+      "model": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "PathchSageAttentionKJ",
+    "_meta": {
+      "title": "Patch Sage Attention KJ"
+    }
+  },
+  "169": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "170": {
+    "inputs": {
+      "scheduler": "beta",
+      "steps": 8,
+      "denoise": 1,
+      "model": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "171": {
+    "inputs": {
+      "noise_seed": 1043441231554445
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "172": {
+    "inputs": {
+      "model": [
+        "166",
+        0
+      ],
+      "conditioning": [
+        "178",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "173": {
+    "inputs": {
+      "noise": [
+        "171",
+        0
+      ],
+      "guider": [
+        "172",
+        0
+      ],
+      "sampler": [
+        "169",
+        0
+      ],
+      "sigmas": [
+        "170",
+        0
+      ],
+      "latent_image": [
+        "178",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "174": {
+    "inputs": {
+      "samples": [
+        "173",
+        0
+      ],
+      "vae": [
+        "164",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "175": {
+    "inputs": {
+      "samples": [
+        "173",
+        0
+      ],
+      "vae": [
+        "165",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "176": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Calliope/vid",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": false,
+      "images": [
+        "174",
+        0
+      ],
+      "audio": [
+        "175",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "(output:video) Video"
+    }
+  },
+  "178": {
+    "inputs": {
+      "prompt": [
+        "160",
+        0
+      ],
+      "width": [
+        "115",
+        0
+      ],
+      "height": [
+        "115",
+        1
+      ],
+      "length": [
+        "131",
+        1
+      ],
+      "ref_image_size": "match",
+      "clip": [
+        "163",
+        0
+      ],
+      "vae": [
+        "164",
+        0
+      ],
+      "audio_vae": [
+        "165",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "148",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "149",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "MiniMax H3 Reference to Video"
+    }
+  },
+  "180": {
+    "inputs": {
+      "lora_name": "minimax-h3\\h3-realism-people-t2v-i2v-r2v(r34l1sm).safetensors",
+      "strength_model": 1,
+      "model": [
+        "162",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  }
+}

@@ -2,13 +2,13 @@
 
 Calliope is a local-first story-to-video studio. You type a story idea; Calliope drafts a storyline with beats, characters, and locations, writes a per-scene script, then generates a video clip per scene by driving your own ComfyUI install. When the clips are done, one click stitches them into a finished film with crossfades and matched loudness (ffmpeg). Everything runs on your machine: projects live in SQLite, media lives in folders, and no cloud service is involved beyond the LLM endpoint you point it at.
 
-## Download & run (Windows)
+## Install — Windows EXE (recommended)
 
-1. Grab **`Calliope-win-x64.zip`** from the [latest release](../../releases).
+1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.1.0-win-x64.zip`) from the [latest release](../../releases).
 2. Unzip it anywhere writable (avoid `Program Files`).
 3. Run `win-unpacked\Calliope.exe`.
 
-No installer, no dev setup. First launch shows a splash while the backend boots. Windows SmartScreen will warn on first run (unsigned binary) — that's expected.
+No installer, no dev setup. First launch shows a splash while the backend boots. Windows SmartScreen will warn on first run (unsigned binary) — that's expected: click **More info → Run anyway**.
 
 **Portable:** your projects, database, generated media, and settings live next to the app:
 
@@ -19,21 +19,38 @@ No installer, no dev setup. First launch shows a splash while the backend boots.
 
 Move or copy the whole unzipped folder to relocate the app together with its data.
 
-<img width="1702" height="1041" alt="Screenshot 2026-07-28 045615" src="https://github.com/user-attachments/assets/e5450a46-d8f9-48fe-8163-5efffaeccb0e" />
+## Install — from source (npm + Python)
 
-<img width="1702" height="1049" alt="Screenshot 2026-07-28 052215" src="https://github.com/user-attachments/assets/703c3def-c992-41f7-8fef-bb2c7ef51535" />
+For development, or if you prefer running the web UI in a browser instead of the Electron shell.
 
-<img width="1697" height="1047" alt="Screenshot 2026-07-28 052242" src="https://github.com/user-attachments/assets/84618fe3-1f33-4482-bbe1-b8d13866bd96" />
+**Prerequisites**
 
-<img width="1686" height="967" alt="Screenshot 2026-07-28 052349" src="https://github.com/user-attachments/assets/193af234-3862-467b-9087-373ffcd26d4a" />
+- Python 3.11+
+- Node.js 18+ (npm)
+- A running ComfyUI install, with the models your workflows need already set up
+- An OpenAI-compatible LLM endpoint — local (LM Studio, Ollama, etc.) or hosted
+- ffmpeg on PATH — needed for film export
 
+**1. Backend (FastAPI)**
 
-## Requirements
+```bash
+cd calliope-backend
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\python -m calliope.main --host 127.0.0.1 --port 8247
+```
 
-- **Windows 10/11**
-- **A running ComfyUI install**, with the models your workflows need already set up
-- **An OpenAI-compatible LLM endpoint** — local (LM Studio, Ollama, etc.) or hosted
-- **ffmpeg on PATH** — needed for film export
+Optionally copy `calliope_config.example.json` to `calliope_config.json` and edit it before starting (LLM endpoint, ComfyUI URL). You can also configure everything later in the app's **Settings** page. Never commit `calliope_config.json` — it stores your API key.
+
+**2. Frontend (SvelteKit)**
+
+```bash
+cd calliope-web
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. The dev server proxies `/api` to the backend on `127.0.0.1:8247`.
 
 ## First run
 
@@ -59,7 +76,7 @@ The app walks a project through four stages — **Story, Assets, Script, Video**
 
 ## ComfyUI workflows (important)
 
-Calliope does **not** hardcode Comfy node IDs. It discovers editable nodes from **role tags** in the node titles of an **API Format** workflow JSON. The `ComfyAPI/` folder in this repo contains ready-to-import example workflows (LTX-2.3 ref2vid, krea2 t2i).
+Calliope does **not** hardcode Comfy node IDs. It discovers editable nodes from **role tags** in the node titles of an **API Format** workflow JSON. The `example_ComfyUI_workflows/` folder in this repo contains ready-to-import examples (MiniMax H3 reference-to-video, krea2 text-to-image, character sheet).
 
 ### 1. Tag your nodes in ComfyUI
 
@@ -95,8 +112,9 @@ Input roles:
 | `height` | `h` | Shared form / defaults |
 | `character` | `char`, `portrait`, `sheet`, `face`, `ref` | Character reference path |
 | `location` | `loc`, `environment`, `env`, `background`, `scene` | Location reference path |
-| `image` | `img` | Generic image input |
+| `image` | `img` | Generic image input (ordered ref slot — see below) |
 | `seed` | — | Shared form |
+| `duration` | `dur`, `length`, `seconds` | Scene duration (video jobs) |
 
 Output roles:
 
@@ -106,6 +124,18 @@ Output roles:
 | `video` | `vid` |
 
 Unknown roles still show up in the dynamic form; they just get no special auto-fill. Plain `(Input)` / `(Output)` without a role still works through a deprecated label fallback, so old workflows keep working — but tag new workflows with explicit roles.
+
+#### Prompt profiles
+
+Each workflow has a **Prompt format** setting (default *Plain prose*). When set to *MiniMax H3 reference (6-section)*, Calliope rewrites each scene prompt at generation time into MiniMax H3's full-reference format (`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`, with `<Subject N>` labels and `<d>[Language] …</d>` dialogue). It is auto-suggested on import when the workflow contains a `MiniMaxH3*` node.
+
+For multi-reference workflows, generic `(Input:image)` inputs are filled in **node-id order** — characters in scene order, then the location — and that order defines the `<Subject N>` numbering in the prompt. Keep your ref node ids in the order you want subjects numbered. A `(Input:duration)` node receives the scene's duration in seconds.
+
+**Using the H3 profile from the scene form (Generate clip):** the form's auto-fill vs. override rule is simple — anything you type or pick wins over the automatic value.
+
+- **Text Prompt — leave it empty.** An empty field gets the LLM-rewritten six-section H3 prompt built from the scene's action, dialogue, characters, and location. If you type anything, your text is sent verbatim and the model receives plain prose instead of the H3 format.
+- **Ref 1 / Ref 2 — leave them on "Choose asset…"** to auto-fill from the scene's characters (in scene order) then the location, with `<Subject N>` numbering matched to those slots. Picking an asset manually overrides just that slot (and you take over subject numbering for it).
+- **Duration** auto-fills from the scene's estimated duration; edit it only when you want a different clip length.
 
 ### 3. Export the workflow
 
@@ -128,6 +158,16 @@ If ComfyUI "doesn't know what to generate" or jobs come back empty:
 
 Calliope talks to ComfyUI purely over its HTTP API: it uploads reference files with `POST /upload/image`, patches the workflow JSON and queues it via `POST /prompt`, polls `/history/{prompt_id}`, and downloads the results. It **never reads or writes ComfyUI's local `input/` / `output/` folders** — any folder paths stay configured on the ComfyUI side, not in Calliope.
 
-## Source code
+## License
 
-The app source (FastAPI backend, SvelteKit frontend) is not published yet — this repo currently ships the packaged app (via Releases), the Electron shell (`electron/`), and example ComfyUI workflows (`ComfyAPI/`).
+All rights reserved — © 2026 Calliope contributors.
+
+## Repo layout
+
+```text
+calliope-backend/            FastAPI backend (Python)
+calliope-web/                SvelteKit frontend
+example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
+```
+
+The Windows desktop app is built from this repo but not shipped in it — download it from the [Releases](../../releases) page.
