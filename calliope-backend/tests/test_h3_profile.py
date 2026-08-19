@@ -10,8 +10,8 @@ from calliope.comfyui.profiles import detect_prompt_profile
 from calliope.comfyui.smart_fill import ref_image_slots, smart_fill_inputs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-H3_WORKFLOW = REPO_ROOT / "ComfyAPI" / "video_minimax_h3_r2v_API.json"
-KREA_WORKFLOW = REPO_ROOT / "ComfyAPI" / "krea2_t2i_2pass-nsfwEnable-API.json"
+H3_WORKFLOW = REPO_ROOT / "example_ComfyUI_workflows" / "video_minimax_h3_r2v_2ref_API.json"
+KREA_WORKFLOW = REPO_ROOT / "example_ComfyUI_workflows" / "Krea2_t2i_20260818_API.json"
 
 
 def _load(path: Path) -> dict:
@@ -29,7 +29,7 @@ def test_h3_workflow_parses_expected_roles():
     assert image_slots == ["148", "149"]  # node-id order = ref wiring order
 
     outputs = parse_dynamic_outputs(workflow)
-    assert any(o["nodeId"] == "153" and o["kind"] == "video" for o in outputs)
+    assert any(o["nodeId"] == "176" and o["kind"] == "video" for o in outputs)
 
 
 def test_detect_prompt_profile():
