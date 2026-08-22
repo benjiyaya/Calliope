@@ -136,6 +136,61 @@
 		onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
 	});
 
+	// --- Batch generate: queue clips one by one, in timeline order. ---
+	// One POST per scene (the H3 prompt rewrite runs synchronously inside each
+	// request, so a single all-scenes POST could take minutes and time out).
+	// The queue worker then renders them strictly in sequence (concurrency 1).
+	let batching = $state(false);
+	let batchNote = $state('');
+
+	const scenesNeedingClip = $derived(
+		scenes.filter((s) => !['done', 'pending', 'running'].includes(statusOf(s))),
+	);
+	const batchTargets = $derived(
+		scenesNeedingClip.length > 0
+			? scenesNeedingClip
+			: scenes.filter((s) => !['pending', 'running'].includes(statusOf(s))),
+	);
+	const batchLabel = $derived(
+		batching
+			? batchNote
+			: scenesNeedingClip.length > 0
+				? `Generate all (${scenesNeedingClip.length})`
+				: 'Regenerate all',
+	);
+
+	async function generateAll() {
+		if (batching || batchTargets.length === 0) return;
+		batching = true;
+		let queued = 0;
+		const targets = [...batchTargets].sort((a, b) => a.order_index - b.order_index);
+		for (let i = 0; i < targets.length; i++) {
+			const scene = targets[i];
+			batchNote = `Queueing ${i + 1}/${targets.length}…`;
+			try {
+				// Resolve like the per-scene button does: session pick → scene's stored
+				// workflow → first enabled video workflow. A scene whose stored workflow
+				// was deleted would otherwise enqueue a job doomed to "No workflow found".
+				await jobsApi.generateVideos(projectId, {
+					scene_ids: [scene.id],
+					workflow_id: workflowFor(scene)?.id,
+				});
+				queued++;
+				client.invalidateQueries({ queryKey: ['jobs'] });
+				client.invalidateQueries({ queryKey: ['scenes'] });
+			} catch (err) {
+				toast.error(
+					`Scene #${scene.order_index}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		batching = false;
+		batchNote = '';
+		if (queued > 0) toast.success(`${queued} clip${queued === 1 ? '' : 's'} queued — rendering in sequence`);
+		await client.invalidateQueries({ queryKey: ['jobs'] });
+		await client.invalidateQueries({ queryKey: ['scenes'] });
+	}
+
 	function workflowFor(scene: Scene): Workflow | undefined {
 		const id = selectedWorkflow[scene.id] ?? scene.workflow_id ?? undefined;
 		return enabledWorkflows.find((w) => w.id === id) ?? enabledWorkflows[0] ?? undefined;
@@ -345,6 +400,17 @@
 		</p>
 	</div>
 	<div class="actions">
+		{#if scenes.length > 0}
+			<Button
+				variant="primary"
+				disabled={batching || batchTargets.length === 0}
+				loading={batching}
+				title="Queue every scene's clip in timeline order; the worker renders them one at a time"
+				onclick={generateAll}
+			>
+				<Icon name="film" size={14} /> {batchLabel}
+			</Button>
+		{/if}
 		<Button variant="secondary" onclick={togglePause}>
 			{$queueStatusQuery.data?.paused ? 'Resume queue' : 'Pause queue'}
 		</Button>
