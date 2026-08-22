@@ -160,3 +160,102 @@ async def test_generate_structured_raises_when_both_attempts_fail(monkeypatch):
 
     with pytest.raises(ValueError):
         await generate_structured_public([{"role": "user", "content": "hi"}])
+
+
+# ---------- top-level JSON arrays (models emitting items without the envelope) ----------
+# Without special handling the balanced-object scan would confidently return just
+# the array's FIRST element — e.g. one story beat instead of {"beats": [...]} —
+# which surfaces downstream as "returned 0 beats" with no parse error anywhere.
+
+def test_extract_json_rejects_bare_array():
+    with pytest.raises(ValueError, match="top-level JSON array"):
+        extract_json('[{"order_index": 1}, {"order_index": 2}]')
+
+
+def test_extract_json_rejects_fenced_array():
+    with pytest.raises(ValueError, match="top-level JSON array"):
+        extract_json('```json\n[{"a": 1}, {"b": 2}]\n```')
+
+
+def test_extract_json_rejects_array_in_prose():
+    with pytest.raises(ValueError, match="top-level JSON array"):
+        extract_json('Sure, here are the beats: [{"a": 1}, {"b": 2}] hope that helps')
+
+
+def test_extract_json_array_inside_object_still_passes():
+    # An "[" inside {"beats": [...]} must not shadow the enclosing object.
+    text = 'Here you go: {"beats": [{"a": 1}], "characters": []} enjoy'
+    assert list(extract_json(text)) == ["beats", "characters"]
+
+
+async def test_generate_structured_recovers_from_bare_array_reply(monkeypatch):
+    # First reply is the items without the envelope; the json_object retry rescues it.
+    router = _SequenceRouter(
+        ['[{"order_index": 1, "title": "Beat"}]', '{"beats": [{"order_index": 1}]}'],
+        reject_response_format=False,
+    )
+    transport = httpx.MockTransport(router)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=transport))
+    monkeypatch.setattr("calliope.agent.llm.LLMClient", lambda: client)
+
+    result = await generate_structured_public([{"role": "user", "content": "hi"}])
+
+    assert result == {"beats": [{"order_index": 1}]}
+    assert router.requests[1].get("response_format") == {"type": "json_object"}
+
+
+# ---------- reasoning-only replies (thinking models returning no `content`) ----------
+# Reasoning models served via OpenAI-compatible endpoints can spend the whole
+# completion in a reasoning channel (e.g. `reasoning_content`) and return a
+# message with NO `content` key. That must be a retryable failure, not a
+# KeyError bubbling up as an HTTP 500.
+
+class _MessageRouter:
+    """Returns full message dicts in sequence (to simulate reasoning-only replies)."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        self.messages = messages
+        self.requests: list[dict] = []
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        self.requests.append(body)
+        message = self.messages[min(len(self.requests) - 1, len(self.messages) - 1)]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": message, "finish_reason": "length"}]},
+        )
+
+
+async def test_chat_raises_value_error_on_missing_content(monkeypatch):
+    router = _MessageRouter(
+        [{"role": "assistant", "reasoning_content": "thinking forever..."}]
+    )
+    client = LLMClient()
+    monkeypatch.setattr(
+        client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router))
+    )
+
+    with pytest.raises(ValueError, match="no content"):
+        await client.chat([{"role": "user", "content": "hi"}])
+
+
+async def test_generate_structured_recovers_from_reasoning_only_reply(monkeypatch):
+    router = _MessageRouter(
+        [
+            {"role": "assistant", "reasoning_content": "hmm..."},
+            {"role": "assistant", "content": '{"title": "Saved"}'},
+        ]
+    )
+    client = LLMClient()
+    monkeypatch.setattr(
+        client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router))
+    )
+    monkeypatch.setattr("calliope.agent.llm.LLMClient", lambda: client)
+
+    result = await generate_structured_public([{"role": "user", "content": "hi"}])
+
+    assert result == {"title": "Saved"}
+    assert len(router.requests) == 2
+    assert router.requests[1].get("response_format") == {"type": "json_object"}
