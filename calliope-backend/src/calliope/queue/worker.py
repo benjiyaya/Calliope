@@ -128,6 +128,10 @@ class QueueWorker:
                 raise RuntimeError("No workflow found for job")
 
             input_values = payload.get("input_values") or {}
+            if payload.get("chain_from_prev") and kind == "video":
+                input_values = await self._apply_chain_from_prev(
+                    job, payload, workflow, dict(input_values)
+                )
             patched = patch_workflow(workflow, input_values)
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
@@ -160,6 +164,116 @@ class QueueWorker:
             return paths
         finally:
             await client.close()
+
+    async def _apply_chain_from_prev(
+        self,
+        job: dict[str, Any],
+        payload: dict[str, Any],
+        workflow: dict[str, Any],
+        input_values: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Start this clip from the previous scene's last frame.
+
+        Runs at job time — in a batch the previous scene has rendered by now even
+        though it had not at enqueue time. Extracts the nearest earlier scene's
+        last frame and swaps it into the slot that held the location/first-image
+        reference (found by value; falls back to the location-role node). If no
+        previous clip exists, the job proceeds with its original refs.
+        """
+        import subprocess
+
+        from calliope.comfyui.parser import parse_dynamic_inputs
+        from calliope.comfyui.roles import normalize_input_role
+
+        project_id = job["project_id"]
+        order_index = payload.get("scene_order_index")
+        prev_clip: str | None = None
+        conn = get_db(config.settings.db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT video_path FROM scenes
+                WHERE project_id = ? AND order_index < ? AND video_path IS NOT NULL
+                ORDER BY order_index DESC
+                """,
+                (project_id, order_index if order_index is not None else 0),
+            ).fetchall()
+            for r in rows:
+                from pathlib import Path as _P
+
+                if r["video_path"] and _P(r["video_path"]).exists():
+                    prev_clip = r["video_path"]
+                    break
+        finally:
+            conn.close()
+
+        if not prev_clip:
+            await event_bus.publish(
+                "job.progress",
+                {
+                    "job_id": job["id"],
+                    "project_id": project_id,
+                    "message": "Chain-from-previous: no earlier clip yet — using the scene's own refs",
+                },
+            )
+            return input_values
+
+        from pathlib import Path
+
+        frame_dir = config.settings.assets_dir / str(project_id) / "chain"
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        frame = frame_dir / f"scene{job.get('scene_id')}_from_prev.png"
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-sseof", "-0.1", "-i", prev_clip,
+             "-update", "1", "-vframes", "1", str(frame)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0 or not frame.exists():
+            await event_bus.publish(
+                "job.progress",
+                {
+                    "job_id": job["id"],
+                    "project_id": project_id,
+                    "message": f"Chain-from-previous: frame extraction failed ({proc.stderr[:120]}) — using original refs",
+                },
+            )
+            return input_values
+
+        # Find the slot to replace: the node holding the enqueue-time location value,
+        # else the workflow's location-role input (may be empty when no location is set).
+        replace_value = payload.get("chain_replace_value")
+        target_node: str | None = None
+        if replace_value:
+            for node_id, value in input_values.items():
+                if value == replace_value:
+                    target_node = str(node_id)
+                    break
+        if target_node is None:
+            for inp in parse_dynamic_inputs(workflow):
+                if normalize_input_role(inp.get("role")) == "location":
+                    target_node = str(inp["nodeId"])
+                    break
+        if target_node is None:
+            await event_bus.publish(
+                "job.progress",
+                {
+                    "job_id": job["id"],
+                    "project_id": project_id,
+                    "message": "Chain-from-previous: no ref slot found to carry the frame — using original refs",
+                },
+            )
+            return input_values
+
+        input_values[target_node] = str(frame)
+        await event_bus.publish(
+            "job.progress",
+            {
+                "job_id": job["id"],
+                "project_id": project_id,
+                "message": "Chain-from-previous: starting from the previous clip's last frame",
+            },
+        )
+        return input_values
 
     async def _dry_run(self, job: dict[str, Any], payload: dict[str, Any]) -> list[str]:
         project_id = job["project_id"]

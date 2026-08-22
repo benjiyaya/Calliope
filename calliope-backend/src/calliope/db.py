@@ -143,6 +143,10 @@ async def migrate_db(db_path: Path) -> None:
         conn.execute("ALTER TABLE scenes ADD COLUMN location_id INTEGER")
     if "video_path" not in scene_cols:
         conn.execute("ALTER TABLE scenes ADD COLUMN video_path TEXT")
+    if "chain_from_prev" not in scene_cols:
+        conn.execute(
+            "ALTER TABLE scenes ADD COLUMN chain_from_prev INTEGER NOT NULL DEFAULT 0"
+        )
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "cover_path" not in project_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN cover_path TEXT")
