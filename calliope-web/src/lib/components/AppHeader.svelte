@@ -1,6 +1,6 @@
 <script lang="ts">
 	interface Props {
-		active?: 'projects' | 'playground' | 'settings';
+		active?: 'projects' | 'agents' | 'playground' | 'settings';
 		crumb?: string;
 		/** Optional status content rendered between the crumb and the nav. */
 		status?: import('svelte').Snippet;
@@ -12,7 +12,7 @@
 
 <header class="header">
 	<div class="header-left">
-		<a class="logo" href="/" title="Projects">
+		<a class="logo" href="/agents" title="Calliope Lab">
 			Calliope <span>Lab</span>
 		</a>
 		{#if crumb}
@@ -24,7 +24,8 @@
 			</div>
 		{/if}
 		<nav class="top-nav" aria-label="Primary">
-			<a class="nav-link" class:active={active === 'projects'} href="/">Projects</a>
+			<a class="nav-link" class:active={active === 'agents'} href="/agents">Agents</a>
+			<a class="nav-link" class:active={active === 'projects'} href="/projects">Projects</a>
 			<a class="nav-link" class:active={active === 'playground'} href="/playground">Playground</a>
 			<a class="nav-link" class:active={active === 'settings'} href="/settings">Settings</a>
 		</nav>

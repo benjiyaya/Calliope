@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS locations (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    reference_image_path TEXT,
+    consistency_prompt TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS scenes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -104,6 +114,41 @@ CREATE TABLE IF NOT EXISTS jobs (
     completed_at TIMESTAMP,
     retry_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    title TEXT NOT NULL DEFAULT 'New chat',
+    status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'running', 'error')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_project ON agent_sessions(project_id);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool', 'system')),
+    content TEXT NOT NULL DEFAULT '',
+    agent_name TEXT,
+    tool_name TEXT,
+    tool_args_json TEXT,
+    tool_result_json TEXT,
+    status TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
 """
 
 
@@ -143,6 +188,10 @@ async def migrate_db(db_path: Path) -> None:
         conn.execute("ALTER TABLE scenes ADD COLUMN location_id INTEGER")
     if "video_path" not in scene_cols:
         conn.execute("ALTER TABLE scenes ADD COLUMN video_path TEXT")
+    if "chain_from_prev" not in scene_cols:
+        conn.execute(
+            "ALTER TABLE scenes ADD COLUMN chain_from_prev INTEGER NOT NULL DEFAULT 0"
+        )
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "cover_path" not in project_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN cover_path TEXT")
@@ -160,6 +209,7 @@ _PATH_COLUMNS = {
     "projects": ["cover_path"],
     "characters": ["portrait_path", "sheet_path"],
     "locations": ["reference_image_path"],
+    "items": ["reference_image_path"],
     "scenes": ["env_image_path", "video_path"],
 }
 

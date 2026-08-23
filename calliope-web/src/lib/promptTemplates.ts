@@ -18,6 +18,11 @@ export type LocationPromptFields = {
 	description?: string | null;
 };
 
+export type ItemPromptFields = {
+	name?: string | null;
+	description?: string | null;
+};
+
 export function characterSheetTemplate(c: CharacterPromptFields): string {
 	const name = (c.name || 'Unnamed').trim();
 	const role = (c.role || 'character').trim();
@@ -66,5 +71,17 @@ export function locationReferenceTemplate(loc: LocationPromptFields): string {
 		`\n` +
 		`Shot: wide establishing concept art, cinematic atmosphere, clear readable space ` +
 		`for characters to stand in, consistent lighting and materials, no people, no text.`
+	);
+}
+
+export function itemReferenceTemplate(item: ItemPromptFields): string {
+	const name = (item.name || 'Unnamed item').trim();
+	const description = (item.description || 'no description yet').trim();
+	return (
+		`ITEM REFERENCE — ${name}\n` +
+		`Description: ${description}\n` +
+		`\n` +
+		`Shot: single object on a clean neutral backdrop, centered, full object in ` +
+		`frame, consistent lighting and materials, high detail, no people, no text.`
 	);
 }

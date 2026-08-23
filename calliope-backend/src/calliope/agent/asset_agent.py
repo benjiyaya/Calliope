@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from calliope.agent.prompts import character_image_prompt, location_image_prompt
+from calliope.agent.prompts import character_image_prompt, item_image_prompt, location_image_prompt
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.smart_fill import smart_fill_inputs
 from calliope.config import settings
@@ -53,6 +53,7 @@ async def enqueue_asset_jobs(
     *,
     character_ids: list[int] | None = None,
     location_ids: list[int] | None = None,
+    item_ids: list[int] | None = None,
     missing_only: bool = True,
     workflow_id: int | None = None,
     input_values_override: dict[str, Any] | None = None,
@@ -80,6 +81,9 @@ async def enqueue_asset_jobs(
         ).fetchall()
         locs = conn.execute(
             "SELECT * FROM locations WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        items = conn.execute(
+            "SELECT * FROM items WHERE project_id = ?", (project_id,)
         ).fetchall()
 
         for row in chars:
@@ -157,6 +161,47 @@ async def enqueue_asset_jobs(
                         "job_id": job["id"],
                         "kind": "image",
                         "message": f"{loc.get('name')} · environment",
+                    },
+                )
+
+        # Only enqueue items when not doing a character/location-only generate
+        enqueue_items = item_ids is not None or (character_ids is None and location_ids is None)
+        if enqueue_items:
+            for row in items:
+                item = row_to_dict(row)
+                if item_ids is not None and item["id"] not in item_ids:
+                    continue
+                if (character_ids is not None or location_ids is not None) and item_ids is None:
+                    # Character/location-scoped call — skip items
+                    continue
+                if missing_only and item.get("reference_image_path"):
+                    continue
+                prompt = (prompt_override or "").strip() or item_image_prompt(item)
+                if not prompt.strip() and not allow_empty_prompt:
+                    skipped.append(item.get("name") or str(item["id"]))
+                    continue
+                values = smart_fill_inputs(
+                    inputs,
+                    prompt=prompt or None,
+                    extra=input_values_override,
+                )
+                job = queue_manager.enqueue(
+                    project_id=project_id,
+                    kind="image",
+                    workflow_id=workflow["id"] if workflow else None,
+                    payload={
+                        "input_values": values,
+                        "item_id": item["id"],
+                        "prompt": prompt,
+                    },
+                )
+                jobs.append(job)
+                await event_bus.publish(
+                    "job.created",
+                    {
+                        "job_id": job["id"],
+                        "kind": "image",
+                        "message": f"{item.get('name')} · item",
                     },
                 )
     finally:

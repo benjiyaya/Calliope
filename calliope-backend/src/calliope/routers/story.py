@@ -9,6 +9,7 @@ from calliope.agent.llm import generate_structured
 from calliope.agent.prompts import (
     build_story_messages,
     character_sheet_prompt,
+    item_reference_prompt,
     location_reference_prompt,
     recommend_beat_count,
     story_generation_user_prompt,
@@ -21,6 +22,8 @@ from calliope.models.schemas import (
     BeatUpdate,
     CharacterCreate,
     CharacterUpdate,
+    ItemCreate,
+    ItemUpdate,
     LocationCreate,
     LocationUpdate,
 )
@@ -125,6 +128,12 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
             conn.execute("DELETE FROM story_beats WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM characters WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM locations WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM items WHERE project_id = ?", (project_id,))
+            # scenes.location_id has no FK — the mass delete above would leave
+            # every scene pointing at a dead location row.
+            conn.execute(
+                "UPDATE scenes SET location_id = NULL WHERE project_id = ?", (project_id,)
+            )
 
         for beat in result.get("beats", []):
             conn.execute(
@@ -183,6 +192,25 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
                 },
             )
 
+        for item in result.get("items", []):
+            description = item.get("description", "") or ""
+            item_seed = {
+                "name": item.get("name", ""),
+                "description": description,
+            }
+            item_prompt = item_reference_prompt(item_seed)
+            conn.execute(
+                """
+                INSERT INTO items (project_id, name, description, consistency_prompt)
+                VALUES (:project_id, :name, :description, :consistency_prompt)
+                """,
+                {
+                    "project_id": project_id,
+                    **item_seed,
+                    "consistency_prompt": item_prompt,
+                },
+            )
+
         conn.commit()
         beat_n = len(result.get("beats", []))
         await event_bus.publish(
@@ -235,12 +263,20 @@ async def get_story(project_id: int) -> dict[str, Any]:
             """,
             (project_id,),
         ).fetchall()
+        items = conn.execute(
+            """
+            SELECT id, name, description, reference_image_path, consistency_prompt
+            FROM items WHERE project_id = ?
+            """,
+            (project_id,),
+        ).fetchall()
 
         return {
             "project": row_to_dict(project),
             "beats": [row_to_dict(b) for b in beats],
             "characters": [row_to_dict(c) for c in characters],
             "locations": [row_to_dict(l) for l in locations],
+            "items": [row_to_dict(i) for i in items],
         }
     finally:
         conn.close()
@@ -453,6 +489,74 @@ async def delete_location(project_id: int, location_id: int) -> dict[str, bool]:
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Location not found")
+        _touch_project(conn, project_id)
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# --- Items CRUD ---
+
+
+@router.post("/{project_id}/items")
+async def create_item(project_id: int, payload: ItemCreate) -> dict[str, Any]:
+    conn = get_db(settings.db_path)
+    try:
+        _require_project(conn, project_id)
+        consistency = payload.consistency_prompt or item_reference_prompt(
+            {"name": payload.name, "description": payload.description}
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO items (project_id, name, description, consistency_prompt)
+            VALUES (?, ?, ?, ?)
+            """,
+            (project_id, payload.name, payload.description, consistency),
+        )
+        _touch_project(conn, project_id)
+        conn.commit()
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return row_to_dict(row)
+    finally:
+        conn.close()
+
+
+@router.patch("/{project_id}/items/{item_id}")
+async def update_item(
+    project_id: int, item_id: int, payload: ItemUpdate
+) -> dict[str, Any]:
+    conn = get_db(settings.db_path)
+    try:
+        existing = conn.execute(
+            "SELECT * FROM items WHERE id = ? AND project_id = ?",
+            (item_id, project_id),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Item not found")
+        data = {k: v for k, v in payload.model_dump().items() if v is not None}
+        if data:
+            fields = ", ".join(f"{k} = :{k}" for k in data)
+            data["id"] = item_id
+            conn.execute(f"UPDATE items SET {fields} WHERE id = :id", data)
+            _touch_project(conn, project_id)
+            conn.commit()
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        return row_to_dict(row)
+    finally:
+        conn.close()
+
+
+@router.delete("/{project_id}/items/{item_id}")
+async def delete_item(project_id: int, item_id: int) -> dict[str, bool]:
+    conn = get_db(settings.db_path)
+    try:
+        cur = conn.execute(
+            "DELETE FROM items WHERE id = ? AND project_id = ?",
+            (item_id, project_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Item not found")
         _touch_project(conn, project_id)
         conn.commit()
         return {"ok": True}

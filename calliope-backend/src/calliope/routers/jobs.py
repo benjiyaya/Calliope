@@ -57,12 +57,16 @@ async def generate_videos(
     project_id: int, payload: GenerateVideosRequest | None = None
 ) -> dict[str, Any]:
     body = payload or GenerateVideosRequest()
-    jobs = await enqueue_video_jobs(
-        project_id,
-        scene_ids=body.scene_ids,
-        workflow_id=body.workflow_id,
-        input_values_override=body.input_values,
-    )
+    try:
+        jobs = await enqueue_video_jobs(
+            project_id,
+            scene_ids=body.scene_ids,
+            workflow_id=body.workflow_id,
+            input_values_override=body.input_values,
+            continue_motion=body.continue_motion,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "jobs": [_job_public(j) for j in jobs]}
 
 

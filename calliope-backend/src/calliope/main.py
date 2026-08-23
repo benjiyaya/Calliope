@@ -13,6 +13,7 @@ from calliope.config import settings
 from calliope.db import get_db, migrate_db, rebase_stale_asset_paths
 from calliope.queue.worker import queue_worker
 from calliope.routers import (
+    agent,
     assets,
     events,
     jobs,
@@ -53,12 +54,15 @@ async def lifespan(app: FastAPI):
     await queue_worker.start()
     logger.info("Calliope started — db=%s dry_run=%s", settings.db_path, settings.dry_run)
     yield
+    from calliope.agent.harness.runner import runner
+
+    await runner.shutdown()
     await queue_worker.stop()
     logger.info("Calliope shutting down")
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Calliope", version="1.1.1", lifespan=lifespan)
+    app = FastAPI(title="Calliope", version="1.2.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -76,11 +80,12 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
     app.include_router(playground.router, prefix="/api/playground", tags=["playground"])
+    app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
     app.include_router(events.router, prefix="/api/events", tags=["events"])
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"status": "ok", "version": "1.1.1", "dry_run": settings.dry_run}
+        return {"status": "ok", "version": "1.2.0", "dry_run": settings.dry_run}
 
     # Catch unknown /api/* before StaticFiles — otherwise POST falls through and
     # returns a confusing 405 Method Not Allowed from the file server.

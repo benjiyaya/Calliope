@@ -38,6 +38,12 @@ export function connectEvents(onEvent: Listener, onState?: StateListener): () =>
 		// Listen to named events + default message
 		[
 			'agent.thinking',
+			'agent.session.updated',
+			'agent.message',
+			'agent.token',
+			'agent.tool',
+			'agent.plan',
+			'agent.task',
 			'job.created',
 			'job.started',
 			'job.progress',

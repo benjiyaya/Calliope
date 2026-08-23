@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from calliope.comfyui.motion_context import classify_motion_role
 from calliope.comfyui.parser import parse_dynamic_inputs, parse_dynamic_outputs
 from calliope.comfyui.profiles import detect_prompt_profile
 from calliope.config import settings
@@ -20,6 +21,7 @@ def _serialize_workflow(row: Any) -> dict[str, Any]:
     data["input_schema"] = json.loads(data["input_schema"]) if data.get("input_schema") else []
     data["output_schema"] = json.loads(data["output_schema"]) if data.get("output_schema") else []
     data["is_enabled"] = bool(data.get("is_enabled"))
+    data["motion_role"] = classify_motion_role(data["workflow_json"])
     return data
 
 
@@ -31,6 +33,7 @@ async def analyze_workflow(payload: WorkflowAnalyze) -> dict[str, Any]:
         "inputs": inputs,
         "outputs": outputs,
         "suggested_profile": detect_prompt_profile(payload.workflow_json),
+        "motion_role": classify_motion_role(payload.workflow_json),
     }
 
 

@@ -19,6 +19,9 @@ INPUT_ROLE_ALIASES: dict[str, frozenset[str]] = {
     "character": frozenset({"character", "char", "portrait", "sheet", "face", "ref"}),
     "location": frozenset({"location", "loc", "environment", "env", "background", "scene"}),
     "image": frozenset({"image", "img"}),
+    "video": frozenset({"video", "vid"}),
+    "audio": frozenset({"audio", "sound", "sfx"}),
+    "clipindex": frozenset({"clipindex", "clip_index"}),
     "seed": frozenset({"seed"}),
     "duration": frozenset({"duration", "dur", "length", "seconds"}),
 }

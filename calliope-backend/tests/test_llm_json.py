@@ -162,6 +162,81 @@ async def test_generate_structured_raises_when_both_attempts_fail(monkeypatch):
         await generate_structured_public([{"role": "user", "content": "hi"}])
 
 
+# ---------- chat_stream: mid-stream error payloads ----------
+
+
+def _sse_lines(*chunks: dict) -> list[bytes]:
+    out = []
+    for c in chunks:
+        out.append(b"data: " + json.dumps(c).encode())
+    out.append(b"data: [DONE]")
+    return out
+
+
+class _StreamRouter:
+    """Serves a scripted SSE stream."""
+
+    def __init__(self, chunks: list[dict]) -> None:
+        self.chunks = chunks
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        lines = _sse_lines(*self.chunks)
+        body = b"\n".join(lines) + b"\n"
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+
+async def test_chat_stream_surfaces_error_payload(monkeypatch):
+    """A mid-stream {error: ...} chunk must raise, not end as a blank reply."""
+    router = _StreamRouter(
+        [
+            {"error": {"message": "model overloaded"}},
+        ]
+    )
+    transport = httpx.MockTransport(router)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=transport))
+
+    events = []
+    with pytest.raises(RuntimeError, match="model overloaded"):
+        async for ev in client.chat_stream([{"role": "user", "content": "hi"}]):
+            events.append(ev)
+    assert events == []  # nothing yielded before the failure surfaced
+
+
+async def test_chat_stream_surfaces_string_error(monkeypatch):
+    """Non-dict error payloads degrade to str(), still raising."""
+    router = _StreamRouter([{"error": "bad gateway"}])
+    transport = httpx.MockTransport(router)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=transport))
+
+    with pytest.raises(RuntimeError, match="bad gateway"):
+        async for _ in client.chat_stream([{"role": "user", "content": "hi"}]):
+            pass
+
+
+async def test_chat_stream_normal_tokens_unaffected(monkeypatch):
+    """Happy path: deltas flow, done arrives, no error."""
+    router = _StreamRouter(
+        [
+            {"choices": [{"delta": {"content": "Hi"}}]},
+            {"choices": [{"delta": {"content": " there"}, "finish_reason": "stop"}]},
+        ]
+    )
+    transport = httpx.MockTransport(router)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=transport))
+
+    events = [ev async for ev in client.chat_stream([{"role": "user", "content": "hi"}])]
+    types = [e["type"] for e in events]
+    assert types == ["delta", "delta", "done"]
+    assert events[0]["content"] == "Hi"
+
+
 # ---------- top-level JSON arrays (models emitting items without the envelope) ----------
 # Without special handling the balanced-object scan would confidently return just
 # the array's FIRST element — e.g. one story beat instead of {"beats": [...]} —

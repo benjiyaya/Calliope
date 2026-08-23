@@ -1,3 +1,5 @@
+import type { AgentComposerPayload } from '$lib/agentComposer';
+
 const API_BASE = '';
 
 export interface Project {
@@ -56,11 +58,20 @@ export interface Location {
 	consistency_prompt: string | null;
 }
 
+export interface Item {
+	id: number;
+	name: string;
+	description: string | null;
+	reference_image_path: string | null;
+	consistency_prompt: string | null;
+}
+
 export interface StoryData {
 	project: Project;
 	beats: Beat[];
 	characters: Character[];
 	locations: Location[];
+	items: Item[];
 }
 
 export interface Settings {
@@ -75,7 +86,10 @@ export interface Settings {
 	comfyui_base_url: string;
 	queue_concurrency: number;
 	queue_poll_interval_sec: number;
+	queue_poll_timeout_sec: number;
 	queue_max_retries: number;
+	agent_max_steps: number;
+	agent_hardening_prompt: string;
 	dry_run: boolean;
 }
 
@@ -120,10 +134,6 @@ export const projects = {
 	update: (id: number, payload: Partial<ProjectCreate & { status?: string; cover_path?: string | null }>) =>
 		api<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	delete: (id: number) => api<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
-	generateStory: (id: number) =>
-		api<{ ok: boolean; generated: unknown }>(`/api/projects/${id}/generate-story`, {
-			method: 'POST',
-		}),
 	getStory: (id: number) => api<StoryData>(`/api/projects/${id}/story`),
 	updateBeat: (projectId: number, beatId: number, payload: Partial<Beat>) =>
 		api<Beat>(`/api/projects/${projectId}/beats/${beatId}`, {
@@ -140,6 +150,11 @@ export const projects = {
 			method: 'PATCH',
 			body: JSON.stringify(payload),
 		}),
+	updateItem: (projectId: number, itemId: number, payload: Partial<Item>) =>
+		api<Item>(`/api/projects/${projectId}/items/${itemId}`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload),
+		}),
 	deleteBeat: (projectId: number, beatId: number) =>
 		api<{ ok: boolean }>(`/api/projects/${projectId}/beats/${beatId}`, { method: 'DELETE' }),
 	deleteCharacter: (projectId: number, characterId: number) =>
@@ -150,16 +165,12 @@ export const projects = {
 		api<{ ok: boolean }>(`/api/projects/${projectId}/locations/${locationId}`, {
 			method: 'DELETE',
 		}),
+	deleteItem: (projectId: number, itemId: number) =>
+		api<{ ok: boolean }>(`/api/projects/${projectId}/items/${itemId}`, {
+			method: 'DELETE',
+		}),
 	getScenes: (id: number) =>
 		api<{ scenes: Scene[]; estimated_duration_sec: number }>(`/api/projects/${id}/scenes`),
-	generateScript: (id: number, opts?: { scene_count?: number }) =>
-		api<{ ok: boolean; scenes: Scene[] }>(`/api/projects/${id}/generate-script`, {
-			method: 'POST',
-			body: JSON.stringify({
-				replace: true,
-				...(opts?.scene_count != null ? { scene_count: opts.scene_count } : {}),
-			}),
-		}),
 	updateScene: (projectId: number, sceneId: number, payload: Record<string, unknown>) =>
 		api<Scene>(`/api/projects/${projectId}/scenes/${sceneId}`, {
 			method: 'PATCH',
@@ -183,6 +194,7 @@ export const projects = {
 			missing_only?: boolean;
 			character_ids?: number[];
 			location_ids?: number[];
+			item_ids?: number[];
 			workflow_id?: number;
 			input_values?: Record<string, unknown>;
 			asset_target?: 'sheet';
@@ -194,7 +206,9 @@ export const projects = {
 			body: JSON.stringify(payload),
 		}),
 	getAssets: (id: number) =>
-		api<{ characters: Character[]; locations: Location[] }>(`/api/projects/${id}/assets`),
+		api<{ characters: Character[]; locations: Location[]; items: Item[] }>(
+			`/api/projects/${id}/assets`,
+		),
 };
 
 export const settings = {
@@ -210,6 +224,7 @@ export const workflows = {
 			inputs: ComfyDynamicInput[];
 			outputs: ComfyDynamicOutput[];
 			suggested_profile?: string;
+			motion_role?: 'first' | 'next' | null;
 		}>('/api/workflows/analyze', {
 			method: 'POST',
 			body: JSON.stringify({ workflow_json }),
@@ -249,6 +264,7 @@ export const jobsApi = {
 			scene_ids?: number[];
 			workflow_id?: number;
 			input_values?: Record<string, unknown>;
+			continue_motion?: boolean;
 		} = {},
 	) =>
 		api<{ ok: boolean; jobs: Job[] }>(`/api/jobs/projects/${projectId}/generate-videos`, {
@@ -309,4 +325,85 @@ export const playgroundApi = {
 			'/api/playground/attach',
 			{ method: 'POST', body: JSON.stringify(payload) },
 		),
+};
+
+// ── Agents (agentic harness) ────────────────────────────────────────────
+
+export interface AgentSession {
+	id: number;
+	project_id: number | null;
+	title: string;
+	status: 'idle' | 'running' | 'error';
+	created_at: string;
+	updated_at: string;
+	running?: boolean;
+	project?: { id: number; title: string; status: string } | null;
+}
+
+export interface AgentMessage {
+	id: number;
+	session_id: number;
+	role: 'user' | 'assistant' | 'tool' | 'system';
+	content: string;
+	agent_name?: string | null;
+	tool_name?: string | null;
+	tool_args?: Record<string, unknown> | null;
+	tool_result?: unknown;
+	status?: string | null;
+	reasoning?: string | null;
+	created_at: string;
+	mentions?: AgentComposerPayload['mentions'];
+	attachments?: AgentComposerPayload['attachments'];
+}
+
+export interface AgentTask {
+	role: string;
+	goal: string;
+	status: 'pending' | 'running' | 'done' | 'failed';
+	index?: number;
+}
+
+export interface AgentPlan {
+	tasks: AgentTask[];
+	note?: string | null;
+}
+
+export const agentApi = {
+	listSessions: (projectId?: number) =>
+		api<AgentSession[]>(
+			`/api/agent/sessions${projectId != null ? `?project_id=${projectId}` : ''}`,
+		),
+	listLinkableProjects: () =>
+		api<{ id: number; title: string; status: string }[]>('/api/agent/projects'),
+	createSession: (payload: { title?: string; project_id?: number | null }) =>
+		api<AgentSession>('/api/agent/sessions', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	getSession: (id: number) =>
+		api<AgentSession & { messages: AgentMessage[]; plan?: AgentPlan | null }>(
+			`/api/agent/sessions/${id}`,
+		),
+	patchSession: (
+		id: number,
+		payload: { title?: string; project_id?: number | null; unlink?: boolean },
+	) =>
+		api<AgentSession>(`/api/agent/sessions/${id}`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload),
+		}),
+	deleteSession: (id: number) =>
+		api<{ ok: boolean }>(`/api/agent/sessions/${id}`, { method: 'DELETE' }),
+	postMessage: (id: number, payload: AgentComposerPayload | string) => {
+		const body =
+			typeof payload === 'string'
+				? { content: payload, mentions: [], attachments: [] }
+				: payload;
+		return api<{ ok: boolean; message: AgentMessage }>(`/api/agent/sessions/${id}/messages`, {
+			method: 'POST',
+			body: JSON.stringify(body),
+		});
+	},
+	cancel: (id: number) =>
+		api<{ ok: boolean }>(`/api/agent/sessions/${id}/cancel`, { method: 'POST' }),
 };

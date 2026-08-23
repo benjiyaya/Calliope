@@ -13,10 +13,11 @@ router = APIRouter()
 @router.get("")
 async def events_stream(request: Request):
     async def generator():
-        q = await event_bus.subscribe()
+        # Atomic subscribe+snapshot: no event lands in both the backlog and
+        # the queue (duplicates), and none is lost between them.
+        q, snapshot = await event_bus.subscribe(backlog=20)
         try:
-            # Send recent backlog
-            for event in event_bus.recent[-20:]:
+            for event in snapshot:
                 yield event_bus.format_sse(event)
             while True:
                 if await request.is_disconnected():

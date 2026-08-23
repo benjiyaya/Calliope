@@ -8,6 +8,7 @@
 		projects,
 		workflows,
 		type Character,
+		type Item,
 		type Job,
 		type Location,
 		type Workflow,
@@ -29,6 +30,7 @@
 	} from '$lib/comfy/promptInput';
 	import {
 		characterSheetTemplate,
+		itemReferenceTemplate,
 		locationReferenceTemplate,
 	} from '$lib/promptTemplates';
 	import { toast } from '$lib/toast';
@@ -39,17 +41,21 @@
 
 	let { projectId }: Props = $props();
 	const client = useQueryClient();
-	let tab = $state<'characters' | 'locations'>('characters');
+	let tab = $state<'characters' | 'locations' | 'items'>('characters');
 	let drafts = $state<Record<string, string>>({});
 	let savingKey = $state<string | null>(null);
 	let sheetWorkflowId = $state<number | ''>('');
 	let envWorkflowId = $state<number | ''>('');
+	let itemWorkflowId = $state<number | ''>('');
 	let sheetInputValues = $state<Record<string, string | number>>({});
 	let envInputValues = $state<Record<string, string | number>>({});
+	let itemInputValues = $state<Record<string, string | number>>({});
 	let sheetMissing = $state<string[]>([]);
 	let envMissing = $state<string[]>([]);
+	let itemMissing = $state<string[]>([]);
 	let sheetAttempted = $state(false);
 	let envAttempted = $state(false);
+	let itemAttempted = $state(false);
 	let lastSheetWf = $state<number | '' | null>(null);
 	let previewSrc = $state<string | null>(null);
 	let previewAlt = $state('');
@@ -60,9 +66,10 @@
 		previewAlt = alt;
 	}
 	let lastEnvWf = $state<number | '' | null>(null);
+	let lastItemWf = $state<number | '' | null>(null);
 	let bulkPending = $state(false);
 
-	type DeleteTarget = { kind: 'character' | 'location'; id: number; name: string };
+	type DeleteTarget = { kind: 'character' | 'location' | 'item'; id: number; name: string };
 	let deleteTarget = $state<DeleteTarget | null>(null);
 	let deleteOpen = $state(false);
 
@@ -128,9 +135,11 @@
 		imageWorkflows.find((w) => w.id === sheetWorkflowId) ?? null,
 	);
 	const envWorkflow = $derived(imageWorkflows.find((w) => w.id === envWorkflowId) ?? null);
+	const itemWorkflow = $derived(imageWorkflows.find((w) => w.id === itemWorkflowId) ?? null);
 
 	const sheetHasPrompt = $derived(workflowHasPromptInput(sheetWorkflow?.input_schema));
 	const envHasPrompt = $derived(workflowHasPromptInput(envWorkflow?.input_schema));
+	const itemHasPrompt = $derived(workflowHasPromptInput(itemWorkflow?.input_schema));
 	const showCharPrompt = $derived(sheetHasPrompt);
 
 	const jobs = $derived($jobsQuery.data ?? []);
@@ -138,6 +147,7 @@
 	const assetOptions = $derived.by(() => {
 		const chars = $assetsQuery.data?.characters ?? [];
 		const locs = $assetsQuery.data?.locations ?? [];
+		const items = $assetsQuery.data?.items ?? [];
 		const opts: Array<{ label: string; path: string }> = [];
 		for (const c of chars) {
 			if (c.sheet_path) opts.push({ label: `${c.name} · sheet`, path: c.sheet_path });
@@ -145,6 +155,11 @@
 		for (const loc of locs) {
 			if (loc.reference_image_path) {
 				opts.push({ label: `${loc.name} · environment`, path: loc.reference_image_path });
+			}
+		}
+		for (const it of items) {
+			if (it.reference_image_path) {
+				opts.push({ label: `${it.name} · item`, path: it.reference_image_path });
 			}
 		}
 		return opts;
@@ -156,6 +171,7 @@
 		const first = list[0].id;
 		if (sheetWorkflowId === '') sheetWorkflowId = first;
 		if (envWorkflowId === '') envWorkflowId = first;
+		if (itemWorkflowId === '') itemWorkflowId = first;
 	});
 
 	$effect(() => {
@@ -170,12 +186,19 @@
 		envInputValues = {};
 		envAttempted = false;
 	});
+	$effect(() => {
+		if (itemWorkflowId === lastItemWf) return;
+		lastItemWf = itemWorkflowId;
+		itemInputValues = {};
+		itemAttempted = false;
+	});
 
 	const generateMutation = createMutation({
 		mutationFn: (payload: {
 			missing_only?: boolean;
 			character_ids?: number[];
 			location_ids?: number[];
+			item_ids?: number[];
 			workflow_id?: number;
 			input_values?: Record<string, unknown>;
 			asset_target?: 'sheet';
@@ -207,7 +230,9 @@
 		mutationFn: (target: DeleteTarget) =>
 			target.kind === 'character'
 				? projects.deleteCharacter(projectId, target.id)
-				: projects.deleteLocation(projectId, target.id),
+				: target.kind === 'location'
+					? projects.deleteLocation(projectId, target.id)
+					: projects.deleteItem(projectId, target.id),
 		onSuccess: async (_data, target) => {
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
@@ -224,7 +249,7 @@
 	/** Latest image job for one entity — drives the on-card generation state. */
 	function entityJob(
 		list: Job[],
-		key: 'character_id' | 'location_id',
+		key: 'character_id' | 'location_id' | 'item_id',
 		id: number,
 	): Job | undefined {
 		const matches = list.filter((j) => j.kind === 'image' && j.payload?.[key] === id);
@@ -245,6 +270,9 @@
 	function locKey(id: number) {
 		return `l:${id}`;
 	}
+	function itemKey(id: number) {
+		return `i:${id}`;
+	}
 
 	function promptForChar(c: Character): string {
 		const k = charKey(c.id);
@@ -256,6 +284,12 @@
 		const k = locKey(loc.id);
 		if (drafts[k] !== undefined) return drafts[k];
 		return loc.consistency_prompt?.trim() || locationReferenceTemplate(loc);
+	}
+
+	function promptForItem(item: Item): string {
+		const k = itemKey(item.id);
+		if (drafts[k] !== undefined) return drafts[k];
+		return item.consistency_prompt?.trim() || itemReferenceTemplate(item);
 	}
 
 	function setDraft(key: string, value: string) {
@@ -318,6 +352,24 @@
 		}
 	}
 
+	async function saveItemPrompt(item: Item) {
+		const key = itemKey(item.id);
+		const text = promptForItem(item);
+		savingKey = key;
+		try {
+			await projects.updateItem(projectId, item.id, { consistency_prompt: text });
+			const { [key]: _, ...rest } = drafts;
+			drafts = rest;
+			await client.invalidateQueries({ queryKey: ['assets'] });
+			await client.invalidateQueries({ queryKey: ['story'] });
+			toast.success(`Saved image prompt for ${item.name}`);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not save prompt');
+		} finally {
+			savingKey = null;
+		}
+	}
+
 	async function generateCharacter(c: Character) {
 		const wfId = requireWorkflow(sheetWorkflowId, 'sheet');
 		if (wfId == null) return;
@@ -359,14 +411,37 @@
 		});
 	}
 
+	async function generateItem(item: Item) {
+		const wfId = requireWorkflow(itemWorkflowId, 'item');
+		if (wfId == null) return;
+		if (!requireComplete(itemMissing, () => (itemAttempted = true))) return;
+		const prompt = itemHasPrompt ? promptForItem(item) : '';
+		if (itemHasPrompt) {
+			await projects.updateItem(projectId, item.id, { consistency_prompt: prompt });
+			const { [itemKey(item.id)]: _, ...rest } = drafts;
+			drafts = rest;
+		}
+		$generateMutation.mutate({
+			missing_only: false,
+			character_ids: [],
+			location_ids: [],
+			item_ids: [item.id],
+			workflow_id: wfId,
+			input_values: compactInputValues(itemInputValues),
+			prompt: prompt || undefined,
+		});
+	}
+
 	async function generateMissing() {
 		const chars = $assetsQuery.data?.characters ?? [];
 		const locs = $assetsQuery.data?.locations ?? [];
+		const items = $assetsQuery.data?.items ?? [];
 		const sheetWf = sheetWorkflowId === '' ? null : Number(sheetWorkflowId);
 		const envWf = envWorkflowId === '' ? null : Number(envWorkflowId);
+		const itemWf = itemWorkflowId === '' ? null : Number(itemWorkflowId);
 
-		if (sheetWf == null && envWf == null) {
-			toast.error('Select sheet and/or environment workflows first');
+		if (sheetWf == null && envWf == null && itemWf == null) {
+			toast.error('Select sheet, environment and/or item workflows first');
 			return;
 		}
 
@@ -393,6 +468,17 @@
 				});
 				total += r.jobs.length;
 			}
+			if (itemWf != null && items.length > 0) {
+				const r = await projects.generateAssets(projectId, {
+					missing_only: true,
+					workflow_id: itemWf,
+					character_ids: [],
+					location_ids: [],
+					item_ids: items.map((it) => it.id),
+					input_values: compactInputValues(itemInputValues),
+				});
+				total += r.jobs.length;
+			}
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['jobs'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
@@ -413,10 +499,10 @@
 
 <header class="stage-header">
 	<div>
-		<h2>2. Characters &amp; Environments</h2>
+		<h2>2. Characters, Environments &amp; Items</h2>
 		<p class="lead">
-			Pick a workflow below. Sheet/environment prompts use the built-in template by default —
-			expand Edit prompt only if you need to tweak text.
+			Pick a workflow below. Sheet/environment/item prompts use the built-in template by
+			default — expand Edit prompt only if you need to tweak text.
 		</p>
 	</div>
 	<div class="stage-actions">
@@ -451,6 +537,15 @@
 			>Environments{#if $assetsQuery.data}
 				· {$assetsQuery.data.locations.length}{/if}</button
 		>
+		<button
+			type="button"
+			role="tab"
+			aria-selected={tab === 'items'}
+			class:active={tab === 'items'}
+			onclick={() => (tab = 'items')}
+			>Misc. Items{#if $assetsQuery.data}
+				· {$assetsQuery.data.items.length}{/if}</button
+		>
 	</div>
 </div>
 
@@ -466,7 +561,11 @@
 	{#snippet header()}
 		<h3 class="card-h">Generation settings</h3>
 		<span class="muted small"
-			>{tab === 'characters' ? 'Character sheets' : 'Environment references'}</span
+			>{tab === 'characters'
+				? 'Character sheets'
+				: tab === 'locations'
+					? 'Environment references'
+					: 'Item references'}</span
 		>
 	{/snippet}
 	{#if tab === 'characters'}
@@ -500,7 +599,7 @@
 		{:else}
 			<p class="muted small">Select a sheet workflow.</p>
 		{/if}
-	{:else}
+	{:else if tab === 'locations'}
 		<label class="wf-field">
 			<span class="field-label">Environment workflow</span>
 			<select
@@ -530,6 +629,37 @@
 			/>
 		{:else}
 			<p class="muted small">Select an environment workflow.</p>
+		{/if}
+	{:else}
+		<label class="wf-field">
+			<span class="field-label">Item workflow</span>
+			<select
+				class="field-select"
+				value={itemWorkflowId}
+				onchange={(e) => {
+					const v = e.currentTarget.value;
+					itemWorkflowId = v ? Number(v) : '';
+				}}
+			>
+				{#if imageWorkflows.length === 0}
+					<option value="">No enabled image workflows</option>
+				{:else}
+					{#each imageWorkflows as w}
+						<option value={w.id}>{w.name}</option>
+					{/each}
+				{/if}
+			</select>
+		</label>
+		{#if itemWorkflow}
+			<ComfyDynamicForm
+				inputs={withoutPromptInputs(itemWorkflow.input_schema)}
+				bind:values={itemInputValues}
+				assetOptions={assetOptions}
+				showErrors={itemAttempted}
+				onValidityChange={(m) => (itemMissing = m)}
+			/>
+		{:else}
+			<p class="muted small">Select an item workflow.</p>
 		{/if}
 	{/if}
 	</Card>
@@ -729,170 +859,338 @@
 				{/each}
 			</div>
 		{/if}
-	{:else if $assetsQuery.data.locations.length === 0}
-		<EmptyState
-			title="No environments yet"
-			body="Draft a storyline in Story to extract locations, then come back to generate reference images."
-		>
-			{#snippet icon()}
-				<Icon name="folder" size={28} />
-			{/snippet}
-			{#snippet action()}
-				<Button variant="primary" onclick={goToStory}>Go to Story</Button>
-			{/snippet}
-		</EmptyState>
-	{:else}
-		<div class="grid">
-			{#each $assetsQuery.data.locations as loc (loc.id)}
-				{@const key = locKey(loc.id)}
-				{@const job = entityJob(jobs, 'location_id', loc.id)}
-				{@const jstate = jobStateOf(job)}
-				<article class="entity-card">
-					<div class="media">
-						<AssetThumb
-							src={assetUrl(loc.reference_image_path)}
-							alt={loc.name}
-							placeholder="No reference yet"
-							tall
-							jobState={jstate}
-							onPreview={(url) => openPreview(url, loc.name)}
-						/>
-						{#if isCover(loc.reference_image_path) && jstate !== 'generating'}
-							<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
-						{/if}
-						<div class="quick-actions">
-							<Button
-								variant="secondary"
-								size="sm"
-								title="View full size"
-								disabled={!loc.reference_image_path}
-								onclick={() => openPreview(assetUrl(loc.reference_image_path), loc.name)}
-							>
-								<Icon name="zoom-in" size={14} /><span class="sr-only"
-									>View {loc.name} full size</span
-								>
-							</Button>
-							<Button
-								variant="secondary"
-								size="sm"
-								title="Regenerate image"
-								disabled={busy || envWorkflowId === '' || jstate === 'generating'}
-								onclick={() => generateLocation(loc)}
-							>
-								<Icon name="retry" size={14} /><span class="sr-only"
-									>Regenerate {loc.name} image</span
-								>
-							</Button>
-							<Button
-								variant="secondary"
-								size="sm"
-								title={isCover(loc.reference_image_path) ? 'Remove as project cover' : 'Set as project cover'}
-								disabled={!loc.reference_image_path}
-								onclick={() => toggleCover(loc.reference_image_path)}
-							>
-								<Icon name="image" size={14} /><span class="sr-only"
-									>{isCover(loc.reference_image_path)
-										? `Remove ${loc.name} image as project cover`
-										: `Set ${loc.name} image as project cover`}</span
-								>
-							</Button>
-							<Button
-								variant="secondary"
-								size="sm"
-								title="Delete environment"
-								onclick={() =>
-									requestDelete({ kind: 'location', id: loc.id, name: loc.name })}
-							>
-								<Icon name="trash" size={14} /><span class="sr-only">Delete {loc.name}</span>
-							</Button>
-						</div>
-						{#if jstate === 'generating'}
-							<div class="gen-bar">
-								<ProgressBar indeterminate size="sm" label="Generating" />
-							</div>
-						{/if}
-					</div>
-
-					<div class="entity-body">
-						<div class="title-row">
-							<strong>{loc.name}</strong>
-						</div>
-						{#if loc.description}
-							<p class="facts" title={loc.description}>
-								<span class="k">Description</span> {loc.description}
-							</p>
-						{/if}
-						{#if jstate === 'failed' && job}
-							{#if job.error}
-								<p class="err-line" title={job.error}>{job.error}</p>
+	{:else if tab === 'locations'}
+		{#if $assetsQuery.data.locations.length === 0}
+			<EmptyState
+				title="No environments yet"
+				body="Draft a storyline in Story to extract locations, then come back to generate reference images."
+			>
+				{#snippet icon()}
+					<Icon name="folder" size={28} />
+				{/snippet}
+				{#snippet action()}
+					<Button variant="primary" onclick={goToStory}>Go to Story</Button>
+				{/snippet}
+			</EmptyState>
+		{:else}
+			<div class="grid">
+				{#each $assetsQuery.data.locations as loc (loc.id)}
+					{@const key = locKey(loc.id)}
+					{@const job = entityJob(jobs, 'location_id', loc.id)}
+					{@const jstate = jobStateOf(job)}
+					<article class="entity-card">
+						<div class="media">
+							<AssetThumb
+								src={assetUrl(loc.reference_image_path)}
+								alt={loc.name}
+								placeholder="No reference yet"
+								tall
+								jobState={jstate}
+								onPreview={(url) => openPreview(url, loc.name)}
+							/>
+							{#if isCover(loc.reference_image_path) && jstate !== 'generating'}
+								<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
 							{/if}
-						{/if}
-
-						<div class="row">
-							<Button
-								variant="primary"
-								size="sm"
-								disabled={busy || envWorkflowId === '' || jstate === 'generating'}
-								onclick={() => generateLocation(loc)}
-							>
-								{jstate === 'generating'
-									? 'Generating…'
-									: loc.reference_image_path
-										? 'Regenerate image'
-										: 'Generate image'}
-							</Button>
-							{#if jstate === 'failed' && job}
+							<div class="quick-actions">
 								<Button
-									variant="danger"
+									variant="secondary"
 									size="sm"
-									loading={$retryJobMutation.isPending}
-									onclick={() => $retryJobMutation.mutate(job.id)}
+									title="View full size"
+									disabled={!loc.reference_image_path}
+									onclick={() => openPreview(assetUrl(loc.reference_image_path), loc.name)}
 								>
-									<Icon name="retry" size={13} /> Retry
+									<Icon name="zoom-in" size={14} /><span class="sr-only"
+										>View {loc.name} full size</span
+									>
 								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title="Regenerate image"
+									disabled={busy || envWorkflowId === '' || jstate === 'generating'}
+									onclick={() => generateLocation(loc)}
+								>
+									<Icon name="retry" size={14} /><span class="sr-only"
+										>Regenerate {loc.name} image</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title={isCover(loc.reference_image_path) ? 'Remove as project cover' : 'Set as project cover'}
+									disabled={!loc.reference_image_path}
+									onclick={() => toggleCover(loc.reference_image_path)}
+								>
+									<Icon name="image" size={14} /><span class="sr-only"
+										>{isCover(loc.reference_image_path)
+											? `Remove ${loc.name} image as project cover`
+											: `Set ${loc.name} image as project cover`}</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title="Delete environment"
+									onclick={() =>
+										requestDelete({ kind: 'location', id: loc.id, name: loc.name })}
+								>
+									<Icon name="trash" size={14} /><span class="sr-only">Delete {loc.name}</span>
+								</Button>
+							</div>
+							{#if jstate === 'generating'}
+								<div class="gen-bar">
+									<ProgressBar indeterminate size="sm" label="Generating" />
+								</div>
 							{/if}
 						</div>
 
-						{#if envHasPrompt}
-							<details class="prompt-fold">
-								<summary>Edit image prompt</summary>
-								<label class="prompt-field">
-									<span class="field-label">Sent to ComfyUI on generate</span>
-									<textarea
-										class="field-textarea prompt-area"
-										rows="7"
-										value={promptForLoc(loc)}
-										oninput={(e) => setDraft(key, e.currentTarget.value)}
-									></textarea>
-								</label>
-								<div class="row">
+						<div class="entity-body">
+							<div class="title-row">
+								<strong>{loc.name}</strong>
+							</div>
+							{#if loc.description}
+								<p class="facts" title={loc.description}>
+									<span class="k">Description</span> {loc.description}
+								</p>
+							{/if}
+							{#if jstate === 'failed' && job}
+								{#if job.error}
+									<p class="err-line" title={job.error}>{job.error}</p>
+								{/if}
+							{/if}
+
+							<div class="row">
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={busy || envWorkflowId === '' || jstate === 'generating'}
+									onclick={() => generateLocation(loc)}
+								>
+									{jstate === 'generating'
+										? 'Generating…'
+										: loc.reference_image_path
+											? 'Regenerate image'
+											: 'Generate image'}
+								</Button>
+								{#if jstate === 'failed' && job}
 									<Button
-										variant="ghost"
+										variant="danger"
 										size="sm"
-										onclick={() => setDraft(key, locationReferenceTemplate(loc))}
+										loading={$retryJobMutation.isPending}
+										onclick={() => $retryJobMutation.mutate(job.id)}
 									>
-										Reset to environment template
+										<Icon name="retry" size={13} /> Retry
 									</Button>
-									<Button
-										variant="secondary"
-										size="sm"
-										loading={savingKey === key}
-										onclick={() => saveLocationPrompt(loc)}
+								{/if}
+							</div>
+
+							{#if envHasPrompt}
+								<details class="prompt-fold">
+									<summary>Edit image prompt</summary>
+									<label class="prompt-field">
+										<span class="field-label">Sent to ComfyUI on generate</span>
+										<textarea
+											class="field-textarea prompt-area"
+											rows="7"
+											value={promptForLoc(loc)}
+											oninput={(e) => setDraft(key, e.currentTarget.value)}
+										></textarea>
+									</label>
+									<div class="row">
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={() => setDraft(key, locationReferenceTemplate(loc))}
+										>
+											Reset to environment template
+										</Button>
+										<Button
+											variant="secondary"
+											size="sm"
+											loading={savingKey === key}
+											onclick={() => saveLocationPrompt(loc)}
+										>
+											Save prompt
+										</Button>
+									</div>
+								</details>
+							{:else}
+								<p class="muted small prompt-note">
+									Selected workflow has no <code>(Input:prompt)</code> — add that role
+									tag in ComfyUI (see AGENTS.md), or use the Generation settings above.
+								</p>
+							{/if}
+						</div>
+					</article>
+				{/each}
+			</div>
+		{/if}
+	{:else}
+		{#if $assetsQuery.data.items.length === 0}
+			<EmptyState
+				title="No misc. items yet"
+				body="Draft a storyline in Story to extract props, weapons and objects, then come back to generate reference images."
+			>
+				{#snippet icon()}
+					<Icon name="folder" size={28} />
+				{/snippet}
+				{#snippet action()}
+					<Button variant="primary" onclick={goToStory}>Go to Story</Button>
+				{/snippet}
+			</EmptyState>
+		{:else}
+			<div class="grid">
+				{#each $assetsQuery.data.items as item (item.id)}
+					{@const key = itemKey(item.id)}
+					{@const job = entityJob(jobs, 'item_id', item.id)}
+					{@const jstate = jobStateOf(job)}
+					<article class="entity-card">
+						<div class="media">
+							<AssetThumb
+								src={assetUrl(item.reference_image_path)}
+								alt={item.name}
+								placeholder="No reference yet"
+								tall
+								jobState={jstate}
+								onPreview={(url) => openPreview(url, item.name)}
+							/>
+							{#if isCover(item.reference_image_path) && jstate !== 'generating'}
+								<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
+							{/if}
+							<div class="quick-actions">
+								<Button
+									variant="secondary"
+									size="sm"
+									title="View full size"
+									disabled={!item.reference_image_path}
+									onclick={() => openPreview(assetUrl(item.reference_image_path), item.name)}
+								>
+									<Icon name="zoom-in" size={14} /><span class="sr-only"
+										>View {item.name} full size</span
 									>
-										Save prompt
-									</Button>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title="Regenerate image"
+									disabled={busy || itemWorkflowId === '' || jstate === 'generating'}
+									onclick={() => generateItem(item)}
+								>
+									<Icon name="retry" size={14} /><span class="sr-only"
+										>Regenerate {item.name} image</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title={isCover(item.reference_image_path) ? 'Remove as project cover' : 'Set as project cover'}
+									disabled={!item.reference_image_path}
+									onclick={() => toggleCover(item.reference_image_path)}
+								>
+									<Icon name="image" size={14} /><span class="sr-only"
+										>{isCover(item.reference_image_path)
+											? `Remove ${item.name} image as project cover`
+											: `Set ${item.name} image as project cover`}</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									title="Delete item"
+									onclick={() =>
+										requestDelete({ kind: 'item', id: item.id, name: item.name })}
+								>
+									<Icon name="trash" size={14} /><span class="sr-only">Delete {item.name}</span>
+								</Button>
+							</div>
+							{#if jstate === 'generating'}
+								<div class="gen-bar">
+									<ProgressBar indeterminate size="sm" label="Generating" />
 								</div>
-							</details>
-						{:else}
-							<p class="muted small prompt-note">
-								Selected workflow has no <code>(Input:prompt)</code> — add that role tag
-								in ComfyUI (see AGENTS.md), or use the Generation settings above.
-							</p>
-						{/if}
-					</div>
-				</article>
-			{/each}
-		</div>
+							{/if}
+						</div>
+
+						<div class="entity-body">
+							<div class="title-row">
+								<strong>{item.name}</strong>
+							</div>
+							{#if item.description}
+								<p class="facts" title={item.description}>
+									<span class="k">Description</span> {item.description}
+								</p>
+							{/if}
+							{#if jstate === 'failed' && job}
+								{#if job.error}
+									<p class="err-line" title={job.error}>{job.error}</p>
+								{/if}
+							{/if}
+
+							<div class="row">
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={busy || itemWorkflowId === '' || jstate === 'generating'}
+									onclick={() => generateItem(item)}
+								>
+									{jstate === 'generating'
+										? 'Generating…'
+										: item.reference_image_path
+											? 'Regenerate image'
+											: 'Generate image'}
+								</Button>
+								{#if jstate === 'failed' && job}
+									<Button
+										variant="danger"
+										size="sm"
+										loading={$retryJobMutation.isPending}
+										onclick={() => $retryJobMutation.mutate(job.id)}
+									>
+										<Icon name="retry" size={13} /> Retry
+									</Button>
+								{/if}
+							</div>
+
+							{#if itemHasPrompt}
+								<details class="prompt-fold">
+									<summary>Edit image prompt</summary>
+									<label class="prompt-field">
+										<span class="field-label">Sent to ComfyUI on generate</span>
+										<textarea
+											class="field-textarea prompt-area"
+											rows="7"
+											value={promptForItem(item)}
+											oninput={(e) => setDraft(key, e.currentTarget.value)}
+										></textarea>
+									</label>
+									<div class="row">
+										<Button
+											variant="ghost"
+											size="sm"
+											onclick={() => setDraft(key, itemReferenceTemplate(item))}
+										>
+											Reset to item template
+										</Button>
+										<Button
+											variant="secondary"
+											size="sm"
+											loading={savingKey === key}
+											onclick={() => saveItemPrompt(item)}
+										>
+											Save prompt
+										</Button>
+									</div>
+								</details>
+							{:else}
+								<p class="muted small prompt-note">
+									Selected workflow has no <code>(Input:prompt)</code> — add that role
+									tag in ComfyUI (see AGENTS.md), or use the Generation settings above.
+								</p>
+							{/if}
+						</div>
+					</article>
+				{/each}
+			</div>
+		{/if}
 	{/if}
 {/if}
 

@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { toStore } from 'svelte/store';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { assetUrl, jobsApi, projects, type Job, type Scene } from '$lib/api';
 	import { estimateTargetSeconds } from '$lib/durationBudget';
+	import { agentDeepLink } from '$lib/agentTasks';
 	import { toast } from '$lib/toast';
 	import Button from '$lib/components/ui/Button.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
@@ -11,22 +13,18 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
-	import GeneratingOverlay from '$lib/components/GeneratingOverlay.svelte';
 
 	interface Props {
 		projectId: number;
-		/** Latest agent.thinking message from the project SSE stream. */
-		agentStatus?: string | null;
 	}
 
-	let { projectId, agentStatus = null }: Props = $props();
+	let { projectId }: Props = $props();
 	const client = useQueryClient();
 	let editing = $state<Scene | null>(null);
 	let editOpen = $state(false);
 	let highlightId = $state<number | null>(null);
 	let adding = $state(false);
 	let deletingId = $state<number | null>(null);
-	let regenOpen = $state(false);
 	let sceneToDelete = $state<Scene | null>(null);
 	let deleteOpen = $state(false);
 
@@ -70,22 +68,7 @@
 		return target ? estimateTargetSeconds(target) : 0;
 	});
 
-	const generateMutation = createMutation({
-		mutationFn: () => {
-			const n = $scenesQuery.data?.scenes.length ?? 0;
-			return projects.generateScript(projectId, n > 0 ? { scene_count: n } : undefined);
-		},
-		onSuccess: () => {
-			client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success('Script regenerated');
-		},
-		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Script generation failed');
-		},
-	});
-
-	const writing = $derived($generateMutation.isPending);
-	const busy = $derived(writing || adding || deletingId != null);
+	const busy = $derived(adding || deletingId != null);
 
 	const saveMutation = createMutation({
 		mutationFn: () =>
@@ -105,6 +88,23 @@
 			toast.error(err instanceof Error ? err.message : 'Could not save scene');
 		},
 	});
+
+	// Chain-from-previous toggle — persists on the scene; consumed at render time.
+	let chainPendingId = $state<number | null>(null);
+	async function toggleChain(scene: Scene) {
+		if (chainPendingId != null) return;
+		chainPendingId = scene.id;
+		try {
+			await projects.updateScene(projectId, scene.id, {
+				chain_from_prev: !scene.chain_from_prev,
+			});
+			await client.invalidateQueries({ queryKey: ['scenes'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not update scene');
+		} finally {
+			chainPendingId = null;
+		}
+	}
 
 	function jobForScene(sceneId: number): Job | undefined {
 		const jobs = ($jobsQuery.data ?? []).filter(
@@ -171,10 +171,10 @@
 		client.invalidateQueries({ queryKey: ['scenes'] });
 	}
 
+	/** Hand off script regeneration to a fresh, project-linked agent chat. */
 	function requestRegenerate() {
 		if (busy) return;
-		if (sceneCount > 0) regenOpen = true;
-		else $generateMutation.mutate();
+		goto(agentDeepLink(projectId, 'script'));
 	}
 
 	function openEdit(scene: Scene) {
@@ -270,24 +270,12 @@
 			<Icon name="plus" size={14} /> Add Scene
 		</Button>
 		<Button variant="primary" disabled={busy} onclick={requestRegenerate}>
-			{#if writing}
-				Writing…
-			{:else}
-				<Icon name="sparkle" size={15} /> Regenerate Script
-			{/if}
+			<Icon name="sparkle" size={15} /> Regenerate Script
 		</Button>
 	</div>
 </header>
 
-<div class="script-panel" aria-busy={writing}>
-	{#if writing}
-		<GeneratingOverlay
-			title="AI is writing the script…"
-			status={agentStatus}
-			hint="Editing is paused until this finishes."
-		/>
-	{/if}
-
+<div class="script-panel">
 	{#if $scenesQuery.isLoading}
 		<div class="card">Loading scenes…</div>
 	{:else if sceneCount === 0}
@@ -386,6 +374,19 @@
 					{#if scene.duration_sec}
 						<span class="chip"><Icon name="clock" size={12} /> {formatClock(scene.duration_sec)}</span>
 					{/if}
+					{#if i > 0}
+						<button
+							type="button"
+							class="chip chip-toggle"
+							class:chip-on={Boolean(scene.chain_from_prev)}
+							disabled={chainPendingId === scene.id}
+							title="When on, this clip's <Picture 1> / first image is the LAST FRAME of the previous scene's clip (resolved when the render actually runs, so batches chain correctly). Replaces the location reference for this scene."
+							onclick={() => toggleChain(scene)}
+						>
+							<Icon name="film" size={12} />
+							{Boolean(scene.chain_from_prev) ? 'Chained from prev clip' : 'Chain from prev clip'}
+						</button>
+					{/if}
 				</div>
 			</article>
 		{/each}
@@ -436,19 +437,6 @@
 		</Button>
 	{/snippet}
 </Modal>
-
-<ConfirmDialog
-	bind:open={regenOpen}
-	title="Regenerate script?"
-	message="This replaces all {sceneCount} scenes and discards manual edits. Continue?"
-	confirmLabel="Regenerate"
-	danger
-	onconfirm={() => {
-		editing = null;
-		editOpen = false;
-		$generateMutation.mutate();
-	}}
-/>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
@@ -629,6 +617,23 @@
 		padding: 2px 10px;
 		font-size: 12px;
 		color: var(--text-secondary);
+	}
+	.chip-toggle {
+		cursor: pointer;
+		font-family: inherit;
+	}
+	.chip-toggle:hover {
+		color: var(--text-primary);
+		border-color: #52525b;
+	}
+	.chip-toggle:disabled {
+		opacity: 0.6;
+		cursor: wait;
+	}
+	.chip-on {
+		color: var(--accent);
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
 	}
 	.avatar {
 		position: relative;

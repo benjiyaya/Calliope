@@ -5,6 +5,7 @@
 		{ id: 'llm', href: '/settings?tab=llm', label: 'LLM', blurb: 'Model endpoint' },
 		{ id: 'comfy', href: '/settings?tab=comfy', label: 'ComfyUI', blurb: 'Render farm' },
 		{ id: 'workflows', href: '/settings?tab=workflows', label: 'Workflows', blurb: 'Library' },
+		{ id: 'agent', href: '/settings?tab=agent', label: 'Agent', blurb: 'Hardening rules' },
 		{ id: 'queue', href: '/settings?tab=queue', label: 'Queue', blurb: 'Concurrency' },
 		{ id: 'storage', href: '/settings?tab=storage', label: 'Storage', blurb: 'Paths' },
 	] as const;

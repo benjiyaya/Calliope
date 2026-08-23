@@ -33,6 +33,7 @@
 	interface AssetOption {
 		label: string;
 		path: string;
+		kind?: 'image' | 'video' | 'audio';
 	}
 
 	interface Props {

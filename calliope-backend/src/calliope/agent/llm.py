@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -70,6 +70,141 @@ class LLMClient:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Non-streaming tool-call round. Returns the full assistant message
+        dict: {"role": "assistant", "content": str|None, "tool_calls": [...]}.
+
+        Some OpenAI-compatible servers reject the tools field outright —
+        falls back to a plain call (the reply will have no tool_calls).
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+        url = f"{self.base_url}/chat/completions"
+        logger.info("LLM tool-call request to %s with model %s", url, self.model)
+        resp = await self.client.post(url, headers=self._headers(), json=payload)
+        if resp.status_code == 400 and "tools" in payload:
+            logger.warning("Server rejected tools (HTTP 400); retrying without them")
+            payload.pop("tools")
+            payload.pop("tool_choice", None)
+            resp = await self.client.post(url, headers=self._headers(), json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        message = data["choices"][0]["message"]
+        if isinstance(message, dict):
+            msg = dict(message)
+            msg.setdefault("role", "assistant")
+            msg.setdefault("content", None)
+            msg.setdefault("tool_calls", [])
+            return msg
+        return {"role": "assistant", "content": str(message).strip(), "tool_calls": []}
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Streaming completion. Yields event dicts:
+
+        - {"type": "delta", "content": str}          — text token
+        - {"type": "reasoning", "content": str}      — reasoning/thinking token
+        - {"type": "tool_call", "tool_call": {...}}  — one complete tool call
+          (argument fragments accumulated across chunks)
+        - {"type": "done"}                           — stream finished
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+        url = f"{self.base_url}/chat/completions"
+        logger.info("LLM stream request to %s with model %s", url, self.model)
+        tool_acc: dict[int, dict[str, Any]] = {}
+        async with self.client.stream("POST", url, headers=self._headers(), json=payload) as resp:
+            if resp.status_code == 400:
+                # Read body for logging, then let the error surface as 400.
+                await resp.aread()
+                logger.warning("Stream request rejected (HTTP 400): %s", resp.text[:500])
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    # Mid-stream error payloads ({"error": {...}}) carry no
+                    # choices — surface them instead of ending the turn with
+                    # a silently blank assistant message.
+                    err = chunk.get("error")
+                    if err is not None:
+                        message = (
+                            err.get("message")
+                            if isinstance(err, dict)
+                            else str(err)
+                        )
+                        raise RuntimeError(f"LLM stream error: {message}")
+                    continue
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    yield {"type": "delta", "content": content}
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    yield {"type": "reasoning", "content": reasoning}
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    acc = tool_acc.get(idx)
+                    if acc is None:
+                        acc = {
+                            "id": tc.get("id") or f"call_{idx}",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                        tool_acc[idx] = acc
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        acc["function"]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        acc["function"]["arguments"] += fn["arguments"]
+                finish = choices[0].get("finish_reason")
+                if finish == "tool_calls":
+                    for idx in sorted(tool_acc):
+                        if tool_acc[idx]["function"]["name"]:
+                            yield {"type": "tool_call", "tool_call": tool_acc[idx]}
+                    tool_acc.clear()
+        # Some servers only send finish_reason=stop — flush anything accumulated.
+        for idx in sorted(tool_acc):
+            if tool_acc[idx]["function"]["name"]:
+                yield {"type": "tool_call", "tool_call": tool_acc[idx]}
+        yield {"type": "done"}
 
 
 def extract_json(text: str) -> dict[str, Any]:

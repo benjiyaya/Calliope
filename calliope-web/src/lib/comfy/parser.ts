@@ -12,6 +12,7 @@ const NUMBER = new Set(['INT', 'FLOAT', 'PrimitiveInt', 'PrimitiveFloat', 'KSamp
 const IMAGE = new Set(['LoadImage', 'ImageLoader', 'ETN_LoadImageBase64']);
 const IMAGE_URL = new Set(['Load Image From Url (mtb)']);
 const AUDIO = new Set(['LoadAudio', 'VHS_LoadAudio']);
+const VIDEO = new Set(['LoadVideo', 'VHS_LoadVideo', 'VHS_LoadVideoPath']);
 const VIDEO_OUT = new Set(['VHS_VideoCombine', 'SaveVideo', 'VideoOutput', 'AnimateDiffCombine']);
 const IMAGE_OUT = new Set(['SaveImage', 'PreviewImage', 'SaveImageWebsocket', 'ETN_SendImageWebSocket']);
 
@@ -26,6 +27,9 @@ const INPUT_ROLE_ALIASES: Record<string, string[]> = {
 	character: ['character', 'char', 'portrait', 'sheet', 'face', 'ref'],
 	location: ['location', 'loc', 'environment', 'env', 'background', 'scene'],
 	image: ['image', 'img'],
+	video: ['video', 'vid'],
+	audio: ['audio', 'sound', 'sfx'],
+	clipindex: ['clipindex', 'clip_index'],
 	seed: ['seed'],
 	duration: ['duration', 'dur', 'length', 'seconds'],
 };
@@ -72,11 +76,13 @@ function classToInputKind(classType: string): ComfyDynamicInput['kind'] {
 	if (IMAGE.has(classType)) return 'image';
 	if (IMAGE_URL.has(classType)) return 'image_url';
 	if (AUDIO.has(classType)) return 'audio';
+	if (VIDEO.has(classType)) return 'video';
 	if (NUMBER.has(classType)) return 'number';
 	if (TEXT_AREA.has(classType)) return 'textarea';
 	const lower = classType.toLowerCase();
-	if (lower.includes('image') || lower.includes('load')) return 'image';
+	if (lower.includes('video')) return 'video';
 	if (lower.includes('audio')) return 'audio';
+	if (lower.includes('image') || lower.includes('load')) return 'image';
 	if (lower.includes('int') || lower.includes('float') || lower.includes('seed')) return 'number';
 	if (lower.includes('text') || lower.includes('clip') || lower.includes('prompt')) return 'textarea';
 	return 'text';
@@ -84,7 +90,7 @@ function classToInputKind(classType: string): ComfyDynamicInput['kind'] {
 
 function extractDefault(node: WorkflowNode): string | number | undefined {
 	const { inputs, class_type } = node;
-	if (IMAGE.has(class_type) || AUDIO.has(class_type)) return undefined;
+	if (IMAGE.has(class_type) || AUDIO.has(class_type) || VIDEO.has(class_type)) return undefined;
 	if (typeof inputs.text === 'string') return inputs.text;
 	if (typeof inputs.value === 'string' || typeof inputs.value === 'number') return inputs.value;
 	if (typeof inputs.int === 'number') return inputs.int;

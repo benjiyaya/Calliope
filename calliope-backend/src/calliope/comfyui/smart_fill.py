@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from calliope.comfyui.roles import input_has_role
+from calliope.comfyui.roles import input_has_role, normalize_input_role
 
 
 def _find_by_role(inputs: list[dict[str, Any]], *roles: str) -> dict[str, Any] | None:
@@ -31,6 +31,44 @@ def ref_image_slots(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     filled in this order and it defines ``<Subject N>`` prompt numbering.
     """
     return _find_all_by_role(inputs, "image")
+
+
+def ref_video_slots(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``(Input:video)`` slots in node-id order."""
+    return _find_all_by_role(inputs, "video")
+
+
+def ref_audio_slots(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``(Input:audio)`` slots in node-id order."""
+    return _find_all_by_role(inputs, "audio")
+
+
+def _clipindex_kind(inp: dict[str, Any]) -> str | None:
+    """``load`` or ``save`` from the stripped title label. None if unclear."""
+    label = (inp.get("label") or "").lower()
+    if "load" in label:
+        return "load"
+    if "save" in label:
+        return "save"
+    return None
+
+
+def _fill_clipindex(
+    inputs: list[dict[str, Any]],
+    values: dict[str, Any],
+    clip_index_load: int | None,
+    clip_index_save: int | None,
+) -> None:
+    """Write every ``(Input:clipindex)`` primitive. Timeline owns these values."""
+    for inp in _find_all_by_role(inputs, "clipindex"):
+        kind = _clipindex_kind(inp)
+        if kind == "load" and clip_index_load is not None:
+            values[str(inp["nodeId"])] = max(int(clip_index_load), 1)
+        elif kind == "save" and clip_index_save is not None:
+            values[str(inp["nodeId"])] = max(int(clip_index_save), 1)
+        elif kind is None and clip_index_save is not None:
+            # Single untagged clipindex (FirstMotion Save-only) → this clip.
+            values[str(inp["nodeId"])] = max(int(clip_index_save), 1)
 
 
 def _legacy_prompt_node(inputs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -63,7 +101,11 @@ def smart_fill_inputs(
     character_image: str | None = None,
     location_image: str | None = None,
     ref_images: list[str] | None = None,
+    ref_videos: list[str] | None = None,
+    ref_audios: list[str] | None = None,
     duration: int | float | None = None,
+    clip_index_load: int | None = None,
+    clip_index_save: int | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build valuesByNodeId from workflow dynamic inputs + context.
@@ -142,17 +184,35 @@ def smart_fill_inputs(
         for inp, path in zip(ref_image_slots(inputs), ref_images):
             values[str(inp["nodeId"])] = path
 
+    if ref_videos:
+        for inp, path in zip(ref_video_slots(inputs), ref_videos):
+            values[str(inp["nodeId"])] = path
+
+    if ref_audios:
+        for inp, path in zip(ref_audio_slots(inputs), ref_audios):
+            values[str(inp["nodeId"])] = path
+
     if duration is not None:
         target = _find_by_role(inputs, "duration")
         if target:
             values[str(target["nodeId"])] = duration
 
     if extra:
+        reserved = {
+            str(inp["nodeId"])
+            for inp in inputs
+            if normalize_input_role(inp.get("role")) in ("duration", "clipindex")
+        }
         for k, v in extra.items():
             if v is None:
                 continue
             if isinstance(v, str) and not str(v).strip():
                 continue
+            if str(k) in reserved:
+                continue
             values[str(k)] = v
+
+    # Timeline-owned — always overwrite form defaults / extras.
+    _fill_clipindex(inputs, values, clip_index_load, clip_index_save)
 
     return values
