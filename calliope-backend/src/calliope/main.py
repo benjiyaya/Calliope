@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Calliope", version="1.2.0", lifespan=lifespan)
+    app = FastAPI(title="Calliope", version="1.2.1", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -85,7 +85,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"status": "ok", "version": "1.2.0", "dry_run": settings.dry_run}
+        return {"status": "ok", "version": "1.2.1", "dry_run": settings.dry_run}
 
     # Catch unknown /api/* before StaticFiles — otherwise POST falls through and
     # returns a confusing 405 Method Not Allowed from the file server.

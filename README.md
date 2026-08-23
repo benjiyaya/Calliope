@@ -13,7 +13,7 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 ## Install — Windows EXE (recommended)
 
-1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.2.0-win-x64.zip`) from the [latest release](../../releases).
+1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.2.1-win-x64.zip`) from the [latest release](../../releases).
 2. Unzip it anywhere writable (avoid `Program Files`).
 3. Run `win-unpacked\Calliope.exe`.
 
