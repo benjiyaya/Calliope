@@ -89,6 +89,23 @@
 		},
 	});
 
+	// Chain-from-previous toggle — persists on the scene; consumed at render time.
+	let chainPendingId = $state<number | null>(null);
+	async function toggleChain(scene: Scene) {
+		if (chainPendingId != null) return;
+		chainPendingId = scene.id;
+		try {
+			await projects.updateScene(projectId, scene.id, {
+				chain_from_prev: !scene.chain_from_prev,
+			});
+			await client.invalidateQueries({ queryKey: ['scenes'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not update scene');
+		} finally {
+			chainPendingId = null;
+		}
+	}
+
 	function jobForScene(sceneId: number): Job | undefined {
 		const jobs = ($jobsQuery.data ?? []).filter(
 			(j) => j.scene_id === sceneId && j.kind === 'video',
@@ -357,6 +374,19 @@
 					{#if scene.duration_sec}
 						<span class="chip"><Icon name="clock" size={12} /> {formatClock(scene.duration_sec)}</span>
 					{/if}
+					{#if i > 0}
+						<button
+							type="button"
+							class="chip chip-toggle"
+							class:chip-on={Boolean(scene.chain_from_prev)}
+							disabled={chainPendingId === scene.id}
+							title="When on, this clip's <Picture 1> / first image is the LAST FRAME of the previous scene's clip (resolved when the render actually runs, so batches chain correctly). Replaces the location reference for this scene."
+							onclick={() => toggleChain(scene)}
+						>
+							<Icon name="film" size={12} />
+							{Boolean(scene.chain_from_prev) ? 'Chained from prev clip' : 'Chain from prev clip'}
+						</button>
+					{/if}
 				</div>
 			</article>
 		{/each}
@@ -587,6 +617,23 @@
 		padding: 2px 10px;
 		font-size: 12px;
 		color: var(--text-secondary);
+	}
+	.chip-toggle {
+		cursor: pointer;
+		font-family: inherit;
+	}
+	.chip-toggle:hover {
+		color: var(--text-primary);
+		border-color: #52525b;
+	}
+	.chip-toggle:disabled {
+		opacity: 0.6;
+		cursor: wait;
+	}
+	.chip-on {
+		color: var(--accent);
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
 	}
 	.avatar {
 		position: relative;

@@ -181,7 +181,7 @@ Calliope talks to ComfyUI purely over its HTTP API: it uploads reference files w
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — © 2026 Benjiyaya.
+This project is licensed under the [MIT License](LICENSE) 
 
 ## Repo layout
 

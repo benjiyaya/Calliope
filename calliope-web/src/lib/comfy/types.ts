@@ -67,6 +67,7 @@ export interface Scene {
 	env_image_path: string | null;
 	location_id: number | null;
 	video_path: string | null;
+	chain_from_prev?: number | boolean | null;
 	character_ids: number[];
 	characters: Array<{
 		id: number;

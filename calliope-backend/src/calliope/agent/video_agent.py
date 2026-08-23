@@ -284,16 +284,22 @@ async def enqueue_video_jobs(
                     clip_index_save=save_index,
                     extra=input_values_override,
                 )
+            payload: dict[str, Any] = {"input_values": values, "prompt": prompt}
+            if scene.get("chain_from_prev"):
+                # Resolved at RUN time by the worker (the previous scene's clip may not
+                # exist yet at enqueue time — e.g. a batch queues all scenes up front).
+                payload["chain_from_prev"] = True
+                payload["scene_order_index"] = scene.get("order_index")
+                # The value the location/first-image ref slot holds right now, so the
+                # worker can find and replace that exact slot whatever the layout.
+                payload["chain_replace_value"] = loc_image
+            payload["continue_motion"] = bool(want_continue and motion_role == "next")
             job = queue_manager.enqueue(
                 project_id=project_id,
                 kind="video",
                 workflow_id=workflow["id"] if workflow else None,
                 scene_id=scene["id"],
-                payload={
-                    "input_values": values,
-                    "prompt": prompt,
-                    "continue_motion": bool(want_continue and motion_role == "next"),
-                },
+                payload=payload,
             )
             if workflow and not scene.get("workflow_id"):
                 conn.execute(
