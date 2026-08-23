@@ -128,6 +128,7 @@ class SceneUpdate(BaseModel):
     character_ids: list[int] | None = None
     location_id: int | None = None
     video_path: str | None = None
+    chain_from_prev: bool | None = None
 
 
 class SceneReorder(BaseModel):
