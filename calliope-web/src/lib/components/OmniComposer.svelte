@@ -17,6 +17,7 @@
 	import { classifyAll, RESOLUTION_PRESETS, resolutionLabel } from '$lib/comfy/classifyInput';
 	import { createUploadManager } from '$lib/comfy/useUpload.svelte';
 	import { normalizeInputRole } from '$lib/comfy/parser';
+	import type { AssetOption } from '$lib/assetPicker';
 	import { assetUrl } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import PillSelect from './omni/PillSelect.svelte';
@@ -28,12 +29,6 @@
 		id: number;
 		name: string;
 		kind: string;
-	}
-
-	interface AssetOption {
-		label: string;
-		path: string;
-		kind?: 'image' | 'video' | 'audio';
 	}
 
 	interface Props {

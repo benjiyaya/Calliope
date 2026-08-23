@@ -29,6 +29,7 @@
 	let target = $state<PlaygroundAttachTarget>('character_sheet');
 	let characterId = $state<number | ''>('');
 	let locationId = $state<number | ''>('');
+	let itemName = $state('');
 	let sceneId = $state<number | ''>('');
 	let message = $state('');
 	let characters = $state<Character[]>([]);
@@ -99,6 +100,9 @@
 			} else if (target === 'location') {
 				if (locationId === '') throw new Error('Pick a location');
 				payload.location_id = Number(locationId);
+			} else if (target === 'item') {
+				const name = itemName.trim();
+				if (name) payload.name = name;
 			} else {
 				if (sceneId === '') throw new Error('Pick a scene');
 				payload.scene_id = Number(sceneId);
@@ -117,6 +121,14 @@
 			toast.error(message);
 		},
 	});
+
+	function defaultMiscName(filePath: string): string {
+		const base = filePath.replace(/\\/g, '/').split('/').pop() ?? '';
+		const stem = base.replace(/\.[^.]+$/, '');
+		const stripped = stem.replace(/^[0-9a-f]{8}-/i, '');
+		const pretty = (stripped || stem).replace(/[_-]+/g, ' ').trim();
+		return pretty || 'New item';
+	}
 
 	const projectList = $derived(($projectsQuery.data ?? []) as Project[]);
 
@@ -142,7 +154,15 @@
 			</button>
 		</div>
 	{:else if !open}
-		<Button variant="secondary" onclick={() => (open = true)}>Add to project</Button>
+		<Button
+			variant="secondary"
+			onclick={() => {
+				itemName = defaultMiscName(path);
+				open = true;
+			}}
+		>
+			Add to project
+		</Button>
 	{:else}
 		<div class="panel" role="group" aria-label="Add artifact to project">
 			<label class="field">
@@ -161,6 +181,7 @@
 					<select class="field-select" bind:value={target}>
 						<option value="character_sheet">Character sheet</option>
 						<option value="location">Background / location</option>
+						<option value="item">Misc. item</option>
 					</select>
 				</label>
 
@@ -177,7 +198,7 @@
 							<span class="field-hint">No characters in this project yet.</span>
 						{/if}
 					</label>
-				{:else}
+				{:else if target === 'location'}
 					<label class="field">
 						<span class="field-label">Location</span>
 						<select class="field-select" bind:value={locationId} disabled={projectId === '' || loadingTargets}>
@@ -189,6 +210,17 @@
 						{#if projectId !== '' && !loadingTargets && locations.length === 0}
 							<span class="field-hint">No locations in this project yet.</span>
 						{/if}
+					</label>
+				{:else}
+					<label class="field">
+						<span class="field-label">Name</span>
+						<input
+							class="field-input"
+							type="text"
+							bind:value={itemName}
+							placeholder="New misc. item"
+						/>
+						<span class="field-hint">Adds a new misc. item. Existing items are left unchanged.</span>
 					</label>
 				{/if}
 			{:else}

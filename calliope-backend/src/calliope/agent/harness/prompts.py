@@ -83,9 +83,10 @@ def _mode_text(ctx: ToolContext) -> str:
         return (
             "SESSION MODE: SANDBOX — no project is linked yet.\n"
             "- You can brainstorm and discuss ideas freely.\n"
-            "- Tagged @workflow generates: call run_workflow directly. Do NOT "
-            "create_project or link_project for an image/video generate. The "
-            "session stays sandbox; jobs land on the hidden Playground scratch.\n"
+            "- Tagged @workflow + the user asked to generate/render: call "
+            "run_workflow (Playground scratch). Do NOT create_project or "
+            "link_project just for an image. If they only tagged a workflow "
+            "while drafting text, do NOT call run_workflow — offer and wait.\n"
             "- To file a generated image onto an existing film: list_projects, "
             "then attach_asset with that project_id + job_id (or path) and a "
             "target (character_sheet / location / item). Do not create_project "
@@ -104,8 +105,17 @@ def _mode_text(ctx: ToolContext) -> str:
         "project id.\n"
         "- scene_id / character_id / location_id / job_id / workflow_id are "
         "REAL numeric ids from tool results — never invent them.\n"
+        "- Video page #N is order (clip number), NOT scene_id. list_scenes "
+        "returns clip=#N, order, and scene_id. Users say 'scene 25' / '#25' "
+        "meaning order=25 — pass enqueue_video_jobs.orders=[25] or "
+        "update_scene.order=25. Never treat a # as a database id.\n"
         "- To file a generated image onto a character, environment, or item: "
-        "attach_asset with job_id (or path) and a name or entity id."
+        "attach_asset with job_id (or path) and a name or entity id.\n"
+        "- Film clips: enqueue_video_jobs with orders or scene_ids for ONLY "
+        "the clips they named. Never dump every scene_id. Never omit the "
+        "list (that is not 'all'). all_scenes=true only if they said all/"
+        "every clip. Orphan video jobs (wired_to_scene=false) use "
+        "attach_asset target=scene + scene_id."
     )
 
 
@@ -177,7 +187,8 @@ def _render_digest(p, stats, beats, chars, locs, scenes, pending) -> str:
         lines.append(f"locations: {ready}")
     if scenes:
         s = " ".join(
-            f"#{sc['id']}:'{sc['heading']}'{'✓vid' if sc['video_path'] else '✗vid'}"
+            f"#{sc['order_index']} id={sc['id']}:'{sc['heading']}'"
+            f"{'✓vid' if sc['video_path'] else '✗vid'}"
             for sc in scenes[:15]
         )
         lines.append(f"scenes: {s}" + (" …" if len(scenes) > 15 else ""))
@@ -206,15 +217,29 @@ async def _tool_discipline_section(ctx: ToolContext) -> str | None:
         "Text edits — add_item, add_character, add_location, update_scene, "
         "generate_story, generate_script, etc. — are NOT permission to render. "
         "After text edits, if images/videos are missing, tell the user and ASK "
-        "whether to generate; wait for their yes. Also call comfy_server_info "
-        "first; if ComfyUI is unreachable or dry_run is on, say so and stop.\n"
-        "4b. NO COMFY MCP. There are no comfy_run_workflow / comfy_run_template / "
-        "comfy_search_templates / comfy_list_saved_workflows tools. The only "
-        "comfy_* tool is comfy_server_info (health). Generate with run_workflow "
-        "(tagged @workflow) or enqueue_asset_jobs / enqueue_video_jobs.\n"
+        "whether to generate; wait for their yes — do not call run_workflow in "
+        "the same turn as the question. Render tools are hidden until they ask. "
+        "Also call comfy_server_info first; if ComfyUI is unreachable or dry_run "
+        "is on, say so and stop.\n"
+        "4b. NO COMFY MCP. There is no MCP run_workflow / comfy_run_workflow / "
+        "comfy_run_template / comfy_search_templates. The only comfy_* tool is "
+        "comfy_server_info (health). Calliope run_workflow is the HTTP queue "
+        "(tagged @workflow), not MCP. Use enqueue_asset_jobs / enqueue_video_jobs "
+        "for project assets and clips.\n"
         "5. ASSETS BEFORE VIDEO: reference-based video needs character sheets "
         "and location images to exist. After enqueue_asset_jobs, wait_for_jobs "
         "and only enqueue_video_jobs once images are ready.\n"
+        "5b. SCENE CLIPS ARE WIRED IN CODE. On a linked film, video generate "
+        "must be enqueue_video_jobs (orders=#N or scene_ids) or run_workflow "
+        "with scene_id from list_scenes. The worker writes scenes.video_path "
+        "from job.scene_id. Do not add_scene to 'fix' a missing clip. If "
+        "wait_for_jobs returns wired_to_scene=false, call attach_asset "
+        "target=scene with that job_id and the existing scene_id.\n"
+        "5c. #N IS ORDER. The Video page shows #1, #2… as order_index. "
+        "scene_id is a different, larger database id. list_scenes / "
+        "update_scene / delete_scene / enqueue_video_jobs accept order so "
+        "you can follow the user. Search with list_scenes query= or "
+        "orders=[25,26]. Never enqueue more clips than they named.\n"
         "6. Standard EDIT pipeline (text only, no renders): create_project → "
         "generate_story → generate_script → add/update assets (characters, "
         "locations, items) as needed. Rendering is a SEPARATE step that only "
@@ -227,15 +252,14 @@ async def _tool_discipline_section(ctx: ToolContext) -> str | None:
 
 async def _mentions_section(ctx: ToolContext) -> str | None:
     return (
-        "Tagged workflows: when the user message includes a [Calliope context] "
-        "appendix with workflow_id=, call run_workflow with that id (plus the "
-        "user's prompt, width/height from any stated aspect ratio, and attached "
-        "paths). There is at most ONE tagged workflow per user message — if "
-        "several workflow_id= lines appear, use the first and ignore the rest. "
-        "Do not guess the workflow from list_workflows. In a sandbox session "
-        "call run_workflow immediately — do not create_project just to "
-        "generate. Video file attachments are context only (the worker "
-        "uploads image + audio refs)."
+        "Tagged workflows: a [Calliope context] appendix with workflow_id= "
+        "names the Calliope graph. It is NOT render permission and there is "
+        "no MCP run_workflow. Only call Calliope run_workflow when the user's "
+        "own words ask to generate (or they confirm an offer). Then use that "
+        "id plus prompt / aspect / attachments — do not list_workflows guess. "
+        "One tagged workflow per message (first id wins). Sandbox: do not "
+        "create_project just to generate. Video file attachments are context "
+        "only (the worker uploads image + audio refs)."
     )
 
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from calliope import config
+from calliope.agent.prompts import item_reference_prompt
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
 from calliope.queue.manager import queue_manager
@@ -30,10 +31,12 @@ class PlaygroundGenerate(BaseModel):
 class PlaygroundAttach(BaseModel):
     path: str
     project_id: int
-    target: Literal["character_sheet", "location", "scene"]
+    target: Literal["character_sheet", "location", "item", "scene"]
     character_id: int | None = None
     location_id: int | None = None
+    item_id: int | None = None  # ignored: items always insert a new row
     scene_id: int | None = None
+    name: str | None = None
 
 
 def _job_public(job: dict[str, Any]) -> dict[str, Any]:
@@ -145,6 +148,10 @@ def _clear_entity_refs(conn, paths: list[str]) -> None:
         conn.execute("UPDATE characters SET sheet_path = NULL WHERE sheet_path = ?", (path,))
         conn.execute(
             "UPDATE locations SET reference_image_path = NULL WHERE reference_image_path = ?",
+            (path,),
+        )
+        conn.execute(
+            "UPDATE items SET reference_image_path = NULL WHERE reference_image_path = ?",
             (path,),
         )
         conn.execute("UPDATE scenes SET video_path = NULL WHERE video_path = ?", (path,))
@@ -360,6 +367,27 @@ async def attach_to_project(payload: PlaygroundAttach) -> dict[str, Any]:
                 "UPDATE locations SET reference_image_path = ? WHERE id = ?",
                 (path, payload.location_id),
             )
+        elif payload.target == "item":
+            # Always insert a new misc. item — Playground attach must not
+            # overwrite an existing project item (item_id is ignored).
+            raw_name = (payload.name or "").strip()
+            if not raw_name:
+                stem = Path(path).stem
+                raw_name = stem.split("-", 1)[-1] if len(stem) > 9 and stem[8:9] == "-" else stem
+            name = raw_name or "Playground item"
+            consistency = item_reference_prompt(
+                {"name": name, "description": "Added from Playground"}
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO items (
+                    project_id, name, description, consistency_prompt, reference_image_path
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (payload.project_id, name, "Added from Playground", consistency, path),
+            )
+            created_item_id = int(cur.lastrowid)
         elif payload.target == "scene":
             if not payload.scene_id:
                 raise HTTPException(status_code=400, detail="scene_id required")
@@ -390,6 +418,14 @@ async def attach_to_project(payload: PlaygroundAttach) -> dict[str, Any]:
                 "source": "playground_attach",
             },
         )
-        return {"ok": True, "path": path, "target": payload.target, "project_id": payload.project_id}
+        out: dict[str, Any] = {
+            "ok": True,
+            "path": path,
+            "target": payload.target,
+            "project_id": payload.project_id,
+        }
+        if payload.target == "item":
+            out["item_id"] = created_item_id
+        return out
     finally:
         conn.close()

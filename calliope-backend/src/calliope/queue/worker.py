@@ -367,6 +367,12 @@ class QueueWorker:
                 ).fetchone()
                 name = row["name"] if row else f"#{payload['location_id']}"
                 return f"{name} · environment"
+            if payload.get("item_id"):
+                row = conn.execute(
+                    "SELECT name FROM items WHERE id = ?", (payload["item_id"],)
+                ).fetchone()
+                name = row["name"] if row else f"#{payload['item_id']}"
+                return f"{name} · item"
             if job.get("scene_id"):
                 row = conn.execute(
                     "SELECT heading, order_index FROM scenes WHERE id = ?", (job["scene_id"],)
@@ -387,6 +393,7 @@ class QueueWorker:
         primary = paths[0]
         character_id = payload.get("character_id")
         location_id = payload.get("location_id")
+        item_id = payload.get("item_id")
         scene_id = job.get("scene_id")
         conn = get_db(config.settings.db_path)
         try:
@@ -407,6 +414,11 @@ class QueueWorker:
                 conn.execute(
                     "UPDATE locations SET reference_image_path = ? WHERE id = ?",
                     (primary, location_id),
+                )
+            if item_id:
+                conn.execute(
+                    "UPDATE items SET reference_image_path = ? WHERE id = ?",
+                    (primary, item_id),
                 )
             if scene_id and job["kind"] == "video":
                 conn.execute(

@@ -191,7 +191,7 @@ This project is licensed under the [MIT License](LICENSE)
 calliope-backend/            FastAPI backend (Python)
 calliope-web/                SvelteKit frontend
 example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
-docs/                        design notes (wiki source), including ComfyUI HTTP vs MCP
+docs/wiki/                   design notes (wiki source): ComfyUI HTTP vs MCP, multi-ref workflows
 ```
 
 The Windows desktop app is built from this repo but not shipped in it — download it from the [Releases](../../releases) page.

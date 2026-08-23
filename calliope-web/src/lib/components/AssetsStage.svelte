@@ -148,18 +148,25 @@
 		const chars = $assetsQuery.data?.characters ?? [];
 		const locs = $assetsQuery.data?.locations ?? [];
 		const items = $assetsQuery.data?.items ?? [];
-		const opts: Array<{ label: string; path: string }> = [];
+		const opts: Array<{ label: string; path: string; group?: 'character' | 'location' | 'item' }> =
+			[];
 		for (const c of chars) {
-			if (c.sheet_path) opts.push({ label: `${c.name} · sheet`, path: c.sheet_path });
+			if (c.sheet_path) {
+				opts.push({ label: `${c.name} · sheet`, path: c.sheet_path, group: 'character' });
+			}
 		}
 		for (const loc of locs) {
 			if (loc.reference_image_path) {
-				opts.push({ label: `${loc.name} · environment`, path: loc.reference_image_path });
+				opts.push({
+					label: `${loc.name} · environment`,
+					path: loc.reference_image_path,
+					group: 'location',
+				});
 			}
 		}
 		for (const it of items) {
 			if (it.reference_image_path) {
-				opts.push({ label: `${it.name} · item`, path: it.reference_image_path });
+				opts.push({ label: `${it.name} · item`, path: it.reference_image_path, group: 'item' });
 			}
 		}
 		return opts;

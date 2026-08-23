@@ -60,6 +60,7 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "list_workflows",
         "run_workflow",
         "enqueue_video_jobs",
+        "attach_asset",
         "list_jobs",
         "get_job_status",
         "wait_for_jobs",
@@ -84,7 +85,8 @@ Respond with ONLY a JSON object:
 Rules:
 - The standard EDIT pipeline (story → script → add/update assets text) is swarm work: one task per role, in that order.
 - Image/video GENERATION is human-in-the-loop: only include assets/video RENDER tasks (enqueue_asset_jobs / enqueue_video_jobs / run_workflow) when the user explicitly asked to generate. For text-only edits (add/update characters, locations, items, scenes, story, script), schedule the edit task and DO NOT schedule render tasks.
-- A tagged-workflow generate ([Calliope context] with workflow_id=) is a SIMPLE request — reply {"mode": "single"} so the main loop can call run_workflow.
+- Film clips: video sub-agent must enqueue_video_jobs with orders (#N on Video) or scene_ids from list_scenes — ONLY the clips the user named. Never dump every scene_id. Never add_scene to attach a generated mp4. Orphan jobs (scene_id null) do not show on the Video timeline.
+- A tagged workflow ([Calliope context] with workflow_id=) is a SIMPLE request — reply {"mode": "single"}. The main loop may call run_workflow only if the user asked to generate; tagging alone is not permission. Linked-film video still needs scene_id.
 - Tasks run in the order you list them. Later tasks can use earlier results.
 - Keep task goals concrete and self-contained; each sub-agent sees the project state fresh.
 - 2-4 tasks typical. Never more than 6.
@@ -96,11 +98,7 @@ def _scoped_payload(ctx: ToolContext, allowed: list[str]) -> list[dict[str, Any]
     out: list[dict[str, Any]] = []
     for n in allowed:
         t = registry.get(n)
-        if t is None:
-            continue
-        if t.requires_project and ctx.project_id is None:
-            continue
-        if t.blind_only and ctx.project_id is not None:
+        if t is None or not registry._visible(t, ctx):
             continue
         out.append(
             {
@@ -382,8 +380,12 @@ async def _run_sub_agent(
         "summary when done — no tool call.\n"
         "Image/video generation (enqueue_asset_jobs / enqueue_video_jobs / "
         "run_workflow) is human-in-the-loop: only call it when the user "
-        "explicitly asked to generate. For a [Calliope context] workflow_id=, "
-        "call run_workflow. For text-only edits, do the edit and stop."
+        "explicitly asked to generate. A workflow_id= appendix is not "
+        "permission. There is no MCP run_workflow. Film clips: "
+        "enqueue_video_jobs with orders (Video #N) or scene_ids from "
+        "list_scenes — only the clips they named, never the whole timeline. "
+        "Never add_scene to attach an mp4. For text-only edits, "
+        "do the edit and stop."
     )
     hardening = hardening_text()
     if hardening:

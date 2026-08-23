@@ -120,6 +120,14 @@ class ToolRegistry:
             return False
         if t.blind_only and ctx.project_id is not None:
             return False
+        # Hide render tools until the user asks — the model still "knows"
+        # run_workflow from earlier turns, but a missing tool is harder to
+        # call than one that only fails in pre-execute (HITL cards).
+        if t.requires_approval:
+            from calliope.agent.harness.policy import user_allows_render
+
+            if not user_allows_render(ctx):
+                return False
         return True
 
     def openai_payload(self, ctx: ToolContext) -> list[dict[str, Any]]:

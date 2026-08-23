@@ -1,21 +1,16 @@
 <script lang="ts">
 	/**
 	 * MediaTile — square thumbnail for image/ref/audio inputs.
-	 *
-	 * Asset picker menu is portaled to document.body so OmniComposer
-	 * overflow:hidden cannot clip it (same fix as PillSelect).
+	 * Clicking opens a tabbed asset picker modal (characters / environments /
+	 * items / uploads) instead of a clipped dropdown.
 	 */
 	import { assetUrl } from '$lib/api';
+	import type { AssetOption } from '$lib/assetPicker';
 	import type { ComfyDynamicInput } from '$lib/comfy/types';
+	import AssetPickerModal from './AssetPickerModal.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import { acceptForKind } from '$lib/comfy/useUpload.svelte';
-
-	interface AssetOption {
-		label: string;
-		path: string;
-		kind?: 'image' | 'video' | 'audio';
-	}
 
 	interface Props {
 		input: ComfyDynamicInput;
@@ -43,19 +38,15 @@
 
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let dragOver = $state(false);
-	let showAssetMenu = $state(false);
-	let tileEl = $state<HTMLElement | null>(null);
-	let menuEl = $state<HTMLElement | null>(null);
-	let menuPos = $state({ top: 0, left: 0, maxHeight: 280, minWidth: 200 });
+	let pickerOpen = $state(false);
 
-	function openPicker(e: MouseEvent) {
-		e.stopPropagation();
+	function openPicker() {
 		if (uploadingName) return;
-		if (matchingAssets.length) {
-			showAssetMenu = !showAssetMenu;
-		} else if (allowUpload) {
-			fileInput?.click();
+		if (matchingAssets.length || allowUpload) {
+			pickerOpen = true;
+			return;
 		}
+		fileInput?.click();
 	}
 
 	function onFileChosen(e: Event) {
@@ -83,74 +74,10 @@
 	const isImageKind = $derived(input.kind === 'image' || input.kind === 'image_url');
 	const isVideoKind = $derived(input.kind === 'video');
 	const matchingAssets = $derived(
-		assetOptions.filter((o) => !o.kind || o.kind === input.kind || (isImageKind && o.kind === 'image')),
+		assetOptions.filter(
+			(o) => !o.kind || o.kind === input.kind || (isImageKind && o.kind === 'image'),
+		),
 	);
-	const hasAssets = $derived(matchingAssets.length > 0);
-
-	function placeMenu() {
-		if (!tileEl || !menuEl) return;
-		const rect = tileEl.getBoundingClientRect();
-		const gap = 6;
-		const pad = 8;
-		const spaceBelow = window.innerHeight - rect.bottom - gap - pad;
-		const spaceAbove = rect.top - gap - pad;
-		const preferred = Math.min(320, Math.max(menuEl.scrollHeight, 80));
-		const openUp = spaceBelow < Math.min(preferred, 160) && spaceAbove > spaceBelow;
-		const maxHeight = Math.max(120, openUp ? spaceAbove : spaceBelow);
-		const h = Math.min(menuEl.scrollHeight, maxHeight);
-		const minWidth = Math.max(200, rect.width);
-
-		let top = openUp ? rect.top - h - gap : rect.bottom + gap;
-		let left = rect.left;
-		left = Math.max(pad, Math.min(left, window.innerWidth - minWidth - pad));
-		top = Math.max(pad, Math.min(top, window.innerHeight - Math.min(h, maxHeight) - pad));
-
-		menuPos = { top, left, maxHeight, minWidth };
-	}
-
-	function onWindowClick(e: MouseEvent) {
-		if (!showAssetMenu) return;
-		const t = e.target as Node;
-		if (tileEl?.contains(t) || menuEl?.contains(t)) return;
-		showAssetMenu = false;
-	}
-
-	function onKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') showAssetMenu = false;
-	}
-
-	$effect(() => {
-		if (!showAssetMenu || !menuEl) return;
-		document.body.appendChild(menuEl);
-		return () => {
-			menuEl?.remove();
-		};
-	});
-
-	$effect(() => {
-		if (!showAssetMenu) return;
-		const t = window.setTimeout(() => {
-			placeMenu();
-			window.addEventListener('click', onWindowClick);
-			window.addEventListener('keydown', onKey);
-			window.addEventListener('resize', placeMenu);
-			window.addEventListener('scroll', placeMenu, true);
-		}, 0);
-		return () => {
-			clearTimeout(t);
-			window.removeEventListener('click', onWindowClick);
-			window.removeEventListener('keydown', onKey);
-			window.removeEventListener('resize', placeMenu);
-			window.removeEventListener('scroll', placeMenu, true);
-		};
-	});
-
-	$effect(() => {
-		if (showAssetMenu && menuEl && tileEl) {
-			void assetOptions.length;
-			requestAnimationFrame(placeMenu);
-		}
-	});
 
 	const displayLabel = $derived(
 		input.role === 'character'
@@ -167,7 +94,7 @@
 	const accept = $derived(acceptForKind(input.kind));
 </script>
 
-<div class="tile-wrap" bind:this={tileEl}>
+<div class="tile-wrap">
 	<input
 		bind:this={fileInput}
 		type="file"
@@ -176,8 +103,6 @@
 		onchange={onFileChosen}
 	/>
 
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="tile"
 		class:filled={!!value}
@@ -191,11 +116,17 @@
 		ondragover={(e) => e.preventDefault()}
 		ondrop={onDrop}
 		onclick={openPicker}
+		onkeydown={(e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openPicker();
+			}
+		}}
 		role="button"
 		tabindex="0"
 		title={displayLabel}
-		aria-haspopup={matchingAssets.length ? 'menu' : undefined}
-		aria-expanded={matchingAssets.length ? showAssetMenu : undefined}
+		aria-haspopup="dialog"
+		aria-expanded={pickerOpen}
 	>
 		{#if uploadingName}
 			<div class="tile-uploading">
@@ -238,48 +169,17 @@
 	{/if}
 </div>
 
-{#if showAssetMenu && hasAssets}
-	<div
-		bind:this={menuEl}
-		class="asset-menu"
-		style="top: {menuPos.top}px; left: {menuPos.left}px; max-height: {menuPos.maxHeight}px; min-width: {menuPos.minWidth}px"
-		role="menu"
-	>
-		{#each matchingAssets as opt (opt.path)}
-			<button
-				type="button"
-				class="asset-item"
-				class:active={opt.path === value}
-				role="menuitem"
-				onclick={(e) => {
-					e.stopPropagation();
-					onselectAsset(opt.path);
-					showAssetMenu = false;
-				}}
-			>
-				<span class="item-label">{opt.label}</span>
-				{#if opt.path === value}
-					<Icon name="check" size={14} />
-				{/if}
-			</button>
-		{/each}
-		{#if allowUpload}
-			<button
-				type="button"
-				class="asset-item upload-opt"
-				role="menuitem"
-				onclick={(e) => {
-					e.stopPropagation();
-					showAssetMenu = false;
-					fileInput?.click();
-				}}
-			>
-				<Icon name="upload" size={12} />
-				Upload new…
-			</button>
-		{/if}
-	</div>
-{/if}
+<AssetPickerModal
+	bind:open={pickerOpen}
+	title="Choose {displayLabel}"
+	assets={matchingAssets}
+	{value}
+	kind={input.kind}
+	{allowUpload}
+	onselect={onselectAsset}
+	onupload={() => fileInput?.click()}
+	onclear={value ? onclear : undefined}
+/>
 
 <style>
 	.tile-wrap {
@@ -393,64 +293,6 @@
 		font-size: 9px;
 		color: var(--error);
 		font-weight: 600;
-	}
-
-	.asset-menu {
-		position: fixed;
-		z-index: 10000;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		box-shadow:
-			0 8px 24px rgba(0, 0, 0, 0.5),
-			0 0 0 1px rgba(0, 0, 0, 0.3);
-		padding: 4px;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		overflow-y: auto;
-		overscroll-behavior: contain;
-	}
-
-	.asset-item {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		padding: 8px 12px;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		border: none;
-		color: var(--text-secondary);
-		font-size: 12px;
-		font-family: var(--font-body);
-		cursor: pointer;
-		text-align: left;
-		width: 100%;
-	}
-
-	.item-label {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.asset-item:hover {
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-	}
-
-	.asset-item.active {
-		color: var(--accent);
-		font-weight: 600;
-	}
-
-	.upload-opt {
-		color: var(--text-muted);
-		border-top: 1px solid var(--border);
-		margin-top: 2px;
-		padding-top: 10px;
-		border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 	}
 
 	.sr-only {

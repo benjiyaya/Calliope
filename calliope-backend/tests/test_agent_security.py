@@ -342,6 +342,56 @@ def test_render_guard_allows_run_workflow_on_generate(client):
     assert decision.kind == "allow"
 
 
+def test_render_tools_hidden_until_user_asks(client):
+    """run_workflow must not appear in the model payload until HITL unlocks.
+
+    Asking-then-calling in the same turn produced failed HITL cards; hiding
+    the tool is stronger than a deny after the model already called it.
+    """
+    from calliope.agent.harness.tools import openai_tools_payload
+
+    pid = _mk_project(client, "HITL Hide")
+    sid = _mk_session(pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    names = {e["function"]["name"] for e in openai_tools_payload(ctx)}
+    assert "run_workflow" not in names
+    assert "enqueue_asset_jobs" not in names
+    assert "enqueue_video_jobs" not in names
+    assert "comfy_run_workflow" not in names
+    assert "list_workflows" in names
+
+    session_log.append_event(sid, session_log.USER_MESSAGE, {"content": "draft outfits only"})
+    names = {e["function"]["name"] for e in openai_tools_payload(ctx)}
+    assert "run_workflow" not in names
+
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "yes, generate the images"}
+    )
+    names = {e["function"]["name"] for e in openai_tools_payload(ctx)}
+    assert "run_workflow" in names
+    assert "enqueue_asset_jobs" in names
+
+
+def test_render_guard_strips_appendix_in_content(client):
+    """kind=image in a stored appendix must not unlock renders."""
+    registry, _ = build_harness()
+    pid = _mk_project(client, "HITL Appendix Content")
+    sid = _mk_session(pid)
+    session_log.append_event(
+        sid,
+        session_log.USER_MESSAGE,
+        {
+            "content": (
+                "create a Misc. Item only\n\n[Calliope context]\n"
+                'workflow_id=39 name="krea" kind=image'
+            )
+        },
+    )
+    t = registry.get("run_workflow")
+    decision = _render_approval_guard(ToolContext(session_id=sid, project_id=pid), t, {})
+    assert decision.kind == "deny"
+
+
 def test_run_workflow_sandbox_uses_playground_scratch(client):
     """Sandbox @generate must not create a user project — queue on Playground scratch."""
     registry, _ = build_harness()
@@ -537,6 +587,130 @@ def test_attach_asset_sandbox_requires_project_id(client):
     )
     assert out.get("ok") is False
     assert "project_id" in out["error"]
+
+
+def _insert_video_workflow(conn) -> int:
+    wf_json = json.dumps(
+        {
+            "10": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": ""},
+                "_meta": {"title": "Main Prompt (Input:prompt)"},
+            }
+        }
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO workflows (name, kind, workflow_json, input_schema, output_schema, is_enabled)
+        VALUES ('h3-test', 'video', ?, '[]', '[]', 1)
+        """,
+        (wf_json,),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def test_run_workflow_linked_video_requires_scene_id(client):
+    """A film clip without scene_id would orphan the mp4 (preview only)."""
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Wire Film")
+    sid = _mk_session(pid)
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "generate the video clip"}
+    )
+    conn = get_db(settings.db_path)
+    try:
+        wid = _insert_video_workflow(conn)
+    finally:
+        conn.close()
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    out = asyncio.run(registry.execute(ctx, "run_workflow", {"workflow_id": wid, "prompt": "rain"}))
+    assert out.get("ok") is False
+    assert "scene_id" in out["error"]
+    from calliope.queue.manager import queue_manager
+
+    orphans = [
+        j
+        for j in queue_manager.list_jobs(project_id=pid, limit=20)
+        if j.get("kind") == "video" and not j.get("scene_id")
+    ]
+    assert orphans == []
+
+
+def test_run_workflow_linked_video_wires_scene(client):
+    """run_workflow with scene_id enqueues a scene-backed job (worker can attach)."""
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Wire Scene")
+    scene = client.post(
+        f"/api/projects/{pid}/scenes", json={"heading": "EXT. STREET", "order_index": 1}
+    ).json()
+    sid = _mk_session(pid)
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "render the video for this scene"}
+    )
+    conn = get_db(settings.db_path)
+    try:
+        wid = _insert_video_workflow(conn)
+    finally:
+        conn.close()
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    out = asyncio.run(
+        registry.execute(
+            ctx,
+            "run_workflow",
+            {"workflow_id": wid, "scene_id": scene["id"], "prompt": "night rain"},
+        )
+    )
+    assert out.get("ok") is True
+    assert out.get("wired_to_scene") is True
+    assert out["jobs"][0]["scene_id"] == scene["id"]
+    assert out["jobs"][0]["wired_to_scene"] is True
+
+
+def test_attach_asset_job_to_scene(client):
+    """Backfill an orphan video job onto an existing scene."""
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Backfill Clip")
+    scene = client.post(
+        f"/api/projects/{pid}/scenes", json={"heading": "EXT. ALLEY", "order_index": 1}
+    ).json()
+    path = _touch_asset("orphan-clip.mp4")
+    from calliope.queue.manager import queue_manager
+
+    job = queue_manager.enqueue(project_id=pid, kind="video", payload={})
+    queue_manager.mark_done(job["id"], [path])
+
+    ctx = ToolContext(session_id=_mk_session(), project_id=None)
+    out = asyncio.run(
+        registry.execute(
+            ctx,
+            "attach_asset",
+            {
+                "job_id": job["id"],
+                "project_id": pid,
+                "target": "scene",
+                "scene_id": scene["id"],
+            },
+        )
+    )
+    assert out.get("ok") is True
+    assert out["entity"]["video_path"] == path
+    conn = get_db(settings.db_path)
+    try:
+        scene_row = conn.execute(
+            "SELECT video_path FROM scenes WHERE id = ?", (scene["id"],)
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT scene_id FROM jobs WHERE id = ?", (job["id"],)
+        ).fetchone()
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM scenes WHERE project_id = ?", (pid,)
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+    assert scene_row["video_path"] == path
+    assert job_row["scene_id"] == scene["id"]
+    assert n == 1
 
 
 def test_run_workflow_blocks_without_approval(client):

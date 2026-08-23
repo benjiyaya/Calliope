@@ -73,7 +73,7 @@
 				class:selected={selectedId === scene.id}
 				class:chained={chained(scene)}
 				onclick={() => onSelect(scene.id)}
-				title={`${scene.heading || 'Scene'} · ${formatClock(scene.duration_sec || 5)}`}
+				title={`#${scene.order_index} · id ${scene.id} · ${scene.heading || 'Scene'} · ${formatClock(scene.duration_sec || 5)}`}
 			>
 				<span class="bar" aria-hidden="true"></span>
 				<span class="thumb" aria-hidden="true">
@@ -88,7 +88,7 @@
 				</span>
 				<span class="meta">
 					<span class="num">#{scene.order_index}</span>
-					<span class="dur">{formatClock(scene.duration_sec || 5)}</span>
+					<span class="sid">id {scene.id}</span>
 				</span>
 			</button>
 		{/each}
@@ -99,7 +99,7 @@
 			<Icon name="chevron-left" size={14} /> Prev
 		</Button>
 		<span class="pos">
-			{selected ? `Scene ${selected.order_index} of ${scenes.length}` : '—'}
+			{selected ? `#${selected.order_index} of ${scenes.length} · id ${selected.id}` : '—'}
 		</span>
 		<Button variant="ghost" size="sm" disabled={!selected} onclick={() => onStep(1)}>
 			Next <Icon name="chevron-right" size={14} />
@@ -232,9 +232,10 @@
 		color: var(--accent);
 	}
 
-	.dur {
+	.sid {
 		font-family: var(--font-mono);
-		font-size: 10px;
+		font-size: 9px;
+		font-weight: 600;
 		color: var(--text-muted);
 	}
 
@@ -248,7 +249,7 @@
 	.pos {
 		font-size: 12px;
 		color: var(--text-secondary);
-		min-width: 12ch;
+		min-width: 22ch;
 		text-align: center;
 	}
 </style>

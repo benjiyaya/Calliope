@@ -57,20 +57,33 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="enqueue_video_jobs",
             description=(
-                "Queue video clip generation for scenes (ComfyUI video jobs with "
-                "reference images wired automatically). Reference-based "
-                "workflows need character sheets / location images to EXIST "
-                "first — check get_workspace (✓img marks) and "
-                "enqueue_asset_jobs + wait_for_jobs before this. Omit scene_ids "
-                "to render all scenes."
+                "Queue video clip generation for SPECIFIC scenes. Users say "
+                "'#25' / 'scene 25' meaning Video-page order — pass those as "
+                "orders, or list_scenes.scene_id as scene_ids. NEVER dump every "
+                "scene_id. NEVER omit the target list (that used to mean 'all' "
+                "and flooded the queue). Set all_scenes=true ONLY when the user "
+                "explicitly asked for every clip. More than 3 clips is blocked "
+                "unless they said all/every/entire."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "orders": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "Video page clip numbers (#1, #25). Preferred when "
+                            "the user names scenes by #."
+                        ),
+                    },
                     "scene_ids": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "Real scene ids from list_scenes; omit for all",
+                        "description": "Database ids from list_scenes.scene_id — not #N",
+                    },
+                    "all_scenes": {
+                        "type": "boolean",
+                        "description": "True only if the user asked to render every clip",
                     },
                     "workflow_id": {
                         "type": "integer",
@@ -87,13 +100,15 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="run_workflow",
             description=(
-                "Queue a Calliope ComfyUI workflow. Works in sandbox AND linked "
-                "sessions. Sandbox jobs go to the hidden Playground scratch — "
-                "do NOT create_project just to generate. Use this when the user "
-                "message has a [Calliope context] appendix with workflow_id= "
-                "(from an @workflow mention). Do NOT call list_workflows to "
-                "guess the id. Call comfy_server_info first. prompt lands on "
-                "(Input:prompt). "
+                "Queue a Calliope ComfyUI workflow. Sandbox jobs go to Playground "
+                "scratch. Linked-film VIDEO clips MUST pass scene_id (from "
+                "list_scenes) — the worker then writes scenes.video_path. Prefer "
+                "enqueue_video_jobs for one or more scenes. A video job without "
+                "scene_id will NOT appear on the Video timeline. "
+                "Use this when the user message has a [Calliope context] "
+                "appendix with workflow_id= (from an @workflow mention). Do NOT "
+                "call list_workflows to guess the id. Call comfy_server_info "
+                "first. prompt lands on (Input:prompt). "
                 "width/height fill (Input:width)/(Input:height) by role. "
                 "attachments are ordered local paths for (Input:image) / "
                 "(Input:character) slots. Aspect ratio in the user's prose "
@@ -107,6 +122,13 @@ def register(registry: ToolRegistry) -> None:
                     "workflow_id": {
                         "type": "integer",
                         "description": "Calliope workflow id from [Calliope context]",
+                    },
+                    "scene_id": {
+                        "type": "integer",
+                        "description": (
+                            "Required for video on a linked film — real scene id "
+                            "from list_scenes. Omit in sandbox / image generates."
+                        ),
                     },
                     "prompt": {
                         "type": "string",
@@ -211,13 +233,13 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="attach_asset",
             description=(
-                "Add a generated image (from a job_id or a local path) to a "
-                "project as a character sheet, environment, or misc. item. "
-                "Works in sandbox — do not create_project just to file an "
-                "image. Call list_projects first if the user named a film. "
-                "Pass an existing character_id / location_id / item_id, or "
-                "a name (matches an existing entity case-insensitively, "
-                "otherwise creates one). job_id should be the "
+                "Add a generated file to a project: image as character sheet / "
+                "environment / misc. item, or a video clip onto an existing "
+                "scene (target=scene). Works in sandbox — do not create_project "
+                "just to file a generate. Call list_projects first if the user "
+                "named a film. For images: character_id / location_id / item_id "
+                "or a name. For scene clips: scene_id from list_scenes (never "
+                "add_scene to 'fix' a missing clip). job_id should be the "
                 "run_workflow / Playground job that produced the file."
             ),
             parameters={
@@ -237,12 +259,16 @@ def register(registry: ToolRegistry) -> None:
                     },
                     "target": {
                         "type": "string",
-                        "enum": ["character_sheet", "location", "item"],
-                        "description": "Where to file the image",
+                        "enum": ["character_sheet", "location", "item", "scene"],
+                        "description": "Where to file the generate",
                     },
                     "character_id": {"type": "integer"},
                     "location_id": {"type": "integer"},
                     "item_id": {"type": "integer"},
+                    "scene_id": {
+                        "type": "integer",
+                        "description": "Existing scene id when target=scene",
+                    },
                     "name": {
                         "type": "string",
                         "description": "Entity name — updates a match, or creates if none",
@@ -301,18 +327,94 @@ async def t_enqueue_asset_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
     return {"jobs": jobs, "count": len(jobs)}
 
 
+def _int_list(raw: Any) -> list[int]:
+    out: list[int] = []
+    for x in raw or []:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    from calliope.agent.harness import log as session_log
+    from calliope.agent.harness.plugins.script import resolve_scene_ref
+    from calliope.agent.harness.policy import allows_bulk_video_enqueue
     from calliope.agent.video_agent import enqueue_video_jobs as _enqueue
+
+    scene_ids = _int_list(args.get("scene_ids"))
+    orders = _int_list(args.get("orders"))
+    all_scenes = bool(args.get("all_scenes"))
+    latest = session_log.latest_user_message(ctx.session_id) or ""
+
+    resolved: list[int] = []
+    if orders or scene_ids:
+        conn = _db()
+        try:
+            for sid in scene_ids:
+                found, err = resolve_scene_ref(conn, ctx.project_id, scene_id=sid)
+                if err:
+                    return {"ok": False, "error": err}
+                resolved.append(found)
+            for order in orders:
+                found, err = resolve_scene_ref(conn, ctx.project_id, order=order)
+                if err:
+                    return {"ok": False, "error": err}
+                resolved.append(found)
+        finally:
+            conn.close()
+        # Preserve order, drop dupes.
+        seen: set[int] = set()
+        unique: list[int] = []
+        for sid in resolved:
+            if sid not in seen:
+                seen.add(sid)
+                unique.append(sid)
+        resolved = unique
+    elif all_scenes:
+        conn = _db()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM scenes WHERE project_id = ? ORDER BY order_index",
+                (ctx.project_id,),
+            ).fetchall()
+            resolved = [int(r["id"]) for r in rows]
+        finally:
+            conn.close()
+    else:
+        return {
+            "ok": False,
+            "error": (
+                "Say which clips: pass orders (Video page #N) or scene_ids "
+                "from list_scenes. Do not enqueue the whole timeline. "
+                "all_scenes=true only when the user asked for every clip."
+            ),
+        }
+
+    if not resolved:
+        return {"ok": False, "error": "No matching scenes to enqueue"}
+
+    allowed_bulk = allows_bulk_video_enqueue(latest, len(resolved))
+    if not allowed_bulk:
+        return {
+            "ok": False,
+            "error": (
+                f"Blocked: {len(resolved)} clips is a bulk render. Users usually "
+                "mean the #N they named (2–3 clips). Pass only those orders, or "
+                "wait until they say all scenes / every clip / the entire film."
+            ),
+        }
 
     try:
         jobs = await _enqueue(
             ctx.project_id,
-            scene_ids=args.get("scene_ids"),
+            scene_ids=resolved,
             workflow_id=args.get("workflow_id"),
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
-    return {"jobs": jobs, "count": len(jobs)}
+    return {"jobs": jobs, "count": len(jobs), "scene_ids": resolved}
 
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -385,6 +487,55 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     finally:
         conn.close()
 
+    scene_id: int | None = None
+    raw_scene = args.get("scene_id")
+    if raw_scene is not None and str(raw_scene).strip() != "":
+        try:
+            scene_id = int(raw_scene)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "scene_id must be an integer from list_scenes"}
+
+    # Linked-film video must be a scene job. Orphans (scene_id NULL) finish in
+    # the queue but never write scenes.video_path — the clip is preview-only.
+    if kind == "video" and ctx.project_id is not None:
+        if scene_id is None:
+            return {
+                "ok": False,
+                "error": (
+                    "Linked-film video requires scene_id from list_scenes. "
+                    "Prefer enqueue_video_jobs. Do not add_scene to attach a clip."
+                ),
+            }
+        conn = _db()
+        try:
+            scene = conn.execute(
+                "SELECT id FROM scenes WHERE id = ? AND project_id = ?",
+                (scene_id, int(ctx.project_id)),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not scene:
+            return {"ok": False, "error": f"Scene {scene_id} not found in this project"}
+        from calliope.agent.video_agent import enqueue_video_jobs as _enqueue
+
+        try:
+            jobs = await _enqueue(
+                int(ctx.project_id),
+                scene_ids=[scene_id],
+                workflow_id=workflow_id,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "jobs": [_sc_job_dict_lite(j) for j in jobs],
+            "count": len(jobs),
+            "workflow_id": workflow_id,
+            "workflow_name": wf_name,
+            "sandbox": False,
+            "wired_to_scene": True,
+            "scene_id": scene_id,
+        }
+
     raw_paths = [str(p) for p in (args.get("attachments") or []) if p]
     safe_paths, path_err = _sandbox_attachment_paths(raw_paths)
     if path_err:
@@ -440,6 +591,7 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         "workflow_id": workflow_id,
         "workflow_name": wf_name,
         "sandbox": sandbox,
+        "wired_to_scene": False,
     }
 
 
@@ -473,8 +625,8 @@ async def t_attach_asset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     from calliope.routers.playground import PLAYGROUND_STATUS
 
     target = str(args.get("target") or "")
-    if target not in ("character_sheet", "location", "item"):
-        return {"ok": False, "error": "target must be character_sheet, location, or item"}
+    if target not in ("character_sheet", "location", "item", "scene"):
+        return {"ok": False, "error": "target must be character_sheet, location, item, or scene"}
 
     project_id = args.get("project_id")
     if project_id is None:
@@ -571,7 +723,7 @@ async def t_attach_asset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
                 row = conn.execute("SELECT * FROM locations WHERE id = ?", (cur.lastrowid,)).fetchone()
             entity = row_to_dict(row)
             entity["reference_image_path"] = path
-        else:
+        elif target == "item":
             iid = args.get("item_id")
             row = None
             if iid is not None:
@@ -599,6 +751,30 @@ async def t_attach_asset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
                 row = conn.execute("SELECT * FROM items WHERE id = ?", (cur.lastrowid,)).fetchone()
             entity = row_to_dict(row)
             entity["reference_image_path"] = path
+        else:
+            sid = args.get("scene_id")
+            if sid is None:
+                return {"ok": False, "error": "scene_id is required for target=scene — list_scenes, never add_scene"}
+            row = conn.execute(
+                "SELECT * FROM scenes WHERE id = ? AND project_id = ?",
+                (int(sid), project_id),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": f"Scene {sid} not found in this project"}
+            conn.execute(
+                "UPDATE scenes SET video_path = ? WHERE id = ?",
+                (path, int(sid)),
+            )
+            job_id = args.get("job_id")
+            if job_id is not None:
+                conn.execute(
+                    "UPDATE jobs SET scene_id = ? WHERE id = ? AND scene_id IS NULL",
+                    (int(sid), int(job_id)),
+                )
+            created = False
+            row = conn.execute("SELECT * FROM scenes WHERE id = ?", (int(sid),)).fetchone()
+            entity = row_to_dict(row)
+            entity["video_path"] = path
 
         conn.execute(
             "UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -642,6 +818,7 @@ def _sc_job_dict_lite(job: dict[str, Any]) -> dict[str, Any]:
         "kind": job["kind"],
         "status": job["status"],
         "scene_id": job.get("scene_id"),
+        "wired_to_scene": bool(job.get("scene_id")),
         "error": job.get("error"),
         "output_paths": paths or [],
     }

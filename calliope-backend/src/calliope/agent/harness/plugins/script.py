@@ -12,6 +12,58 @@ from calliope.agent.harness.registry import (
 from calliope.db import row_to_dict
 
 
+def annotate_scene_row(s: dict[str, Any]) -> dict[str, Any]:
+    """Label user-facing clip # vs database scene_id. #N on Video is order."""
+    oid = int(s["id"])
+    order = int(s.get("order_index") or 0)
+    s["scene_id"] = oid
+    s["order"] = order
+    s["clip"] = f"#{order}"
+    return s
+
+
+def resolve_scene_ref(
+    conn,
+    project_id: int,
+    *,
+    scene_id: Any = None,
+    order: Any = None,
+) -> tuple[int | None, str | None]:
+    """Resolve one scene. `order` is the Video page #N; `scene_id` is the DB id."""
+    if scene_id is not None and str(scene_id).strip() != "":
+        try:
+            sid = int(scene_id)
+        except (TypeError, ValueError):
+            return None, "scene_id must be an integer from list_scenes"
+        row = conn.execute(
+            "SELECT id FROM scenes WHERE id = ? AND project_id = ?",
+            (sid, project_id),
+        ).fetchone()
+        if not row:
+            return None, (
+                f"Scene {sid} not found in this project. "
+                "That number is not the #N on the Video page — list_scenes "
+                "and use scene_id or order."
+            )
+        return int(row["id"]), None
+    if order is not None and str(order).strip() != "":
+        try:
+            num = int(order)
+        except (TypeError, ValueError):
+            return None, "order must be the clip number from the Video page (#1, #25)"
+        row = conn.execute(
+            "SELECT id FROM scenes WHERE project_id = ? AND order_index = ?",
+            (project_id, num),
+        ).fetchone()
+        if not row:
+            return None, (
+                f"No clip #{num} in this project. "
+                "Users say #N for order (list_scenes.order / clip), not scene_id."
+            )
+        return int(row["id"]), None
+    return None, "Pass scene_id (database id) or order (Video page #N)"
+
+
 def register(registry: ToolRegistry) -> None:
     registry.register(
         ToolDefinition(
@@ -41,10 +93,26 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="list_scenes",
             description=(
-                "List the linked project's scenes in order with their real ids, "
-                "cast, and location — the source of truth for scene_id arguments."
+                "List or search scenes. EACH row has scene_id (database id) AND "
+                "order / clip (#N on the Video page). Users say '#25' or "
+                "'scene 25' meaning order=25 — NEVER treat that as scene_id. "
+                "Optional query (heading/action text) or orders (clip numbers) "
+                "to search without dumping the whole timeline."
             ),
-            parameters={"type": "object", "properties": {}},
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional heading/action search (user words)",
+                    },
+                    "orders": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Video page clip numbers (#1, #25) — not scene_id",
+                    },
+                },
+            },
             executor=t_list_scenes,
             category="script",
         )
@@ -53,15 +121,20 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="update_scene",
             description=(
-                "Update one existing scene. scene_id must come from list_scenes "
-                "or get_workspace — never guess it. Pass only the fields to change."
+                "Update one existing scene. Identify it with scene_id "
+                "(list_scenes.scene_id) OR order (Video page #N). Never guess. "
+                "Pass only the fields to change."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "scene_id": {
                         "type": "integer",
-                        "description": "Real id from list_scenes/get_workspace",
+                        "description": "Database id from list_scenes — not the #N on Video",
+                    },
+                    "order": {
+                        "type": "integer",
+                        "description": "Clip number from the Video page (#25 → 25)",
                     },
                     "heading": {"type": "string"},
                     "action": {"type": "string"},
@@ -74,7 +147,6 @@ def register(registry: ToolRegistry) -> None:
                         "description": "Replace the scene's character cast",
                     },
                 },
-                "required": ["scene_id"],
             },
             executor=t_update_scene,
             category="script",
@@ -115,14 +187,21 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="delete_scene",
             description=(
-                "Delete a scene permanently. scene_id must come from list_scenes. "
-                "Prefer update_scene for content changes; use this only when the "
-                "user wants the scene gone."
+                "Delete a scene permanently. Identify with scene_id or order "
+                "(Video page #N). Prefer update_scene for content changes."
             ),
             parameters={
                 "type": "object",
-                "properties": {"scene_id": {"type": "integer"}},
-                "required": ["scene_id"],
+                "properties": {
+                    "scene_id": {
+                        "type": "integer",
+                        "description": "Database id from list_scenes",
+                    },
+                    "order": {
+                        "type": "integer",
+                        "description": "Clip number from the Video page (#N)",
+                    },
+                },
             },
             executor=t_delete_scene,
             category="script",
@@ -170,7 +249,25 @@ async def t_list_scenes(ctx: ToolContext, args: dict[str, Any]) -> list[dict[str
         rows = conn.execute(
             "SELECT * FROM scenes WHERE project_id = ? ORDER BY order_index", (ctx.project_id,)
         ).fetchall()
-        scenes = [row_to_dict(r) for r in rows]
+        scenes = [annotate_scene_row(row_to_dict(r)) for r in rows]
+        raw_orders = args.get("orders") or []
+        if raw_orders:
+            want = set()
+            for x in raw_orders:
+                try:
+                    want.add(int(x))
+                except (TypeError, ValueError):
+                    continue
+            scenes = [s for s in scenes if int(s.get("order") or 0) in want]
+        query = str(args.get("query") or "").strip().lower()
+        if query:
+            scenes = [
+                s
+                for s in scenes
+                if query in (s.get("heading") or "").lower()
+                or query in (s.get("action") or "").lower()
+                or query in (s.get("dialog") or "").lower()
+            ]
         for s in scenes:
             chars = conn.execute(
                 """
@@ -189,7 +286,14 @@ async def t_list_scenes(ctx: ToolContext, args: dict[str, Any]) -> list[dict[str
 async def t_update_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     conn = _db()
     try:
-        scene_id = int(args["scene_id"])
+        scene_id, err = resolve_scene_ref(
+            conn,
+            ctx.project_id,
+            scene_id=args.get("scene_id"),
+            order=args.get("order"),
+        )
+        if err:
+            return {"ok": False, "error": err}
         existing = conn.execute(
             "SELECT * FROM scenes WHERE id = ? AND project_id = ?",
             (scene_id, ctx.project_id),
@@ -248,7 +352,7 @@ async def t_update_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
             "SELECT * FROM scenes WHERE id = ? AND project_id = ?",
             (scene_id, ctx.project_id),
         ).fetchone()
-        return {"scene": row_to_dict(row)}
+        return {"scene": annotate_scene_row(row_to_dict(row))}
     finally:
         conn.close()
 
@@ -319,7 +423,7 @@ async def t_add_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
                     )
                 conn.commit()
         row = conn.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
-        return {"scene": row_to_dict(row)}
+        return {"scene": annotate_scene_row(row_to_dict(row))}
     finally:
         conn.close()
 
@@ -327,7 +431,14 @@ async def t_add_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
 async def t_delete_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     conn = _db()
     try:
-        scene_id = int(args["scene_id"])
+        scene_id, err = resolve_scene_ref(
+            conn,
+            ctx.project_id,
+            scene_id=args.get("scene_id"),
+            order=args.get("order"),
+        )
+        if err:
+            return {"ok": False, "error": err}
         cur = conn.execute(
             "DELETE FROM scenes WHERE id = ? AND project_id = ?", (scene_id, ctx.project_id)
         )
@@ -356,6 +467,6 @@ async def t_reorder_scenes(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
             "SELECT id, order_index, heading FROM scenes WHERE project_id = ? ORDER BY order_index",
             (ctx.project_id,),
         ).fetchall()
-        return {"scenes": [row_to_dict(r) for r in rows]}
+        return {"scenes": [annotate_scene_row(row_to_dict(r)) for r in rows]}
     finally:
         conn.close()

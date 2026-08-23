@@ -37,9 +37,13 @@ def test_tool_registry_schemas_valid():
 
 
 def test_openai_payload_scoping():
-    """Blind sessions see only requires_project=False tools."""
-    blind = ToolContext(session_id=1, project_id=None)
-    linked = ToolContext(session_id=1, project_id=99)
+    """Blind sessions see only requires_project=False tools.
+
+    session_id is unused/high so a leftover local DB row cannot unlock
+    requires_approval tools (those stay hidden until the user asks to render).
+    """
+    blind = ToolContext(session_id=9_999_001, project_id=None)
+    linked = ToolContext(session_id=9_999_001, project_id=99)
 
     blind_names = {
         entry["function"]["name"] for entry in openai_tools_payload(blind)
@@ -52,7 +56,7 @@ def test_openai_payload_scoping():
     assert "list_projects" in blind_names
     assert "get_workspace" in blind_names
     assert "comfy_server_info" in blind_names
-    assert "run_workflow" in blind_names
+    assert "run_workflow" not in blind_names  # HITL: hidden until user asks
     assert "attach_asset" in blind_names
     # Blind must NOT see project-scoped tools
     assert "generate_story" not in blind_names
@@ -589,3 +593,92 @@ def test_linked_session_scoping(client):
     # Cross-project update rejected
     out = execute_tool_sync(ctx, "update_scene", {"scene_id": 1, "heading": "hack"})
     assert out["ok"] is False
+
+
+def _add_scene(client, pid: int, heading: str, order: int) -> int:
+    r = client.post(
+        f"/api/projects/{pid}/scenes",
+        json={"heading": heading, "order_index": order, "action": heading},
+    )
+    assert r.status_code == 200
+    return r.json()["id"]
+
+
+def test_list_scenes_search_and_order_labels(client):
+    """#N is order; scene_id is the DB id. Search by query or clip numbers."""
+    pid = _make_project(client)
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    a = _add_scene(client, pid, "EXT. GANGNAM NIGHT", 1)
+    b = _add_scene(client, pid, "INT. SAFEHOUSE", 2)
+    _add_scene(client, pid, "EXT. SKYLINE", 3)
+
+    all_rows = execute_tool_sync(ctx, "list_scenes", {})["result"]
+    assert [s["order"] for s in all_rows] == [1, 2, 3]
+    assert all_rows[0]["scene_id"] == a
+    assert all_rows[0]["clip"] == "#1"
+    assert all_rows[0]["id"] == a
+
+    by_order = execute_tool_sync(ctx, "list_scenes", {"orders": [2]})["result"]
+    assert [s["scene_id"] for s in by_order] == [b]
+    assert by_order[0]["clip"] == "#2"
+
+    found = execute_tool_sync(ctx, "list_scenes", {"query": "gangnam"})["result"]
+    assert [s["order"] for s in found] == [1]
+
+
+def test_update_scene_by_video_order(client):
+    pid = _make_project(client)
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    _add_scene(client, pid, "OLD HEADING", 1)
+    out = execute_tool_sync(ctx, "update_scene", {"order": 1, "heading": "NEW HEADING"})
+    assert out["ok"] is True
+    assert out["scene"]["heading"] == "NEW HEADING"
+    assert out["scene"]["order"] == 1
+    assert out["scene"]["clip"] == "#1"
+
+
+def test_enqueue_video_refuses_omit_and_bulk_dump(client):
+    """A 'yes' after a 2-clip offer must not enqueue the whole timeline."""
+    pid = _make_project(client)
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    ids = [_add_scene(client, pid, f"S{i}", i) for i in range(1, 6)]
+    session_log.append_event(sid, session_log.USER_MESSAGE, {"content": "yes"})
+
+    omitted = execute_tool_sync(ctx, "enqueue_video_jobs", {"workflow_id": 40})
+    assert omitted["ok"] is False
+    assert "orders" in omitted["error"] or "scene_ids" in omitted["error"]
+
+    dumped = execute_tool_sync(
+        ctx, "enqueue_video_jobs", {"workflow_id": 40, "scene_ids": ids}
+    )
+    assert dumped["ok"] is False
+    assert "bulk" in dumped["error"].lower()
+
+    all_flag = execute_tool_sync(
+        ctx, "enqueue_video_jobs", {"workflow_id": 40, "all_scenes": True}
+    )
+    assert all_flag["ok"] is False
+    assert "bulk" in all_flag["error"].lower()
+
+
+def test_workspace_digest_labels_order_and_id(client):
+    from calliope.agent.harness.prompts import workspace_digest
+
+    pid = _make_project(client)
+    scene_id = _add_scene(client, pid, "EXT. TEST", 1)
+    ctx = ToolContext(session_id=1, project_id=pid)
+    digest = workspace_digest(ctx)
+    assert f"#{scene_id}:" not in digest
+    assert f"#1 id={scene_id}:" in digest
+
+
+def test_bulk_video_policy_phrases():
+    from calliope.agent.harness.policy import allows_bulk_video_enqueue
+
+    assert allows_bulk_video_enqueue("yes", 2) is True
+    assert allows_bulk_video_enqueue("yes", 24) is False
+    assert allows_bulk_video_enqueue("generate all scenes", 24) is True
+    assert allows_bulk_video_enqueue("do every clip", 10) is True

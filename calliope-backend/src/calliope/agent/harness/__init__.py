@@ -9,9 +9,13 @@ individual plugins.
 from __future__ import annotations
 
 import logging
-import re
 
 from calliope.agent.harness.plugins import load_all as _load_plugins
+from calliope.agent.harness.policy import (
+    is_confirmation,
+    is_render_request,
+    user_allows_render,
+)
 from calliope.agent.harness.prompts import (
     SystemPromptService,
     register_builtin_sections,
@@ -27,38 +31,9 @@ from calliope.agent.harness.registry import (
 
 logger = logging.getLogger("calliope.harness")
 
-
-# Affirmation / destructive-intent cues used to recognise an explicit user
-# "yes" (or "replace it" / "start over" request) for the destructive guard.
-_CONFIRM_RE = re.compile(
-    r"\b(yes|yeah|yep|yup|sure|ok|okay|k|confirm(?:ed)?|proceed|"
-    r"go\s+ahead|do\s+it|please\s+do|overwrite|replace|regenerate|"
-    r"redo|re-?do|start\s+over|restart|delete|wipe|reset|from\s+scratch|"
-    r"go\s+for\s+it|fine|sounds\s+good|that'?s\s+fine)\b",
-    re.IGNORECASE,
-)
-_NEGATE_RE = re.compile(
-    r"\b(no|not|don'?t|do\s+not|cancel|stop|never|abort|skip|hold\s+on|wait)\b",
-    re.IGNORECASE,
-)
-
-# Image/video *generation* intent cues, used by the render-approval guard. We
-# deliberately avoid a bare "generate" (which would also match "generate the
-# story") — only unambiguous render words unlock generation.
-_RENDER_REQUEST_RE = re.compile(
-    r"\b(render\w*|image\w*|video\w*|portrait\w*|sheet\w*|artwork\w*|visual\w*|thumbnail\w*)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_confirmation(text: str) -> bool:
-    """A terse, non-negated message carrying an explicit affirmative cue."""
-    t = (text or "").strip()
-    if not t or len(t) > 200:
-        return False
-    if _NEGATE_RE.search(t):
-        return False
-    return bool(_CONFIRM_RE.search(t))
+# Re-exports for tests / older imports.
+_is_confirmation = is_confirmation
+_is_render_request = is_render_request
 
 
 def _user_confirmed_replacement(ctx: ToolContext) -> bool:
@@ -66,15 +41,7 @@ def _user_confirmed_replacement(ctx: ToolContext) -> bool:
     destructive replace (derived from the event log — no separate state)."""
     from calliope.agent.harness import log as session_log
 
-    return _is_confirmation(session_log.latest_user_message(ctx.session_id) or "")
-
-
-def _is_render_request(text: str) -> bool:
-    """True when the message explicitly asks for image/video generation."""
-    t = (text or "").strip()
-    if not t or _NEGATE_RE.search(t):
-        return False
-    return bool(_RENDER_REQUEST_RE.search(t))
+    return is_confirmation(session_log.latest_user_message(ctx.session_id) or "")
 
 
 def _render_approval_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> PreExecuteDecision:
@@ -90,10 +57,7 @@ def _render_approval_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> P
     """
     if not t.requires_approval:
         return allow()
-    from calliope.agent.harness import log as session_log
-
-    latest = session_log.latest_user_message(ctx.session_id) or ""
-    if _is_render_request(latest) or _is_confirmation(latest):
+    if user_allows_render(ctx):
         return allow()
     return deny(
         "Image/video generation is human-in-the-loop and needs explicit user approval. "

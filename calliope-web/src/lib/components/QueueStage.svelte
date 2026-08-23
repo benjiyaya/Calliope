@@ -13,6 +13,7 @@
 		type Workflow,
 	} from '$lib/api';
 	import { compactInputValues } from '$lib/comfy/promptInput';
+	import type { AssetOption } from '$lib/assetPicker';
 	import { progressFor } from '$lib/jobProgress';
 	import SafeMedia from './SafeMedia.svelte';
 	import VideoEditWorkspace from './video/VideoEditWorkspace.svelte';
@@ -82,9 +83,17 @@
 	const assetOptions = $derived.by(() => {
 		const chars = $assetsQuery.data?.characters ?? [];
 		const locs = $assetsQuery.data?.locations ?? [];
-		const opts: Array<{ label: string; path: string; kind?: 'image' | 'video' | 'audio' }> = [];
+		const items = $assetsQuery.data?.items ?? [];
+		const opts: AssetOption[] = [];
 		for (const c of chars) {
-			if (c.sheet_path) opts.push({ label: `${c.name} · sheet`, path: c.sheet_path, kind: 'image' });
+			if (c.sheet_path) {
+				opts.push({
+					label: `${c.name} · sheet`,
+					path: c.sheet_path,
+					kind: 'image',
+					group: 'character',
+				});
+			}
 		}
 		for (const loc of locs) {
 			if (loc.reference_image_path) {
@@ -92,6 +101,17 @@
 					label: `${loc.name} · environment`,
 					path: loc.reference_image_path,
 					kind: 'image',
+					group: 'location',
+				});
+			}
+		}
+		for (const it of items) {
+			if (it.reference_image_path) {
+				opts.push({
+					label: `${it.name} · item`,
+					path: it.reference_image_path,
+					kind: 'image',
+					group: 'item',
 				});
 			}
 		}
@@ -101,11 +121,12 @@
 					label: `Clip #${sc.order_index} · ${sc.heading || 'scene'}`,
 					path: sc.video_path,
 					kind: 'video',
+					group: 'clip',
 				});
 			}
 		}
 		for (const up of $uploadsQuery.data ?? []) {
-			opts.push({ label: `${up.name} · upload`, path: up.path, kind: up.kind });
+			opts.push({ label: `${up.name} · upload`, path: up.path, kind: up.kind, group: 'upload' });
 		}
 		return opts;
 	});
@@ -190,6 +211,8 @@
 	// One POST per scene (the H3 prompt rewrite runs synchronously inside each
 	// request, so a single all-scenes POST could take minutes and time out).
 	// The queue worker then renders them strictly in sequence (concurrency 1).
+	// Do not send continue_motion here: omit it so the backend can treat a
+	// just-queued previous scene as "ready" and pick First/Next correctly.
 	let batching = $state(false);
 	let batchNote = $state('');
 

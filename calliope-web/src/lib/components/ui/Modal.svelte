@@ -5,6 +5,7 @@
 	interface Props {
 		open?: boolean;
 		title?: string;
+		size?: 'md' | 'lg';
 		dismissible?: boolean;
 		onclose?: () => void;
 		footer?: Snippet;
@@ -14,6 +15,7 @@
 	let {
 		open = $bindable(false),
 		title,
+		size = 'md',
 		dismissible = true,
 		onclose,
 		footer,
@@ -96,7 +98,7 @@
 	<div class="modal-backdrop" onclick={handleBackdropClick}>
 		<div
 			bind:this={panel}
-			class="modal-panel"
+			class="modal-panel size-{size}"
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={title ? titleId : undefined}
@@ -157,6 +159,9 @@
 		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 		outline: none;
 		animation: modal-rise 180ms ease-out;
+	}
+	.modal-panel.size-lg {
+		width: min(920px, 100%);
 	}
 	.modal-header {
 		display: flex;

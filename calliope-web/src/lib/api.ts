@@ -275,7 +275,7 @@ export const jobsApi = {
 		api<{ ok: boolean; job: Job }>(`/api/jobs/projects/${projectId}/export`, { method: 'POST' }),
 };
 
-export type PlaygroundAttachTarget = 'character_sheet' | 'location' | 'scene';
+export type PlaygroundAttachTarget = 'character_sheet' | 'location' | 'item' | 'scene';
 
 export type UploadKind = 'image' | 'video' | 'audio';
 
@@ -319,9 +319,11 @@ export const playgroundApi = {
 		target: PlaygroundAttachTarget;
 		character_id?: number;
 		location_id?: number;
+		item_id?: number;
 		scene_id?: number;
+		name?: string;
 	}) =>
-		api<{ ok: boolean; path: string; target: string; project_id: number }>(
+		api<{ ok: boolean; path: string; target: string; project_id: number; item_id?: number }>(
 			'/api/playground/attach',
 			{ method: 'POST', body: JSON.stringify(payload) },
 		),

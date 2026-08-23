@@ -21,6 +21,7 @@
 <div class="meta-wrap">
 	<div class="row">
 		<span class="num mono">#{scene.order_index}</span>
+		<span class="sid mono">id {scene.id}</span>
 		<span class="heading" title={scene.heading || 'Untitled scene'}>
 			{scene.heading || 'Untitled scene'}
 		</span>
@@ -95,6 +96,13 @@
 		font-size: 12px;
 		font-weight: 700;
 		color: var(--accent);
+		flex-shrink: 0;
+	}
+
+	.sid {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
 		flex-shrink: 0;
 	}
 

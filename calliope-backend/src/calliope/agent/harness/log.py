@@ -146,7 +146,11 @@ def latest_user_message(session_id: int) -> str | None:
         except (json.JSONDecodeError, TypeError):
             return None
         content = data.get("content")
-        return content.strip() if isinstance(content, str) else None
+        if not isinstance(content, str):
+            return None
+        # Never treat the machine appendix as user intent (kind=image, etc.).
+        prose = content.split("[Calliope context]", 1)[0].strip()
+        return prose or None
     finally:
         conn.close()
 

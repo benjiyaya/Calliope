@@ -40,6 +40,9 @@ AGENTS.md
 start.bat
 end.bat
 ScreenShots/
-docs/
+docs/*
+!docs/changelogs/
+!docs/changelogs/**
 prototype/
 2026-*.md
+!docs/changelogs/*.md

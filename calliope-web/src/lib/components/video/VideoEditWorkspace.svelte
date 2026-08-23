@@ -6,17 +6,12 @@
 	 */
 	import type { Scene, Workflow } from '$lib/api';
 	import OmniComposer from '$lib/components/OmniComposer.svelte';
+	import type { AssetOption } from '$lib/assetPicker';
 	import ClipMonitor from './ClipMonitor.svelte';
 	import SceneFilmstrip from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
 
 	type Thumb = { kind: 'image' | 'video'; src: string } | null;
-
-	interface AssetOption {
-		label: string;
-		path: string;
-		kind?: 'image' | 'video' | 'audio';
-	}
 
 	interface Progress {
 		progress?: number;
@@ -89,6 +84,7 @@
 			{status}
 			heading={selected.heading || 'Untitled'}
 			orderIndex={selected.order_index}
+			sceneId={selected.id}
 			{progress}
 			{error}
 			{errorLong}

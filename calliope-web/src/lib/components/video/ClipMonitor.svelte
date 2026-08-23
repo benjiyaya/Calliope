@@ -20,6 +20,7 @@
 		status: string;
 		heading: string;
 		orderIndex: number;
+		sceneId?: number;
 		progress?: Progress | null;
 		error?: string;
 		errorLong?: boolean;
@@ -30,6 +31,7 @@
 		status,
 		heading,
 		orderIndex,
+		sceneId,
 		progress = null,
 		error = '',
 		errorLong = false,
@@ -52,6 +54,9 @@
 		{:else}
 			<div class="empty">
 				<span class="slate">#{orderIndex}</span>
+				{#if sceneId != null}
+					<p class="sid">scene_id {sceneId}</p>
+				{/if}
 				<p class="title">{heading || 'Untitled'}</p>
 				{#if status === 'pending' || status === 'running'}
 					<div class="busy" aria-busy="true">
@@ -84,6 +89,12 @@
 		{/if}
 	</div>
 
+	<div class="ids">
+		<span>#{orderIndex}</span>
+		{#if sceneId != null}
+			<span class="ids-db">id {sceneId}</span>
+		{/if}
+	</div>
 	{#if previewUrl}
 		<div class="foot">
 			<a class="dl" href={previewUrl} download>
@@ -141,6 +152,15 @@
 		font-weight: 700;
 		color: var(--accent);
 		margin-bottom: 6px;
+	}
+
+	.sid {
+		margin: 0 0 8px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		color: var(--text-muted);
 	}
 
 	.title {
@@ -202,6 +222,23 @@
 		overflow: visible;
 		max-height: 160px;
 		overflow-y: auto;
+	}
+
+	.ids {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 6px 2px 0;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		font-weight: 700;
+		color: var(--accent);
+		flex-shrink: 0;
+	}
+
+	.ids-db {
+		font-weight: 600;
+		color: var(--text-muted);
 	}
 
 	.foot {
