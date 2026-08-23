@@ -3,14 +3,12 @@
 Calliope is a local-first story-to-video studio. You type a story idea; Calliope drafts a storyline with beats, characters, and locations, writes a per-scene script, then generates a video clip per scene by driving your own ComfyUI install. When the clips are done, one click stitches them into a finished film with crossfades and matched loudness (ffmpeg). Everything runs on your machine: projects live in SQLite, media lives in folders, and no cloud service is involved beyond the LLM endpoint you point it at.
 
 
-<img width="1672" height="1015" alt="Screenshot 2026-08-21 033244" src="https://github.com/user-attachments/assets/79361eac-b5fa-4324-990e-85b3f378cc59" />
+<img width="1672" height="1015" alt="Screenshot 2026-08-21 033244" src="https://github.com/user-attachments/assets/57bc3d05-f33e-415c-9ce9-e7d796e3bcdd" />
 
-<img width="1920" height="1080" alt="videoframe_35607" src="https://github.com/user-attachments/assets/8060c7c2-ab2e-46c9-b892-0dba883decc4" />
+<img width="1508" height="1131" alt="Screenshot 2026-08-23 192042" src="https://github.com/user-attachments/assets/61cb10fb-a8a2-4096-beff-e504a8f7c8df" />
 
+<img width="1847" height="1177" alt="Screenshot 2026-08-23 231317" src="https://github.com/user-attachments/assets/4c1ccac3-39f0-4704-a129-6fc5b5039415" />
 
-<img width="1697" height="1047" alt="Screenshot 2026-07-28 052242" src="https://github.com/user-attachments/assets/f64a6ec5-3353-4e51-b2ff-15cd09cb0b93" />
-
-<img width="1916" height="1077" alt="Screenshot 2026-08-19 040824" src="https://github.com/user-attachments/assets/7178113b-da7d-43fc-a5fa-c352de759c01" />
 
 
 ## Install — Windows EXE (recommended)
