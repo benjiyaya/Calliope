@@ -167,10 +167,15 @@
 		composerNonce = 0;
 	}
 
+	function seedEmptySession(s: AgentSession) {
+		client.setQueryData(['agent-session', s.id], { ...s, messages: [], plan: null });
+	}
+
 	async function newSandbox() {
 		resetComposer();
 		try {
 			const s = await agentApi.createSession({});
+			seedEmptySession(s);
 			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
 			activeId = s.id;
 		} catch (err) {
@@ -182,6 +187,7 @@
 		resetComposer();
 		try {
 			const s = await agentApi.createSession({ project_id: projectId });
+			seedEmptySession(s);
 			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
 			activeId = s.id;
 			toast.success('Linked chat created');
@@ -518,7 +524,7 @@
 				{jobs}
 				{running}
 				loading={activeId != null && $sessionQuery.isLoading}
-				suggestions={activeSession ? [] : SUGGESTIONS}
+				suggestions={SUGGESTIONS}
 				onSuggestion={setComposerDraft}
 			/>
 
