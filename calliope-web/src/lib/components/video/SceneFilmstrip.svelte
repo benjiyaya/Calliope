@@ -15,6 +15,7 @@
 		statusOf: (scene: Scene) => string;
 		thumbFor: (scene: Scene) => Thumb;
 		formatClock: (sec: number) => string;
+		chained?: (scene: Scene) => boolean;
 		onSelect: (id: number) => void;
 		onStep: (dir: -1 | 1) => void;
 	}
@@ -25,6 +26,7 @@
 		statusOf,
 		thumbFor,
 		formatClock,
+		chained = () => false,
 		onSelect,
 		onStep,
 	}: Props = $props();
@@ -69,6 +71,7 @@
 				aria-selected={selectedId === scene.id}
 				class="clip status-{st}"
 				class:selected={selectedId === scene.id}
+				class:chained={chained(scene)}
 				onclick={() => onSelect(scene.id)}
 				title={`${scene.heading || 'Scene'} · ${formatClock(scene.duration_sec || 5)}`}
 			>
@@ -148,6 +151,18 @@
 	.clip.selected {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 1px var(--accent);
+	}
+
+	.clip.chained::before {
+		content: '';
+		position: absolute;
+		left: -6px;
+		top: 50%;
+		width: 6px;
+		height: 2px;
+		background: var(--accent);
+		transform: translateY(-50%);
+		z-index: 2;
 	}
 
 	.clip:focus-visible {

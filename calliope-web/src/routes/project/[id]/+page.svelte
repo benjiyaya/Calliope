@@ -3,7 +3,7 @@
 	import { toStore } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import NavRail from '$lib/components/NavRail.svelte';
 	import StoryStage from '$lib/components/StoryStage.svelte';
 	import AssetsStage from '$lib/components/AssetsStage.svelte';
@@ -50,8 +50,6 @@
 	let activityCollapsed = $state(false);
 	let logs = $state<CalliopeEvent[]>([]);
 	let connState = $state<EventConnectionState>('connecting');
-	// Latest agent.thinking message — fed to the stage overlays as a live status line.
-	let agentStatus = $state<string | null>(null);
 
 	// URL → state: deep links, browser Back/Forward
 	$effect(() => {
@@ -99,29 +97,10 @@
 		})),
 	);
 
-	const generateStoryMutation = createMutation({
-		mutationFn: () => projects.generateStory(projectId),
-		onMutate: () => {
-			// Drop the previous run's status so the overlay starts clean.
-			agentStatus = null;
-		},
-		onSuccess: async () => {
-			await client.invalidateQueries({ queryKey: ['story'] });
-			await client.invalidateQueries({ queryKey: ['assets'] });
-		},
-	});
-
 	const isConfigured = $derived(
 		Boolean($settingsQuery.data?.llm_base_url && $settingsQuery.data?.llm_model),
 	);
 	const projectTitle = $derived($storyQuery.data?.project?.title ?? 'Project');
-	const generateError = $derived(
-		$generateStoryMutation.isError
-			? $generateStoryMutation.error instanceof Error
-				? $generateStoryMutation.error.message
-				: String($generateStoryMutation.error)
-			: '',
-	);
 
 	const runningCount = $derived(
 		($jobsQuery.data ?? []).filter((j) => j.status === 'running').length,
@@ -139,11 +118,6 @@
 				// Don't keep Comfy poll ticks in the Activity log
 				if (ev.type !== 'job.progress') {
 					logs = [...logs, ev].slice(-120);
-				}
-				if (ev.type === 'agent.thinking') {
-					const msg = ev.data?.message;
-					const text = typeof msg === 'string' ? msg.trim() : '';
-					agentStatus = text || null;
 				}
 				if (
 					ev.type.startsWith('job.') ||
@@ -175,7 +149,7 @@
 					<Icon name="folder" size={28} />
 				{/snippet}
 				{#snippet action()}
-					<Button variant="primary" onclick={() => goto('/')}>Back to projects</Button>
+					<Button variant="primary" onclick={() => goto('/projects')}>Back to projects</Button>
 				{/snippet}
 			</EmptyState>
 		</div>
@@ -218,18 +192,14 @@
 						<StoryStage
 							{projectId}
 							story={$storyQuery.data}
-							generating={$generateStoryMutation.isPending}
 							configured={isConfigured}
-							error={generateError}
-							onGenerate={() => $generateStoryMutation.mutateAsync()}
 							onGoAssets={() => selectStage('assets')}
-							{agentStatus}
 						/>
 					{/if}
 				{:else if activeTab === 'assets'}
 					<AssetsStage {projectId} />
 				{:else if activeTab === 'script'}
-					<ScriptStage {projectId} {agentStatus} />
+					<ScriptStage {projectId} />
 				{:else if activeTab === 'video'}
 					<QueueStage {projectId} {projectTitle} />
 				{/if}

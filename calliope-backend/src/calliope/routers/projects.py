@@ -103,12 +103,35 @@ async def update_project(project_id: int, payload: ProjectUpdate):
 
 @router.delete("/{project_id}")
 async def delete_project(project_id: int):
+    from calliope.agent.harness.runner import runner
+
     conn = get_db(settings.db_path)
     try:
-        cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        conn.commit()
-        if cur.rowcount == 0:
+        row = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if row is None:
             raise HTTPException(status_code=404, detail="Project not found")
+        # An agent mid-run would keep firing tools against a dead project id;
+        # the FK then silently unlinks its session. Refuse while any linked
+        # session is running (same contract as session deletion). Must run
+        # BEFORE the DELETE: ON DELETE SET NULL would otherwise clear the
+        # links mid-transaction and hide the running sessions.
+        running = [
+            sid
+            for (sid,) in conn.execute(
+                "SELECT id FROM agent_sessions WHERE project_id = ?", (project_id,)
+            ).fetchall()
+            if runner.is_running(sid)
+        ]
+        if running:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Project has running agent session(s) "
+                    f"({', '.join(map(str, running))}). Cancel or wait for them first."
+                ),
+            )
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
         return {"ok": True}
     finally:
         conn.close()

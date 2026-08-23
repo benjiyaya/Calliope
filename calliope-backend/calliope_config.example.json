@@ -10,6 +10,7 @@
   "comfyui_base_url": "http://127.0.0.1:8188",
   "queue_concurrency": 1,
   "queue_poll_interval_sec": 2.0,
+  "queue_poll_timeout_sec": 1800,
   "queue_max_retries": 4,
   "dry_run": false
 }

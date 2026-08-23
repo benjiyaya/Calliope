@@ -14,6 +14,7 @@
 	interface AssetOption {
 		label: string;
 		path: string;
+		kind?: 'image' | 'video' | 'audio';
 	}
 
 	interface Props {
@@ -47,12 +48,10 @@
 	let menuEl = $state<HTMLElement | null>(null);
 	let menuPos = $state({ top: 0, left: 0, maxHeight: 280, minWidth: 200 });
 
-	const hasAssets = $derived(assetOptions.length > 0);
-
 	function openPicker(e: MouseEvent) {
 		e.stopPropagation();
 		if (uploadingName) return;
-		if (hasAssets) {
+		if (matchingAssets.length) {
 			showAssetMenu = !showAssetMenu;
 		} else if (allowUpload) {
 			fileInput?.click();
@@ -81,9 +80,12 @@
 
 	const thumbSrc = $derived(value ? assetUrl(value) : null);
 
-	const isImageKind = $derived(
-		input.kind === 'image' || input.kind === 'image_url' || input.kind === 'audio',
+	const isImageKind = $derived(input.kind === 'image' || input.kind === 'image_url');
+	const isVideoKind = $derived(input.kind === 'video');
+	const matchingAssets = $derived(
+		assetOptions.filter((o) => !o.kind || o.kind === input.kind || (isImageKind && o.kind === 'image')),
 	);
+	const hasAssets = $derived(matchingAssets.length > 0);
 
 	function placeMenu() {
 		if (!tileEl || !menuEl) return;
@@ -155,16 +157,14 @@
 			? 'Character'
 			: input.role === 'location'
 				? 'Location'
-				: input.label,
+				: input.role === 'video'
+					? 'Video'
+					: input.role === 'audio'
+						? 'Audio'
+						: input.label,
 	);
 
-	const accept = $derived(
-		input.kind === 'audio'
-			? 'audio/*'
-			: input.kind === 'image' || input.kind === 'image_url'
-				? 'image/*'
-				: 'image/*,video/*,audio/*',
-	);
+	const accept = $derived(acceptForKind(input.kind));
 </script>
 
 <div class="tile-wrap" bind:this={tileEl}>
@@ -194,8 +194,8 @@
 		role="button"
 		tabindex="0"
 		title={displayLabel}
-		aria-haspopup={hasAssets ? 'menu' : undefined}
-		aria-expanded={hasAssets ? showAssetMenu : undefined}
+		aria-haspopup={matchingAssets.length ? 'menu' : undefined}
+		aria-expanded={matchingAssets.length ? showAssetMenu : undefined}
 	>
 		{#if uploadingName}
 			<div class="tile-uploading">
@@ -203,9 +203,12 @@
 			</div>
 		{:else if value && thumbSrc && isImageKind}
 			<img class="tile-thumb" src={thumbSrc} alt={displayLabel} onerror={hideBrokenThumb} />
+		{:else if value && isVideoKind && thumbSrc}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video class="tile-thumb" src={thumbSrc} muted playsinline></video>
 		{:else if value}
 			<div class="tile-file">
-				<Icon name={input.kind === 'audio' ? 'music' : 'image'} size={20} />
+				<Icon name={input.kind === 'audio' ? 'music' : isVideoKind ? 'film' : 'image'} size={20} />
 			</div>
 		{:else}
 			<div class="tile-empty">
@@ -242,7 +245,7 @@
 		style="top: {menuPos.top}px; left: {menuPos.left}px; max-height: {menuPos.maxHeight}px; min-width: {menuPos.minWidth}px"
 		role="menu"
 	>
-		{#each assetOptions as opt (opt.path)}
+		{#each matchingAssets as opt (opt.path)}
 			<button
 				type="button"
 				class="asset-item"

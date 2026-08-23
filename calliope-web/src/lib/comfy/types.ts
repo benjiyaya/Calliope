@@ -1,4 +1,4 @@
-export type ComfyInputKind = 'text' | 'textarea' | 'number' | 'image' | 'image_url' | 'audio';
+export type ComfyInputKind = 'text' | 'textarea' | 'number' | 'image' | 'image_url' | 'audio' | 'video';
 export type ComfyOutputKind = 'image' | 'video' | 'other';
 
 export interface ComfyDynamicInput {
@@ -35,6 +35,8 @@ export interface Workflow {
 	description: string | null;
 	prompt_profile: string;
 	is_enabled: boolean;
+	/** H3 Motion Context pair: FirstMotion vs NextMotion. */
+	motion_role?: 'first' | 'next' | null;
 }
 
 export interface Job {

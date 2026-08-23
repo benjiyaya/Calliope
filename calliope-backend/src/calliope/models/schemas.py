@@ -103,6 +103,19 @@ class LocationUpdate(BaseModel):
     reference_image_path: str | None = None
 
 
+class ItemCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str | None = None
+    consistency_prompt: str | None = None
+
+
+class ItemUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    consistency_prompt: str | None = None
+    reference_image_path: str | None = None
+
+
 class SceneCreate(BaseModel):
     order_index: int = 0
     heading: str | None = None
@@ -166,6 +179,7 @@ class JobCreate(BaseModel):
 class GenerateAssetsRequest(BaseModel):
     character_ids: list[int] | None = None
     location_ids: list[int] | None = None
+    item_ids: list[int] | None = None
     missing_only: bool = True
     workflow_id: int | None = None
     input_values: dict[str, Any] | None = None
@@ -186,3 +200,4 @@ class GenerateVideosRequest(BaseModel):
     scene_ids: list[int] | None = None
     workflow_id: int | None = None
     input_values: dict[str, Any] | None = None
+    continue_motion: bool | None = None

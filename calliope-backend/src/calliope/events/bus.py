@@ -13,11 +13,21 @@ class EventBus:
         self._lock = asyncio.Lock()
         self.recent: list[dict[str, Any]] = []
 
-    async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
-        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+    async def subscribe(
+        self, backlog: int = 0
+    ) -> asyncio.Queue[dict[str, Any]] | tuple[asyncio.Queue[dict[str, Any]], list[dict[str, Any]]]:
+        """Subscribe to future events.
+
+        With `backlog > 0`, returns (queue, snapshot) taken atomically under
+        the publish lock — no event can appear in both the snapshot and the
+        queue (which would deliver it twice), and none is lost in between.
+        """
         async with self._lock:
+            q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
             self._subscribers.append(q)
-        return q
+            if backlog > 0:
+                return q, list(self.recent[-backlog:])
+            return q
 
     async def unsubscribe(self, q: asyncio.Queue[dict[str, Any]]) -> None:
         async with self._lock:
@@ -30,10 +40,12 @@ class EventBus:
             "data": data or {},
             "ts": datetime.now(timezone.utc).isoformat(),
         }
-        self.recent.append(event)
-        if len(self.recent) > 200:
-            self.recent = self.recent[-200:]
+        # recent-append and queue delivery share the lock with subscribe()
+        # so backlog snapshots are consistent (no duplicate/lost events).
         async with self._lock:
+            self.recent.append(event)
+            if len(self.recent) > 200:
+                self.recent = self.recent[-200:]
             dead: list[asyncio.Queue[dict[str, Any]]] = []
             for q in self._subscribers:
                 try:

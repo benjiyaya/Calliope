@@ -2,7 +2,16 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toStore } from 'svelte/store';
 	import { toast } from '$lib/toast';
-	import { assetUrl, jobsApi, projects, workflows, type Job, type Scene, type Workflow } from '$lib/api';
+	import {
+		assetUrl,
+		jobsApi,
+		playgroundApi,
+		projects,
+		workflows,
+		type Job,
+		type Scene,
+		type Workflow,
+	} from '$lib/api';
 	import { compactInputValues } from '$lib/comfy/promptInput';
 	import { progressFor } from '$lib/jobProgress';
 	import SafeMedia from './SafeMedia.svelte';
@@ -58,6 +67,12 @@
 		queryFn: jobsApi.queueStatus,
 		refetchInterval: 5000,
 	});
+	const uploadsQuery = createQuery({
+		queryKey: ['playground-uploads'],
+		queryFn: playgroundApi.listUploads,
+	});
+
+	let continueByScene = $state<Record<number, boolean>>({});
 
 	const scenes = $derived(($scenesQuery.data?.scenes ?? []) as Scene[]);
 	const totalSec = $derived(
@@ -67,14 +82,30 @@
 	const assetOptions = $derived.by(() => {
 		const chars = $assetsQuery.data?.characters ?? [];
 		const locs = $assetsQuery.data?.locations ?? [];
-		const opts: Array<{ label: string; path: string }> = [];
+		const opts: Array<{ label: string; path: string; kind?: 'image' | 'video' | 'audio' }> = [];
 		for (const c of chars) {
-			if (c.sheet_path) opts.push({ label: `${c.name} Â· sheet`, path: c.sheet_path });
+			if (c.sheet_path) opts.push({ label: `${c.name} · sheet`, path: c.sheet_path, kind: 'image' });
 		}
 		for (const loc of locs) {
 			if (loc.reference_image_path) {
-				opts.push({ label: `${loc.name} Â· environment`, path: loc.reference_image_path });
+				opts.push({
+					label: `${loc.name} · environment`,
+					path: loc.reference_image_path,
+					kind: 'image',
+				});
 			}
+		}
+		for (const sc of scenes) {
+			if (sc.video_path) {
+				opts.push({
+					label: `Clip #${sc.order_index} · ${sc.heading || 'scene'}`,
+					path: sc.video_path,
+					kind: 'video',
+				});
+			}
+		}
+		for (const up of $uploadsQuery.data ?? []) {
+			opts.push({ label: `${up.name} · upload`, path: up.path, kind: up.kind });
 		}
 		return opts;
 	});
@@ -86,6 +117,10 @@
 		videoWorkflows.length > 0
 			? videoWorkflows
 			: (($workflowsQuery.data ?? []) as Workflow[]).filter((w) => w.is_enabled),
+	);
+	const motionPairReady = $derived(
+		enabledWorkflows.some((w) => w.motion_role === 'first') &&
+			enabledWorkflows.some((w) => w.motion_role === 'next'),
 	);
 
 	$effect(() => {
@@ -119,13 +154,28 @@
 		return seed;
 	}
 
+	function previousScene(scene: Scene | null): Scene | null {
+		if (!scene) return null;
+		const earlier = scenes.filter((s) => s.order_index < scene.order_index);
+		return earlier.length ? earlier[earlier.length - 1] : null;
+	}
+
+	function continueMotionFor(scene: Scene): boolean {
+		const prev = previousScene(scene);
+		if (!prev) return false;
+		if (continueByScene[scene.id] !== undefined) return continueByScene[scene.id];
+		return Boolean(prev.video_path);
+	}
+
 	const generateOne = createMutation({
 		mutationFn: (sceneId: number) => {
-			const wf = selected ? workflowFor(selected) : undefined;
+			const scene = scenes.find((s) => s.id === sceneId);
+			const wf = scene ? workflowFor(scene) : undefined;
 			return jobsApi.generateVideos(projectId, {
 				scene_ids: [sceneId],
 				workflow_id: selectedWorkflow[sceneId] ?? wf?.id,
 				input_values: compactInputValues(formValues),
+				continue_motion: scene ? continueMotionFor(scene) : false,
 			});
 		},
 		onSuccess: async () => {
@@ -410,10 +460,17 @@
 			workflows={enabledWorkflows}
 			bind:formValues
 			{assetOptions}
+			allowUpload
 			submitting={$generateOne.isPending}
 			{statusOf}
 			{thumbFor}
 			{formatClock}
+			showContinueMotion={motionPairReady && previousScene(selected) != null}
+			continueMotion={continueMotionFor(selected)}
+			chained={continueMotionFor}
+			onContinueChange={(on) => {
+				continueByScene = { ...continueByScene, [selected.id]: on };
+			}}
 			onSelect={selectScene}
 			onStep={step}
 			onWorkflowChange={(id) => {

@@ -5,6 +5,7 @@
 		projects,
 		type Beat,
 		type Character,
+		type Item,
 		type Location,
 		type StoryData,
 	} from '$lib/api';
@@ -15,6 +16,7 @@
 		recommendSceneCount,
 	} from '$lib/durationBudget';
 	import { toast } from '$lib/toast';
+	import { agentDeepLink } from '$lib/agentTasks';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
@@ -23,34 +25,16 @@
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
-	import GeneratingOverlay from '$lib/components/GeneratingOverlay.svelte';
 
 	interface Props {
 		projectId: number;
 		story: StoryData;
-		generating?: boolean;
-		onGenerate: () => Promise<unknown>;
 		configured: boolean;
-		error?: string;
 		onGoAssets?: () => void;
-		/** Latest agent.thinking message from the project SSE stream. */
-		agentStatus?: string | null;
 	}
 
-	let {
-		projectId,
-		story,
-		generating = false,
-		onGenerate,
-		configured,
-		error = '',
-		agentStatus = null,
-	}: Props = $props();
+	let { projectId, story, configured, onGoAssets }: Props = $props();
 	const client = useQueryClient();
-	let localBusy = $state(false);
-	let localError = $state('');
-	const busy = $derived(generating || localBusy);
-	const shownError = $derived(localError || error);
 
 	const GENRES = [
 		'Adventure / Mystery',
@@ -80,11 +64,12 @@
 	let editingBeat = $state<Beat | null>(null);
 	let editingChar = $state<Character | null>(null);
 	let editingLoc = $state<Location | null>(null);
+	let editingItem = $state<Item | null>(null);
 	let beatModalOpen = $state(false);
 	let charModalOpen = $state(false);
 	let locModalOpen = $state(false);
+	let itemModalOpen = $state(false);
 	let confirmExampleOpen = $state(false);
-	let confirmDraftOpen = $state(false);
 	let deletingBeat = $state<Beat | null>(null);
 	let beatDeleteOpen = $state(false);
 	let addingBeat = $state(false);
@@ -182,29 +167,12 @@
 		else void loadExample();
 	}
 
+	/** Hand off to a fresh, project-linked agent chat with the composer pre-filled. */
 	async function draftStoryline() {
-		if (busy || !configured) return;
-		localError = '';
-		localBusy = true;
-		try {
-			const saved = await persistSettings();
-			if (!saved) {
-				localError = 'Story settings could not be saved — fix that before drafting.';
-				return;
-			}
-			await onGenerate();
-			await client.invalidateQueries({ queryKey: ['story'] });
-		} catch (err) {
-			localError = err instanceof Error ? err.message : String(err);
-		} finally {
-			localBusy = false;
-		}
-	}
-
-	function requestDraft() {
-		if (busy || !configured) return;
-		if (story.beats.length > 0) confirmDraftOpen = true;
-		else void draftStoryline();
+		if (!configured) return;
+		const saved = await persistSettings();
+		if (!saved) return; // persistSettings already toasted the failure
+		goto(agentDeepLink(projectId, 'story'));
 	}
 
 	function openBeat(beat: Beat) {
@@ -316,6 +284,24 @@
 		},
 	});
 
+	const saveItem = createMutation({
+		mutationFn: () =>
+			projects.updateItem(projectId, editingItem!.id, {
+				name: editingItem!.name,
+				description: editingItem!.description,
+				consistency_prompt: editingItem!.consistency_prompt,
+			}),
+		onSuccess: () => {
+			editingItem = null;
+			itemModalOpen = false;
+			client.invalidateQueries({ queryKey: ['story'] });
+			toast.success('Item saved');
+		},
+		onError: (err) => {
+			toast.error(err instanceof Error ? err.message : 'Could not save item');
+		},
+	});
+
 	function goToAssets() {
 		goto('?stage=assets', { keepFocus: true, noScroll: true });
 	}
@@ -343,17 +329,13 @@
 	<div class="stage-actions">
 		<Button
 			variant="secondary"
-			disabled={busy || $saveProject.isPending}
+			disabled={$saveProject.isPending}
 			onclick={requestLoadExample}
 		>
 			Load Example
 		</Button>
-		<Button variant="primary" disabled={busy || !configured} onclick={requestDraft}>
-			{#if busy}
-				Drafting… (LLM can take ~30s)
-			{:else}
-				<Icon name="sparkle" size={15} /> Draft Storyline
-			{/if}
+		<Button variant="primary" disabled={!configured} onclick={() => void draftStoryline()}>
+			<Icon name="sparkle" size={15} /> Draft Storyline
 		</Button>
 	</div>
 </header>
@@ -362,18 +344,7 @@
 	<div class="banner">Configure an LLM in Settings before drafting a storyline.</div>
 {/if}
 
-{#if shownError}
-	<div class="banner error">{shownError}</div>
-{/if}
-
-<div class="stack-col" aria-busy={busy}>
-	{#if busy}
-		<GeneratingOverlay
-			title="Agent is writing your story"
-			status={agentStatus}
-			hint="This can take ~30 seconds. The draft keeps running server-side — you can switch stages or tabs while it works."
-		/>
-	{/if}
+<div class="stack-col">
 	<Card>
 	{#snippet header()}
 		<h3 class="card-h">Story Idea</h3>
@@ -523,7 +494,7 @@
 	{/if}
 </Card>
 
-{#if story.characters.length || story.locations.length}
+{#if story.characters.length || story.locations.length || story.items.length}
 	<Card>
 		{#snippet header()}
 			<h3 class="card-h">Extracted</h3>
@@ -558,6 +529,20 @@
 				>
 					<span class="chip-tag">Env</span>
 					{loc.name}
+				</button>
+			{/each}
+			{#each story.items as item (item.id)}
+				<button
+					type="button"
+					class="chip"
+					onclick={() => {
+						editingItem = { ...item };
+						itemModalOpen = true;
+					}}
+					title={item.description ?? ''}
+				>
+					<span class="chip-tag">Item</span>
+					{item.name}
 				</button>
 			{/each}
 		</div>
@@ -667,21 +652,45 @@
 	{/snippet}
 </Modal>
 
+<Modal bind:open={itemModalOpen} title="Edit Item" onclose={() => (editingItem = null)}>
+	{#if editingItem}
+		<label class="field">
+			<span class="field-label">Name</span>
+			<input class="field-input" bind:value={editingItem.name} placeholder="Name" />
+		</label>
+		<label class="field">
+			<span class="field-label">Description</span>
+			<textarea
+				class="field-textarea"
+				rows="3"
+				bind:value={editingItem.description}
+				placeholder="Description"
+			></textarea>
+		</label>
+		<label class="field">
+			<span class="field-label">Consistency prompt</span>
+			<textarea
+				class="field-textarea"
+				rows="2"
+				bind:value={editingItem.consistency_prompt}
+				placeholder="Consistency prompt"
+			></textarea>
+		</label>
+	{/if}
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (itemModalOpen = false)}>Cancel</Button>
+		<Button variant="primary" loading={$saveItem.isPending} onclick={() => $saveItem.mutate()}>
+			Save
+		</Button>
+	{/snippet}
+</Modal>
+
 <ConfirmDialog
 	bind:open={confirmExampleOpen}
 	title="Load example?"
 	message="Replace your current idea with the example? This overwrites the idea, genre, tone and target length."
 	confirmLabel="Load example"
 	onconfirm={() => void loadExample()}
-/>
-
-<ConfirmDialog
-	bind:open={confirmDraftOpen}
-	title="Replace storyline?"
-	message="This replaces the existing {beatCountLabel(story.beats.length)} and regenerates characters and environments. Continue?"
-	confirmLabel="Replace"
-	danger
-	onconfirm={() => void draftStoryline()}
 />
 
 <ConfirmDialog
@@ -725,13 +734,6 @@
 		border-radius: var(--radius-md);
 		margin-bottom: var(--space-lg);
 		font-size: 13px;
-	}
-	.banner.error {
-		background: rgba(239, 68, 68, 0.12);
-		border-color: rgba(239, 68, 68, 0.35);
-		color: var(--error);
-		white-space: pre-wrap;
-		word-break: break-word;
 	}
 	.stack-col {
 		position: relative;

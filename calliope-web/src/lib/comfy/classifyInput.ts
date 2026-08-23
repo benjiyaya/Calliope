@@ -15,7 +15,7 @@
 import type { ComfyDynamicInput } from './types';
 import { normalizeInputRole } from './parser';
 
-export type InputZone = 'composer' | 'media' | 'control' | 'advanced';
+export type InputZone = 'composer' | 'media' | 'control' | 'advanced' | 'hidden';
 
 export type OmniWidget =
 	| 'promptTextarea'
@@ -49,13 +49,28 @@ export function classifyInput(inp: ComfyDynamicInput): ClassifiedInput {
 		return { input: inp, zone: 'composer', widget: 'negativeTextarea' };
 	}
 
+	// Timeline-owned — filled on enqueue, never a user widget.
+	if (role === 'clipindex') {
+		return { input: inp, zone: 'hidden', widget: 'numberPill' };
+	}
+
 	// --- Media tray ---
-	if (role === 'character' || role === 'location' || role === 'image') {
-		const isImageKind = inp.kind === 'image' || inp.kind === 'image_url';
+	if (
+		role === 'character' ||
+		role === 'location' ||
+		role === 'image' ||
+		role === 'video' ||
+		role === 'audio'
+	) {
+		const isMediaKind =
+			inp.kind === 'image' ||
+			inp.kind === 'image_url' ||
+			inp.kind === 'audio' ||
+			inp.kind === 'video';
 		return {
 			input: inp,
 			zone: 'media',
-			widget: isImageKind ? 'uploadTile' : 'assetTile',
+			widget: isMediaKind ? 'uploadTile' : 'assetTile',
 		};
 	}
 

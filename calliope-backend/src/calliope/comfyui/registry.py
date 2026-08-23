@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-ComfyInputKind = Literal["text", "textarea", "number", "image", "image_url", "audio"]
+ComfyInputKind = Literal["text", "textarea", "number", "image", "image_url", "audio", "video"]
 ComfyOutputKind = Literal["image", "video", "other"]
-PatchField = Literal["image", "url", "audio", "text", "value", "int", "float"]
+PatchField = Literal["image", "url", "audio", "video", "file", "text", "value", "int", "float"]
 
 TEXT_AREA_CLASSES = frozenset(
     {
@@ -23,6 +23,9 @@ NUMBER_CLASSES = frozenset(
 IMAGE_CLASSES = frozenset({"LoadImage", "ImageLoader", "ETN_LoadImageBase64"})
 IMAGE_URL_CLASSES = frozenset({"Load Image From Url (mtb)"})
 AUDIO_CLASSES = frozenset({"LoadAudio", "VHS_LoadAudio"})
+# Stock LoadVideo uses the `file` widget; VHS uses `video`.
+VIDEO_CLASSES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
+VIDEO_FILE_CLASSES = frozenset({"LoadVideo"})
 VIDEO_OUTPUT_CLASSES = frozenset(
     {"VHS_VideoCombine", "SaveVideo", "VideoOutput", "AnimateDiffCombine"}
 )
@@ -38,15 +41,19 @@ def class_to_input_kind(class_type: str) -> ComfyInputKind:
         return "image_url"
     if class_type in AUDIO_CLASSES:
         return "audio"
+    if class_type in VIDEO_CLASSES:
+        return "video"
     if class_type in NUMBER_CLASSES:
         return "number"
     if class_type in TEXT_AREA_CLASSES:
         return "textarea"
     lower = class_type.lower()
-    if "image" in lower or "load" in lower:
-        return "image"
+    if "video" in lower:
+        return "video"
     if "audio" in lower:
         return "audio"
+    if "image" in lower or "load" in lower:
+        return "image"
     if "int" in lower or "float" in lower or "seed" in lower:
         return "number"
     if "text" in lower or "clip" in lower or "prompt" in lower:
@@ -61,6 +68,10 @@ def class_to_patch_field(class_type: str) -> PatchField:
         return "url"
     if class_type in AUDIO_CLASSES:
         return "audio"
+    if class_type in VIDEO_FILE_CLASSES:
+        return "file"
+    if class_type in VIDEO_CLASSES:
+        return "video"
     if class_type in {"CLIPTextEncode", "Note", "ShowText", "ImpactWildcardProcessor"}:
         return "text"
     if class_type.startswith("Primitive"):
@@ -72,6 +83,8 @@ def class_to_patch_field(class_type: str) -> PatchField:
         return "url"
     if kind == "audio":
         return "audio"
+    if kind == "video":
+        return "file" if class_type in VIDEO_FILE_CLASSES else "video"
     if kind == "textarea":
         return "text"
     return "value"

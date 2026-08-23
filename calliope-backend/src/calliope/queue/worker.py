@@ -9,6 +9,7 @@ from typing import Any
 from calliope import config
 from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
+from calliope.comfyui.motion_context import apply_motion_context
 from calliope.comfyui.patcher import patch_workflow
 from calliope.db import get_db
 from calliope.events.bus import event_bus
@@ -129,6 +130,11 @@ class QueueWorker:
 
             input_values = payload.get("input_values") or {}
             patched = patch_workflow(workflow, input_values)
+            patched = apply_motion_context(
+                patched,
+                project_id=project_id,
+                continue_motion=bool(payload.get("continue_motion")),
+            )
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
 
@@ -177,14 +183,21 @@ class QueueWorker:
         return paths
 
     async def _poll_history(self, client: ComfyUIClient, prompt_id: str) -> dict[str, Any] | None:
-        attempts = int(600 / max(config.settings.queue_poll_interval_sec, 0.5))
-        for _ in range(attempts):
+        interval = max(config.settings.queue_poll_interval_sec, 0.5)
+        timeout = config.settings.queue_poll_timeout_sec
+        # 0 (or negative) = keep polling until the job completes or is cancelled.
+        # Long video workflows routinely exceed 10 minutes, so the cap is now
+        # configurable (default 30 min) instead of a hardcoded 600 seconds.
+        attempts = None if timeout <= 0 else int(timeout / interval)
+        n = 0
+        while attempts is None or n < attempts:
+            n += 1
             if self._stop.is_set():
                 return None
             history = await client.get_history(prompt_id)
             if history:
                 return history
-            await asyncio.sleep(config.settings.queue_poll_interval_sec)
+            await asyncio.sleep(interval)
             await event_bus.publish(
                 "job.progress",
                 {

@@ -33,7 +33,13 @@ async def list_assets(project_id: int) -> dict[str, Any]:
                 "SELECT * FROM locations WHERE project_id = ?", (project_id,)
             ).fetchall()
         ]
-        return {"characters": characters, "locations": locations}
+        items = [
+            row_to_dict(r)
+            for r in conn.execute(
+                "SELECT * FROM items WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        ]
+        return {"characters": characters, "locations": locations, "items": items}
     finally:
         conn.close()
 
@@ -50,6 +56,7 @@ async def generate_assets(project_id: int, payload: GenerateAssetsRequest) -> di
         project_id,
         character_ids=payload.character_ids,
         location_ids=payload.location_ids,
+        item_ids=payload.item_ids,
         missing_only=payload.missing_only,
         workflow_id=payload.workflow_id,
         input_values_override=payload.input_values,

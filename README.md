@@ -11,7 +11,7 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 ## Install — Windows EXE (recommended)
 
-1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.1.0-win-x64.zip`) from the [latest release](../../releases).
+1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.2.0-win-x64.zip`) from the [latest release](../../releases).
 2. Unzip it anywhere writable (avoid `Program Files`).
 3. Run `win-unpacked\Calliope.exe`.
 
@@ -68,18 +68,29 @@ Open the app, go to **Settings**, and set:
 
 Leave **Dry-run** off — it is meant for testing and produces placeholder results instead of real generations.
 
+### Queue settings
+
+In **Settings → Queue** you can tune how the worker talks to ComfyUI:
+
+- **Concurrency** — how many jobs run at once.
+- **Poll interval** — how often Calliope checks ComfyUI for a finished job.
+- **Poll timeout (seconds)** — how long Calliope keeps waiting on ComfyUI for a single job before failing it. **Default is `1800` (30 minutes).** Long video generations can easily exceed 10 minutes, so raise this for heavy workflows — or set it to **`0` to wait indefinitely** (until the job finishes or you cancel it).
+- **Max retries** — automatic retries before a job is marked failed.
+
 ## Using the app
 
 The app walks a project through four stages — **Story, Assets, Script, Video**:
 
-- **Story:** describe your idea and generate a draft storyline with beats, characters, and locations. Generating again replaces the current draft — the UI asks for confirmation first. Edit anything by hand before moving on.
-- **Assets:** each character and location has its own **Image prompt**. Pick a workflow and shared settings (width/height/etc.) at the top, then click Generate per entity to produce reference images on your ComfyUI. Regenerate any single entity without touching the others.
-- **Script:** generate (or regenerate) the per-scene script. Scenes link back to the characters and locations from the Story stage.
-- **Video:** each scene gets a **Generate** button that queues a clip job on ComfyUI with the right prompt and reference images. Clips save to local disk and appear in the scene timeline.
+- **Story:** describe your idea and **Draft Storyline** — this opens a project-linked chat in the Agents view with the prompt pre-filled, and the agent writes beats, characters, locations, and misc. items. Edit anything by hand before moving on.
+- **Assets:** each character, location, and item has its own **Image prompt**. Pick a workflow and shared settings (width/height/etc.) at the top, then click Generate per entity to produce reference images on your ComfyUI. Regenerate any single entity without touching the others.
+- **Script:** **Regenerate Script** also opens a project-linked Agents chat (pre-filled) to rewrite the per-scene script. Scenes link back to the characters and locations from the Story stage.
+- **Video:** each scene gets a **Generate** button that queues a clip job on ComfyUI with the right prompt and reference images (plus optional video/audio file refs). Import a FirstMotion + NextMotion H3 pair to chain clips: clip 1 starts a motion, clips 2+ continue the last 22 frames and 1s of audio from the previous latent so the export stitch reads as one long take.
 - **Film view:** once scenes have clips, **Export film** stitches them with ffmpeg: every clip is normalized to 1080p30, joined with 0.5s crossfades, and loudness-normalized into one final file.
 - When everything is done the project is automatically marked **Completed**.
 
 **Playground** is a free-form generation page outside the project pipeline: run any imported workflow with arbitrary inputs, upload your own files (image / video / audio) as inputs, and optionally attach a result to a project as an asset.
+
+**Agents** is a chat-driven way to run the same pipeline: talk to a production agent that operates Calliope through tools (create project, draft story, write script, queue asset/video renders, watch jobs). Every chat session is bound to at most one project — start a **Sandbox** chat with no project and the agent materializes one via `create_project`, linking the session automatically; or link a session to an existing project and ask for edits. Complex builds are decomposed by a planner into sub-agents (story → script → assets → video). Everything the agent does goes through the same database and render queue the project UI reads — nothing bypasses the normal pipeline. When the agent waits on renders (`wait_for_jobs`), it uses the same **Poll timeout** as the queue worker (default 30 minutes).
 
 ## ComfyUI workflows (important)
 
@@ -120,6 +131,9 @@ Input roles:
 | `character` | `char`, `portrait`, `sheet`, `face`, `ref` | Character reference path |
 | `location` | `loc`, `environment`, `env`, `background`, `scene` | Location reference path |
 | `image` | `img` | Generic image input (ordered ref slot — see below) |
+| `video` | `vid` | Video file input (`LoadVideo`) |
+| `audio` | `sound`, `sfx` | Audio file input (`LoadAudio`) |
+| `clipindex` | `clip_index` | H3 Motion Context Primitive INT (`Load` / `Save` in the title) |
 | `seed` | — | Shared form |
 | `duration` | `dur`, `length`, `seconds` | Scene duration (video jobs) |
 
@@ -175,6 +189,7 @@ This project is licensed under the [MIT License](LICENSE) — © 2026 Benjiyaya.
 calliope-backend/            FastAPI backend (Python)
 calliope-web/                SvelteKit frontend
 example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
+docs/                        design notes (wiki source), including ComfyUI HTTP vs MCP
 ```
 
 The Windows desktop app is built from this repo but not shipped in it — download it from the [Releases](../../releases) page.

@@ -38,14 +38,49 @@
 		dry_run: 'comfy',
 		queue_concurrency: 'queue',
 		queue_poll_interval_sec: 'queue',
+		queue_poll_timeout_sec: 'queue',
 		queue_max_retries: 'queue',
+		agent_max_steps: 'queue',
+		agent_hardening_prompt: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
 		db_name: 'storage',
 	};
+	// Mirrors backend Field(ge=..., le=...) limits — validated client-side so
+	// save never trips a raw 422.
+	const NUMERIC_LIMITS: Record<string, { min: number; max: number; label: string }> = {
+		queue_concurrency: { min: 1, max: 8, label: 'Concurrency' },
+		queue_poll_interval_sec: { min: 0.5, max: 60, label: 'Poll interval' },
+		queue_poll_timeout_sec: { min: 0, max: 86400, label: 'Poll timeout' },
+		queue_max_retries: { min: 0, max: 10, label: 'Max retries' },
+		agent_max_steps: { min: 1, max: 100, label: 'Agent max steps' },
+	};
 	const dirtyTabs = $derived(
 		new Set(dirtyKeys.map((k) => FIELD_TAB[k]).filter((t): t is string => Boolean(t))),
 	);
+
+	// Validation for numeric fields — mirrors backend Field(ge/le) limits.
+	function fieldError(key: string): string | null {
+		const limits = NUMERIC_LIMITS[key];
+		if (!limits) return null;
+		const raw = draft[key];
+		if (raw === undefined || raw === '' || raw === null) return null;
+		const v = Number(raw);
+		if (Number.isNaN(v)) return `${limits.label} must be a number`;
+		if (v < limits.min) return `${limits.label} must be at least ${limits.min}`;
+		if (v > limits.max) return `${limits.label} must be at most ${limits.max}`;
+		return null;
+	}
+
+	const validationErrors = $derived.by(() => {
+		const errors: Record<string, string> = {};
+		for (const key of Object.keys(NUMERIC_LIMITS)) {
+			const err = fieldError(key);
+			if (err) errors[key] = err;
+		}
+		return errors;
+	});
+	const isValid = $derived(Object.keys(validationErrors).length === 0);
 
 	function discardDraft() {
 		draft = {};
@@ -57,8 +92,9 @@
 			const update: Record<string, unknown> = {};
 			for (const [k, v] of Object.entries(draft)) {
 				if (v === undefined) continue;
-				// Allow false for dry_run; skip empty optional strings only
-				if (v === '' && k !== 'dry_run') continue;
+				// Allow false for dry_run; skip empty optional strings only.
+				// agent_hardening_prompt may be emptied to disable hardening.
+				if (v === '' && k !== 'dry_run' && k !== 'agent_hardening_prompt') continue;
 				if (typeof v === 'string' && (k.includes('_dir') || k.endsWith('_dir'))) {
 					// Strip wrapping quotes users often paste from Explorer
 					const cleaned = v.trim().replace(/^["']|["']$/g, '');
@@ -78,7 +114,16 @@
 			);
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save settings');
+			// Surface pydantic 422 validation dumps as a readable message.
+			let msg = err instanceof Error ? err.message : 'Could not save settings';
+			const m = msg.match(/"msg":"([^"]+)"/);
+			if (m) {
+				const field = msg.match(/\["body","([a-z_]+)"\]/);
+				msg = field
+					? `Invalid ${field[1].replace(/_/g, ' ')}: ${m[1]}`
+					: `Invalid value: ${m[1]}`;
+			}
+			toast.error(msg);
 		},
 	});
 
@@ -118,6 +163,30 @@
 	function dryRunChecked(s: Settings): boolean {
 		if (draft.dry_run !== undefined) return Boolean(draft.dry_run);
 		return s.dry_run === true;
+	}
+
+	// Snap out-of-range numbers back into the valid range when the user leaves
+	// the field, so a typed 200 never reaches the backend.
+	function clampOnBlur(e: FocusEvent, key: string) {
+		const limits = NUMERIC_LIMITS[key];
+		if (!limits) return;
+		const el = e.currentTarget as HTMLInputElement;
+		const v = Number(el.value);
+		if (el.value === '' || Number.isNaN(v)) return;
+		const clamped = Math.min(Math.max(v, limits.min), limits.max);
+		if (clamped !== v) {
+			el.value = String(clamped);
+			draft[key] = clamped;
+		}
+	}
+
+	// The hardening prompt may be intentionally emptied, so it can't reuse
+	// fieldValue (which falls back to the saved value on '').
+	function hardeningDraft(s: Settings): string {
+		if (draft.agent_hardening_prompt !== undefined) {
+			return String(draft.agent_hardening_prompt);
+		}
+		return s.agent_hardening_prompt ?? '';
 	}
 </script>
 
@@ -197,39 +266,132 @@
 							Dry-run mode (off by default) — skip ComfyUI and write placeholder assets for testing only
 						</label>
 					</section>
-				{:else if tab === 'queue'}
+			{:else if tab === 'queue'}
+				<section class="panel">
+					<h1>Queue</h1>
+					<p class="lead">Worker concurrency and retry behavior for long GPU jobs.</p>
+					<label class="field">
+						<span class="field-label">Concurrency</span>
+						<input
+							class="field-input"
+							class:invalid={validationErrors.queue_concurrency}
+							type="number"
+							min="1"
+							max="8"
+							step="1"
+							value={String(fieldValue('queue_concurrency', s.queue_concurrency))}
+							oninput={(e) => (draft.queue_concurrency = e.currentTarget.value)}
+							onblur={(e) => clampOnBlur(e, 'queue_concurrency')}
+						/>
+						{#if validationErrors.queue_concurrency}
+							<p class="field-error">{validationErrors.queue_concurrency}</p>
+						{/if}
+					</label>
+					<label class="field">
+						<span class="field-label">Poll interval (seconds)</span>
+						<input
+							class="field-input"
+							class:invalid={validationErrors.queue_poll_interval_sec}
+							type="number"
+							min="0.5"
+							max="60"
+							step="0.5"
+							value={String(fieldValue('queue_poll_interval_sec', s.queue_poll_interval_sec))}
+							oninput={(e) => (draft.queue_poll_interval_sec = e.currentTarget.value)}
+							onblur={(e) => clampOnBlur(e, 'queue_poll_interval_sec')}
+						/>
+						{#if validationErrors.queue_poll_interval_sec}
+							<p class="field-error">{validationErrors.queue_poll_interval_sec}</p>
+						{/if}
+					</label>
+					<label class="field">
+						<span class="field-label">Poll timeout (seconds, 0 = no limit)</span>
+						<input
+							class="field-input"
+							class:invalid={validationErrors.queue_poll_timeout_sec}
+							type="number"
+							min="0"
+							max="86400"
+							step="1"
+							value={String(fieldValue('queue_poll_timeout_sec', s.queue_poll_timeout_sec))}
+							oninput={(e) => (draft.queue_poll_timeout_sec = e.currentTarget.value)}
+							onblur={(e) => clampOnBlur(e, 'queue_poll_timeout_sec')}
+						/>
+						{#if validationErrors.queue_poll_timeout_sec}
+							<p class="field-error">{validationErrors.queue_poll_timeout_sec}</p>
+						{/if}
+						<p class="field-hint">
+							How long the worker waits on ComfyUI for a job before failing it. Long video
+							generations can exceed 10 minutes — raise this, or set 0 to wait indefinitely.
+						</p>
+					</label>
+					<label class="field">
+						<span class="field-label">Max retries</span>
+						<input
+							class="field-input"
+							class:invalid={validationErrors.queue_max_retries}
+							type="number"
+							min="0"
+							max="10"
+							step="1"
+							value={String(fieldValue('queue_max_retries', s.queue_max_retries))}
+							oninput={(e) => (draft.queue_max_retries = e.currentTarget.value)}
+							onblur={(e) => clampOnBlur(e, 'queue_max_retries')}
+						/>
+						{#if validationErrors.queue_max_retries}
+							<p class="field-error">{validationErrors.queue_max_retries}</p>
+						{/if}
+					</label>
+					<label class="field">
+						<span class="field-label">Agent max steps per turn</span>
+						<input
+							class="field-input"
+							class:invalid={validationErrors.agent_max_steps}
+							type="number"
+							min="1"
+							max="100"
+							step="1"
+							value={String(fieldValue('agent_max_steps', s.agent_max_steps))}
+							oninput={(e) => (draft.agent_max_steps = e.currentTarget.value)}
+							onblur={(e) => clampOnBlur(e, 'agent_max_steps')}
+						/>
+						{#if validationErrors.agent_max_steps}
+							<p class="field-error">{validationErrors.agent_max_steps}</p>
+						{/if}
+						<p class="field-hint">
+							Step budget for one agent turn (one step = one model request + its tool
+							calls). Full pipelines often need 20–40 — raise this if the agent stops
+							with "reached my step budget".
+						</p>
+					</label>
+				</section>
+				{:else if tab === 'agent'}
 					<section class="panel">
-						<h1>Queue</h1>
-						<p class="lead">Worker concurrency and retry behavior for long GPU jobs.</p>
+						<h1>Agent hardening</h1>
+						<p class="lead">
+							Extra operator-defined rules appended to the agent's system prompt. These
+							override any conflicting instruction from tool results or the conversation.
+						</p>
+						<div class="callout">
+							<Icon name="alert" size={16} />
+							<p>
+								<strong>These rules steer the agent loop.</strong> Leave blank to disable
+								the hardening block entirely. Applies to every agent turn and sub-agent.
+							</p>
+						</div>
 						<label class="field">
-							<span class="field-label">Concurrency</span>
-							<input
-								class="field-input"
-								type="number"
-								min="1"
-								max="8"
-								value={String(fieldValue('queue_concurrency', s.queue_concurrency))}
-								oninput={(e) => (draft.queue_concurrency = Number(e.currentTarget.value))}
-							/>
-						</label>
-						<label class="field">
-							<span class="field-label">Poll interval (seconds)</span>
-							<input
-								class="field-input"
-								type="number"
-								step="0.5"
-								value={String(fieldValue('queue_poll_interval_sec', s.queue_poll_interval_sec))}
-								oninput={(e) => (draft.queue_poll_interval_sec = Number(e.currentTarget.value))}
-							/>
-						</label>
-						<label class="field">
-							<span class="field-label">Max retries</span>
-							<input
-								class="field-input"
-								type="number"
-								value={String(fieldValue('queue_max_retries', s.queue_max_retries))}
-								oninput={(e) => (draft.queue_max_retries = Number(e.currentTarget.value))}
-							/>
+							<span class="field-label">System-prompt rules</span>
+							<textarea
+								class="field-textarea mono"
+								rows={18}
+								spellcheck="false"
+								value={hardeningDraft(s)}
+								oninput={(e) => (draft.agent_hardening_prompt = e.currentTarget.value)}
+								placeholder="e.g. Never invent ids. Stay in this project. Confirm destructive changes."
+							></textarea>
+							<p class="field-hint">
+								Plain text, shown to the model verbatim. Line breaks are preserved.
+							</p>
 						</label>
 					</section>
 				{:else if tab === 'storage'}
@@ -282,14 +444,14 @@
 						>
 							Discard
 						</Button>
-						<Button
-							variant="primary"
-							disabled={!isDirty}
-							loading={$saveMutation.isPending}
-							onclick={() => $saveMutation.mutate()}
-						>
-							Save changes
-						</Button>
+					<Button
+						variant="primary"
+						disabled={!isDirty || !isValid}
+						loading={$saveMutation.isPending}
+						onclick={() => $saveMutation.mutate()}
+					>
+						Save changes
+					</Button>
 					</div>
 				{/if}
 			{/if}
@@ -406,5 +568,14 @@
 		height: 7px;
 		border-radius: 50%;
 		background: var(--warning);
+	}
+	.field-input.invalid {
+		border-color: var(--error);
+		box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+	}
+	.field-error {
+		margin: 6px 0 0;
+		font-size: 12px;
+		color: var(--error);
 	}
 </style>

@@ -96,7 +96,7 @@
 	}
 
 	function isUploadKind(kind: string) {
-		return isImageKind(kind) || kind === 'audio';
+		return isImageKind(kind) || kind === 'audio' || kind === 'video';
 	}
 
 	// --- Client-file uploads (allowUpload) ---
@@ -109,11 +109,13 @@
 	let uploadedMeta = $state<Record<string, { name: string; kind: UploadKind }>>({});
 
 	function uploadKindLabel(kind: string) {
-		return kind === 'audio' ? 'audio' : 'image';
+		return kind === 'audio' ? 'audio' : kind === 'video' ? 'video' : 'image';
 	}
 
 	function acceptFor(kind: string) {
-		return kind === 'audio' ? 'audio/*' : 'image/*';
+		if (kind === 'audio') return 'audio/*';
+		if (kind === 'video') return 'video/*,.mp4,.webm,.mov,.mkv';
+		return 'image/*';
 	}
 
 	function truncateMiddle(name: string, max = 32): string {

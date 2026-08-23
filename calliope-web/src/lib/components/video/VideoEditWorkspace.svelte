@@ -15,6 +15,7 @@
 	interface AssetOption {
 		label: string;
 		path: string;
+		kind?: 'image' | 'video' | 'audio';
 	}
 
 	interface Progress {
@@ -35,6 +36,11 @@
 		workflows: Workflow[];
 		formValues: Record<string, string | number>;
 		assetOptions: AssetOption[];
+		allowUpload?: boolean;
+		showContinueMotion?: boolean;
+		continueMotion?: boolean;
+		onContinueChange?: (on: boolean) => void;
+		chained?: (scene: Scene) => boolean;
 		submitting?: boolean;
 		statusOf: (scene: Scene) => string;
 		thumbFor: (scene: Scene) => Thumb;
@@ -59,6 +65,11 @@
 		workflows,
 		formValues = $bindable(),
 		assetOptions,
+		allowUpload = true,
+		showContinueMotion = false,
+		continueMotion = false,
+		onContinueChange,
+		chained = () => false,
 		submitting = false,
 		statusOf,
 		thumbFor,
@@ -90,6 +101,7 @@
 		{statusOf}
 		{thumbFor}
 		{formatClock}
+		{chained}
 		{onSelect}
 		{onStep}
 	/>
@@ -100,9 +112,19 @@
 		{#if workflow}
 			{#if assetOptions.length === 0}
 				<p class="asset-hint">
-					No image assets yet. Generate character sheets or environments in Assets to pick them as
-					refs.
+					No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
+					file here.
 				</p>
+			{/if}
+			{#if showContinueMotion}
+				<label class="continue-row">
+					<input
+						type="checkbox"
+						checked={continueMotion}
+						onchange={(e) => onContinueChange?.(e.currentTarget.checked)}
+					/>
+					<span>Continue motion from previous clip</span>
+				</label>
 			{/if}
 			<OmniComposer
 				inputs={workflow.input_schema}
@@ -111,6 +133,7 @@
 				{workflows}
 				onWorkflowChange={onWorkflowChange}
 				{assetOptions}
+				{allowUpload}
 				generateLabel="Generate clip"
 				{submitting}
 				onChange={onFormChange}
@@ -154,6 +177,20 @@
 
 	.composer-dock :global(.omni-shell) {
 		flex-shrink: 0;
+	}
+
+	.continue-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 0 0 8px;
+		font-size: 12px;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+
+	.continue-row input {
+		accent-color: var(--accent);
 	}
 
 	.asset-hint {

@@ -7,6 +7,7 @@ from calliope.comfyui.registry import (
     ComfyOutputKind,
     IMAGE_CLASSES,
     AUDIO_CLASSES,
+    VIDEO_CLASSES,
     class_to_input_kind,
     class_to_output_kind,
 )
@@ -20,7 +21,7 @@ from calliope.comfyui.roles import (
 def extract_default_value(node: dict[str, Any]) -> str | int | float | None:
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
-    if class_type in IMAGE_CLASSES or class_type in AUDIO_CLASSES:
+    if class_type in IMAGE_CLASSES or class_type in AUDIO_CLASSES or class_type in VIDEO_CLASSES:
         return None
     if isinstance(inputs.get("text"), str):
         return inputs["text"]

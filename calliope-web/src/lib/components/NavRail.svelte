@@ -25,7 +25,7 @@
 		class="nav-item home"
 		title="Projects"
 		aria-label="Back to projects"
-		onclick={() => goto('/')}
+		onclick={() => goto('/projects')}
 	>
 		<span class="icon"><Icon name="home" size={20} /></span>
 		<span class="label">Home</span>

@@ -126,10 +126,16 @@ Tone: {tone or "cinematic, atmospheric"}
       "name": "Location name",
       "description": "concise visual description for image generation"
     }}
+  ],
+  "items": [
+    {{
+      "name": "Item name",
+      "description": "concise visual description for image generation"
+    }}
   ]
 }}
 
-Keep descriptions visual and concrete. Characters and locations should be reusable across scenes.
+Keep descriptions visual and concrete. Characters, locations and items should be reusable across scenes.
 FINAL CHECK before responding: beats.length == {beat_n}. If not, fix it."""
 
 
@@ -321,6 +327,26 @@ def location_image_prompt(location: dict[str, Any]) -> str:
     if saved:
         return saved
     return location_reference_prompt(location)
+
+
+def item_reference_prompt(item: dict[str, Any]) -> str:
+    """Transparent item/prop reference template (weapons, gifts, objects)."""
+    name = (item.get("name") or "Unnamed item").strip()
+    description = (item.get("description") or "no description yet").strip()
+    return (
+        f"ITEM REFERENCE — {name}\n"
+        f"Description: {description}\n"
+        f"\n"
+        f"Shot: single object on a clean neutral backdrop, centered, full object in "
+        f"frame, consistent lighting and materials, high detail, no people, no text."
+    )
+
+
+def item_image_prompt(item: dict[str, Any]) -> str:
+    saved = (item.get("consistency_prompt") or "").strip()
+    if saved:
+        return saved
+    return item_reference_prompt(item)
 
 
 def scene_video_prompt(scene: dict[str, Any], characters: list[dict[str, Any]]) -> str:

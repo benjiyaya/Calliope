@@ -102,3 +102,66 @@ def test_input_duration_alias():
     assert inputs[0]["role"] == "duration"
     values = smart_fill_inputs(inputs, duration=7)
     assert values["5"] == 7
+
+
+def test_video_and_audio_roles():
+    workflow = {
+        "10": {
+            "inputs": {"file": ""},
+            "class_type": "LoadVideo",
+            "_meta": {"title": "Clip (Input:video)"},
+        },
+        "11": {
+            "inputs": {"audio": ""},
+            "class_type": "LoadAudio",
+            "_meta": {"title": "Bed (Input:audio)"},
+        },
+    }
+    inputs = parse_dynamic_inputs(workflow)
+    by_role = {i["role"]: i for i in inputs}
+    assert by_role["video"]["kind"] == "video"
+    assert by_role["audio"]["kind"] == "audio"
+    values = smart_fill_inputs(
+        inputs,
+        ref_videos=["/tmp/walk.mp4"],
+        ref_audios=["/tmp/bed.mp3"],
+    )
+    assert values["10"] == "/tmp/walk.mp4"
+    assert values["11"] == "/tmp/bed.mp3"
+
+
+def test_clipindex_load_vs_save_by_label():
+    workflow = {
+        "281": {
+            "inputs": {"value": 1},
+            "class_type": "PrimitiveInt",
+            "_meta": {"title": "(input:clipindex) Load Motion Context Clip Index"},
+        },
+        "282": {
+            "inputs": {"value": 2},
+            "class_type": "PrimitiveInt",
+            "_meta": {"title": "(input:clipindex) Save Motion Context Clip Index"},
+        },
+    }
+    inputs = parse_dynamic_inputs(workflow)
+    values = smart_fill_inputs(
+        inputs,
+        clip_index_load=3,
+        clip_index_save=4,
+        extra={"281": 1, "282": 2},
+    )
+    assert values["281"] == 3
+    assert values["282"] == 4
+
+
+def test_clipindex_never_zero():
+    workflow = {
+        "282": {
+            "inputs": {"value": 2},
+            "class_type": "PrimitiveInt",
+            "_meta": {"title": "(input:clipindex) Save Motion Context Clip Index"},
+        },
+    }
+    inputs = parse_dynamic_inputs(workflow)
+    values = smart_fill_inputs(inputs, clip_index_save=0)
+    assert values["282"] == 1

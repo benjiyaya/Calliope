@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from calliope.config import settings
-from calliope.comfyui.registry import IMAGE_CLASSES, AUDIO_CLASSES
+from calliope.comfyui.registry import IMAGE_CLASSES, AUDIO_CLASSES, VIDEO_CLASSES, VIDEO_FILE_CLASSES
 
 logger = logging.getLogger("calliope.comfyui")
 
@@ -52,8 +52,20 @@ class ComfyUIClient:
         sub = result.get("subfolder") or subfolder
         return f"{sub}/{name}" if sub else name
 
+    async def upload_video(self, path: Path, subfolder: str = "calliope") -> str:
+        """Same Comfy ``/upload/image`` endpoint the official client uses for video."""
+        data = path.read_bytes()
+        files = {"image": (path.name, data, "application/octet-stream")}
+        form = {"overwrite": "true", "subfolder": subfolder, "type": "input"}
+        resp = await self._http.post(f"{self.base_url}/upload/image", files=files, data=form)
+        resp.raise_for_status()
+        result = resp.json()
+        name = result.get("name", path.name)
+        sub = result.get("subfolder") or subfolder
+        return f"{sub}/{name}" if sub else name
+
     async def prepare_media_inputs(self, workflow: dict[str, Any]) -> dict[str, Any]:
-        """Upload local file paths referenced in LoadImage/LoadAudio nodes."""
+        """Upload local file paths referenced in LoadImage / LoadAudio / LoadVideo nodes."""
         for _node_id, node in workflow.items():
             if not isinstance(node, dict):
                 continue
@@ -72,6 +84,14 @@ class ComfyUIClient:
                     path = Path(audio)
                     if path.exists():
                         inputs["audio"] = await self.upload_audio(path)
+                        node["inputs"] = inputs
+            elif class_type in VIDEO_CLASSES:
+                field = "file" if class_type in VIDEO_FILE_CLASSES else "video"
+                media = inputs.get(field)
+                if isinstance(media, str) and self._looks_like_local_path(media):
+                    path = Path(media)
+                    if path.exists():
+                        inputs[field] = await self.upload_video(path)
                         node["inputs"] = inputs
         return workflow
 
