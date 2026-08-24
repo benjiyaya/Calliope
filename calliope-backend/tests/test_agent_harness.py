@@ -66,6 +66,9 @@ def test_openai_payload_scoping():
     assert "create_project" not in linked_names
     assert "link_project" not in linked_names
     assert "generate_story" in linked_names
+    # unlink_project is the way back: linked-only, hidden in sandbox
+    assert "unlink_project" in linked_names
+    assert "unlink_project" not in blind_names
 
 
 def test_execute_tool_unknown_and_unscoped():

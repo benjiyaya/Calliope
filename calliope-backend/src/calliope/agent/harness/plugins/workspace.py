@@ -37,7 +37,8 @@ def register(registry: ToolRegistry) -> None:
             description=(
                 "Link this sandbox session to an EXISTING project (call "
                 "list_projects first to get valid ids). Only possible while the "
-                "session is not yet linked — do NOT create a duplicate project "
+                "session is not yet linked — to switch projects, call "
+                "unlink_project first. Do NOT create a duplicate project "
                 "when one already matches."
             ),
             parameters={
@@ -53,6 +54,21 @@ def register(registry: ToolRegistry) -> None:
             executor=t_link_project,
             requires_project=False,
             blind_only=True,
+            category="workspace",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="unlink_project",
+            description=(
+                "Detach this session from its linked project and return to "
+                "sandbox mode. The project and all its content are untouched — "
+                "only the session binding is cleared. Use this when the user "
+                "wants a NEW project (then create_project) or a DIFFERENT "
+                "existing one (then link_project). Not available in sandbox."
+            ),
+            parameters={"type": "object", "properties": {}},
+            executor=t_unlink_project,
             category="workspace",
         )
     )
@@ -226,6 +242,29 @@ async def t_link_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     ctx.project_id = pid
     await publish_session_updated(ctx.session_id)
     return {"ok": True, "project_id": pid, "title": project["title"]}
+
+
+async def t_unlink_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    released_id = ctx.project_id
+    conn = _db()
+    try:
+        project = _project_or_error(conn, released_id)
+        conn.execute(
+            "UPDATE agent_sessions SET project_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (ctx.session_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    ctx.project_id = None
+    await publish_session_updated(ctx.session_id)
+    return {
+        "ok": True,
+        "released_project_id": released_id,
+        "released_title": (project or {}).get("title"),
+        "mode": "sandbox",
+        "hint": "Session is back in sandbox — create_project and link_project are available again.",
+    }
 
 
 _TITLE_MAX = 200  # mirrors ProjectCreate/ProjectUpdate schema bounds

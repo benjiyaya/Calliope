@@ -1727,3 +1727,67 @@ def test_concurrent_start_turn_single_winner(client):
     results = aio.run(scenario())
     assert sorted(results) == ["ok", "rejected"], results
 
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# unlink_project: the way out of the linked-session one-way door
+# (Observed live 2026-08-24, session 82: a linked agent burned three failed
+# tool calls trying to create a fresh project — create_project and
+# link_project are sandbox-only and no unlink existed.)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_unlink_project_round_trip(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    pid = _mk_project(client, "Original Film")
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    # 1. Linked session: create_project is blocked, and the error now says how
+    #    to get out.
+    out = asyncio.run(execute_tool(ctx, "create_project", {"title": "Fresh", "idea": "x"}))
+    assert out["ok"] is False
+    assert "unlink_project" in out["error"]
+
+    # 2. unlink: binding cleared, project untouched.
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is True
+    assert out["released_project_id"] == pid
+    assert ctx.project_id is None
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT project_id FROM agent_sessions WHERE id = ?", (sid,)
+        ).fetchone()
+        assert row["project_id"] is None
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM projects WHERE id = ?", (pid,)
+        ).fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+    # 3. Sandbox again: create_project now works and auto-links.
+    out = asyncio.run(execute_tool(ctx, "create_project", {"title": "Fresh", "idea": "x"}))
+    assert out["ok"] is True
+    assert ctx.project_id == out["project"]["id"]
+    assert ctx.project_id != pid
+
+    # 4. And the session can come back to the original via unlink + link.
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is True
+    out = asyncio.run(execute_tool(ctx, "link_project", {"project_id": pid}))
+    assert out["ok"] is True
+    assert ctx.project_id == pid
+
+
+def test_unlink_project_requires_linked_session(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    sid = _mk_session(project_id=None)
+    ctx = ToolContext(session_id=sid, project_id=None)
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is False
+    assert "requires a linked project" in out["error"]
