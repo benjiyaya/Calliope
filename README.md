@@ -11,23 +11,6 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 
 
-## Install — Windows EXE (recommended)
-
-1. Download **`Calliope-<version>-win-x64.zip`** (e.g. `Calliope-1.2.1-win-x64.zip`) from the [latest release](../../releases).
-2. Unzip it anywhere writable (avoid `Program Files`).
-3. Run `win-unpacked\Calliope.exe`.
-
-No installer, no dev setup. First launch shows a splash while the backend boots. Windows SmartScreen will warn on first run (unsigned binary) — that's expected: click **More info → Run anyway**.
-
-**Portable:** your projects, database, generated media, and settings live next to the app:
-
-```text
-<app>\resources\backend\data\                 projects database + generated assets
-<app>\resources\backend\calliope_config.json  created when you save Settings
-```
-
-Move or copy the whole unzipped folder to relocate the app together with its data.
-
 ## Install — from source (npm + Python)
 
 For development, or if you prefer running the web UI in a browser instead of the Electron shell.
