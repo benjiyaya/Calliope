@@ -8,6 +8,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from calliope.config import settings
 from calliope.db import get_db, migrate_db, rebase_stale_asset_paths
@@ -30,6 +33,51 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("calliope")
+
+# Hashed SPA assets can be cached; HTML and unknown client routes must not, or
+# Electron will keep showing a previous install's index.html from 127.0.0.1.
+_IMMUTABLE_SUFFIXES = {
+    ".js",
+    ".css",
+    ".map",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".webp",
+    ".gif",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".json",
+}
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve SvelteKit's fallback index.html for client routes like /project/12.
+
+    Starlette StaticFiles(html=True) only maps directories to index.html, not
+    unknown paths. Without this, the packaged app returns FastAPI JSON
+    ``{"detail":"Not Found"}`` after Create Project (a full navigation to
+    ``/project/{id}``).
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        fallback = False
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            suffix = Path(path).suffix.lower()
+            if suffix in _IMMUTABLE_SUFFIXES:
+                raise
+            fallback = True
+            response = await super().get_response("index.html", scope)
+        if fallback or path.endswith(".html") or path in {"", ".", "index.html"}:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 @asynccontextmanager
@@ -61,7 +109,7 @@ async def lifespan(app: FastAPI):
     logger.info("Calliope shutting down")
 
 
-def create_app() -> FastAPI:
+def create_app(static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Calliope", version="1.2.1", lifespan=lifespan)
 
     app.add_middleware(
@@ -97,9 +145,9 @@ def create_app() -> FastAPI:
     async def api_not_found(full_path: str) -> None:
         raise HTTPException(status_code=404, detail=f"API route not found: /api/{full_path}")
 
-    static_dir = Path(__file__).resolve().parent / "static"
-    if static_dir.exists():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    resolved_static = static_dir if static_dir is not None else Path(__file__).resolve().parent / "static"
+    if resolved_static.exists():
+        app.mount("/", SPAStaticFiles(directory=resolved_static, html=True), name="static")
 
     return app
 

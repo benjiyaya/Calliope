@@ -10,6 +10,9 @@ const config = {
 		}),
 		paths: {
 			base: '',
+			// Absolute /_app/... URLs so a document load of /project/12 still
+			// finds the bundle. adapter-static otherwise emits ./_app on prerendered pages.
+			relative: false,
 		},
 		prerender: {
 			handleHttpError: ({ path, message }) => {

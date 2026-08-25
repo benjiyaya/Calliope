@@ -13,8 +13,6 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 ## Install — from source (npm + Python)
 
-For development, or if you prefer running the web UI in a browser instead of the Electron shell.
-
 **Prerequisites**
 
 - Python 3.11+
@@ -177,4 +175,3 @@ example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
 docs/wiki/                   design notes (wiki source): ComfyUI HTTP vs MCP, multi-ref workflows
 ```
 
-The Windows desktop app is built from this repo but not shipped in it — download it from the [Releases](../../releases) page.
