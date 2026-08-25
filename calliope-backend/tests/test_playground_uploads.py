@@ -78,3 +78,55 @@ def test_upload_extension_map():
     assert _kind_for_ext(".JPG") == "image"  # case-insensitive
     assert _kind_for_ext(".exe") is None
     assert _kind_for_ext("") is None
+
+
+def test_upload_assigned_to_character_sheet(client):
+    proj = client.post("/api/projects", json={"title": "Reel"}).json()
+    char = client.post(
+        f"/api/projects/{proj['id']}/characters",
+        json={"name": "Hero"},
+    ).json()
+    up = client.post(
+        "/api/playground/uploads",
+        files={"file": ("hero.png", PNG_BYTES, "image/png")},
+    )
+    assert up.status_code == 200
+    path = up.json()["path"]
+
+    patched = client.patch(
+        f"/api/projects/{proj['id']}/characters/{char['id']}",
+        json={"sheet_path": path},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["sheet_path"] == path
+
+    loc = client.post(
+        f"/api/projects/{proj['id']}/locations",
+        json={"name": "Dock"},
+    ).json()
+    loc_up = client.post(
+        "/api/playground/uploads",
+        files={"file": ("dock.png", PNG_BYTES, "image/png")},
+    ).json()
+    loc_patched = client.patch(
+        f"/api/projects/{proj['id']}/locations/{loc['id']}",
+        json={"reference_image_path": loc_up["path"]},
+    )
+    assert loc_patched.status_code == 200
+    assert loc_patched.json()["reference_image_path"] == loc_up["path"]
+
+    item = client.post(
+        f"/api/projects/{proj['id']}/items",
+        json={"name": "Key"},
+    ).json()
+    item_up = client.post(
+        "/api/playground/uploads",
+        files={"file": ("key.png", PNG_BYTES, "image/png")},
+    ).json()
+    item_patched = client.patch(
+        f"/api/projects/{proj['id']}/items/{item['id']}",
+        json={"reference_image_path": item_up["path"]},
+    )
+    assert item_patched.status_code == 200
+    assert item_patched.json()["reference_image_path"] == item_up["path"]
+
