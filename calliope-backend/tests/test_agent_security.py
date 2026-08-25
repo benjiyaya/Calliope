@@ -1791,3 +1791,72 @@ def test_unlink_project_requires_linked_session(client):
     out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
     assert out["ok"] is False
     assert "requires a linked project" in out["error"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# get_workspace sections + teaching truncation + assets-role editors
+# (Observed live 2026-08-25: on a 43-scene project the assets sub-agent's
+# get_workspace result truncated mid-beats, hiding characters/locations/items
+# entirely; it retried in a loop and had no editor tools anyway.)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_get_workspace_sections_scoped_fetch(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    pid = _mk_project(client, "Sectioned")
+    conn = get_db(settings.db_path)
+    try:
+        conn.execute(
+            "INSERT INTO characters (project_id, name, role) VALUES (?, ?, ?)",
+            (pid, "Mia", "lead"),
+        )
+        conn.execute(
+            "INSERT INTO story_beats (project_id, order_index, title, description) "
+            "VALUES (?, 1, 'Open', 'a')",
+            (pid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {"sections": ["characters"]}))
+    assert out["mode"] == "linked"
+    assert [c["name"] for c in out["characters"]] == ["Mia"]
+    assert "beats" not in out and "scenes" not in out
+    assert "beats" in out["sections_omitted"]
+    assert "stats" in out and "project" in out  # always included
+
+    # No sections -> everything (back-compat)
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {}))
+    for key in ("beats", "characters", "locations", "items", "scenes"):
+        assert key in out
+    assert "sections_omitted" not in out
+
+    # Garbage sections -> explicit error, not a silent full fetch
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {"sections": ["bogus"]}))
+    assert out["ok"] is False
+    assert "valid" in out["error"]
+
+
+def test_truncation_note_teaches_scoped_fetch():
+    from calliope.agent.harness import log as session_log
+
+    big = {"blob": "x" * (session_log.TOOL_RESULT_TRUNCATE + 100)}
+    text = session_log._truncate_result(big)
+    assert "sections=" in text
+    assert len(text) < session_log.TOOL_RESULT_TRUNCATE + len(session_log.TRUNCATE_NOTE) + 1
+
+
+def test_assets_role_has_editors_and_they_resolve():
+    from calliope.agent.harness.orchestrator import ROLE_TOOLS, _scoped_payload
+    from calliope.agent.harness.registry import ToolContext
+
+    for tool in ("update_character", "update_location", "update_item"):
+        assert tool in ROLE_TOOLS["assets"]
+    ctx = ToolContext(session_id=9_999_003, project_id=99)
+    names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["assets"])}
+    assert {"update_character", "update_location", "update_item", "get_workspace"} <= names

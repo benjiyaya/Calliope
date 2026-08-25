@@ -21,11 +21,35 @@ def register(registry: ToolRegistry) -> None:
             name="get_workspace",
             description=(
                 "Get the current workspace: session linkage and, when linked, "
-                "the project with story beats, characters, locations, scenes, "
-                "and stats. ALWAYS call this before editing anything or when "
-                "you need current ids/counts."
+                "the project with story beats, characters, locations, items, "
+                "scenes, and stats. ALWAYS call this before editing anything or "
+                "when you need current ids/counts. On a LARGE project the full "
+                "result gets truncated — pass sections (e.g. "
+                "[\"characters\",\"locations\",\"items\"]) to fetch only what "
+                "you need; project + stats are always included."
             ),
-            parameters={"type": "object", "properties": {}},
+            parameters={
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "beats",
+                                "characters",
+                                "locations",
+                                "items",
+                                "scenes",
+                            ],
+                        },
+                        "description": (
+                            "Which sections to include. Omit for all — but on "
+                            "large projects prefer only the sections you need."
+                        ),
+                    }
+                },
+            },
             executor=t_get_workspace,
             requires_project=False,
             category="workspace",
@@ -143,6 +167,9 @@ def register(registry: ToolRegistry) -> None:
     )
 
 
+_WS_SECTIONS = ("beats", "characters", "locations", "items", "scenes")
+
+
 # ── executors ───────────────────────────────────────────────────
 
 
@@ -170,6 +197,16 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
             out["mode"] = "sandbox"
             out["hint"] = "Linked project no longer exists."
             return out
+        requested = args.get("sections")
+        if requested:
+            wanted = {sec for sec in requested if sec in _WS_SECTIONS}
+            if not wanted:
+                return {
+                    "ok": False,
+                    "error": f"No valid sections in {requested!r}; valid: {sorted(_WS_SECTIONS)}",
+                }
+        else:
+            wanted = set(_WS_SECTIONS)
         beats = [
             row_to_dict(r)
             for r in conn.execute(
@@ -177,7 +214,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "WHERE project_id = ? ORDER BY order_index",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "beats" in wanted else None
         characters = [
             row_to_dict(r)
             for r in conn.execute(
@@ -185,7 +222,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "sheet_path, consistency_prompt FROM characters WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "characters" in wanted else None
         locations = [
             row_to_dict(r)
             for r in conn.execute(
@@ -193,7 +230,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "FROM locations WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "locations" in wanted else None
         items = [
             row_to_dict(r)
             for r in conn.execute(
@@ -201,7 +238,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "FROM items WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "items" in wanted else None
         scenes = [
             row_to_dict(r)
             for r in conn.execute(
@@ -209,15 +246,21 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "location_id, video_path FROM scenes WHERE project_id = ? ORDER BY order_index",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "scenes" in wanted else None
         out["mode"] = "linked"
         out["project"] = project
         out["stats"] = _project_stats(ctx.project_id, conn)
-        out["beats"] = beats
-        out["characters"] = characters
-        out["locations"] = locations
-        out["items"] = items
-        out["scenes"] = scenes
+        for key, value in (
+            ("beats", beats),
+            ("characters", characters),
+            ("locations", locations),
+            ("items", items),
+            ("scenes", scenes),
+        ):
+            if value is not None:
+                out[key] = value
+        if len(wanted) < len(_WS_SECTIONS):
+            out["sections_omitted"] = sorted(set(_WS_SECTIONS) - wanted)
         return out
     finally:
         conn.close()

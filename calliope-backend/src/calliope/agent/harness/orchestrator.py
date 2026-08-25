@@ -44,6 +44,9 @@ ROLE_TOOLS: dict[str, list[str]] = {
     ],
     "assets": [
         "get_workspace",
+        "update_character",
+        "update_location",
+        "update_item",
         "list_workflows",
         "comfy_server_info",
         "run_workflow",
@@ -471,7 +474,7 @@ async def _run_sub_agent(
                 )
                 result_text = json.dumps(result, ensure_ascii=False, default=str)
                 if len(result_text) > session_log.TOOL_RESULT_TRUNCATE:
-                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + "…[truncated]"
+                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + session_log.TRUNCATE_NOTE
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": result_text}
                 )
