@@ -74,6 +74,14 @@ export interface StoryData {
 	items: Item[];
 }
 
+export interface LlmProfile {
+	id: string;
+	name: string;
+	base_url: string;
+	model: string;
+	api_key: boolean;
+}
+
 export interface Settings {
 	host: string;
 	port: number;
@@ -83,6 +91,8 @@ export interface Settings {
 	llm_base_url: string;
 	llm_model: string;
 	llm_api_key: boolean;
+	llm_profiles: LlmProfile[];
+	llm_active_id: string | null;
 	comfyui_base_url: string;
 	queue_concurrency: number;
 	queue_poll_interval_sec: number;

@@ -9,7 +9,7 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
-	import { settings, type Settings } from '$lib/api';
+	import { settings, type LlmProfile, type Settings } from '$lib/api';
 	import { toast } from '$lib/toast';
 
 	const client = useQueryClient();
@@ -21,18 +21,18 @@
 	});
 
 	let draft = $state<Record<string, unknown>>({});
-	let apiKeyDraft = $state('');
+	let apiKeyDrafts = $state<Record<string, string>>({});
 
 	// Dirty tracking: any staged field (draft map or a typed API key) counts.
 	const dirtyKeys = $derived([
 		...Object.keys(draft).filter((k) => draft[k] !== undefined),
-		...(apiKeyDraft ? ['llm_api_key'] : []),
+		...(Object.values(apiKeyDrafts).some((v) => v) ? ['llm_api_key'] : []),
 	]);
 	const isDirty = $derived(dirtyKeys.length > 0);
 
 	const FIELD_TAB: Record<string, string> = {
-		llm_base_url: 'llm',
-		llm_model: 'llm',
+		llm_profiles: 'llm',
+		llm_active_id: 'llm',
 		llm_api_key: 'llm',
 		comfyui_base_url: 'comfy',
 		dry_run: 'comfy',
@@ -78,13 +78,22 @@
 			const err = fieldError(key);
 			if (err) errors[key] = err;
 		}
+		const profiles = Array.isArray(draft.llm_profiles) ? (draft.llm_profiles as LlmProfile[]) : null;
+		if (profiles) {
+			if (profiles.length === 0) errors.llm_profiles = 'Add at least one LLM';
+			for (const p of profiles) {
+				if (!p.name.trim()) errors[`llm_name_${p.id}`] = 'Name is required';
+				if (!p.base_url.trim()) errors[`llm_url_${p.id}`] = 'Base URL is required';
+				if (!p.model.trim()) errors[`llm_model_${p.id}`] = 'Model is required';
+			}
+		}
 		return errors;
 	});
 	const isValid = $derived(Object.keys(validationErrors).length === 0);
 
 	function discardDraft() {
 		draft = {};
-		apiKeyDraft = '';
+		apiKeyDrafts = {};
 	}
 
 	const saveMutation = createMutation({
@@ -92,6 +101,7 @@
 			const update: Record<string, unknown> = {};
 			for (const [k, v] of Object.entries(draft)) {
 				if (v === undefined) continue;
+				if (k === 'llm_profiles' || k === 'llm_active_id') continue;
 				// Allow false for dry_run; skip empty optional strings only.
 				// agent_hardening_prompt may be emptied to disable hardening.
 				if (v === '' && k !== 'dry_run' && k !== 'agent_hardening_prompt') continue;
@@ -103,7 +113,22 @@
 				}
 				update[k] = v;
 			}
-			if (apiKeyDraft) update.llm_api_key = apiKeyDraft;
+			if (Array.isArray(draft.llm_profiles)) {
+				update.llm_profiles = (draft.llm_profiles as LlmProfile[]).map((p) => {
+					const row: Record<string, unknown> = {
+						id: p.id,
+						name: p.name.trim(),
+						base_url: p.base_url.trim(),
+						model: p.model.trim(),
+					};
+					const key = apiKeyDrafts[p.id];
+					if (key) row.api_key = key;
+					return row;
+				});
+			}
+			if (typeof draft.llm_active_id === 'string' && draft.llm_active_id) {
+				update.llm_active_id = draft.llm_active_id;
+			}
 			return settings.update(update);
 		},
 		onSuccess: (saved) => {
@@ -188,6 +213,80 @@
 		}
 		return s.agent_hardening_prompt ?? '';
 	}
+
+	function llmProfilesFromSettings(s: Settings): LlmProfile[] {
+		if (s.llm_profiles?.length) return s.llm_profiles.map((p) => ({ ...p }));
+		return [
+			{
+				id: s.llm_active_id || 'legacy',
+				name: s.llm_model || 'Default',
+				base_url: s.llm_base_url,
+				model: s.llm_model,
+				api_key: s.llm_api_key,
+			},
+		];
+	}
+
+	function workingProfiles(s: Settings): LlmProfile[] {
+		if (Array.isArray(draft.llm_profiles)) return draft.llm_profiles as LlmProfile[];
+		return llmProfilesFromSettings(s);
+	}
+
+	function workingActiveId(s: Settings): string {
+		if (typeof draft.llm_active_id === 'string' && draft.llm_active_id) {
+			return draft.llm_active_id;
+		}
+		return s.llm_active_id || workingProfiles(s)[0]?.id || '';
+	}
+
+	function ensureLlmDraft(s: Settings) {
+		if (!Array.isArray(draft.llm_profiles)) {
+			draft.llm_profiles = llmProfilesFromSettings(s);
+		}
+		if (typeof draft.llm_active_id !== 'string' || !draft.llm_active_id) {
+			draft.llm_active_id = s.llm_active_id || (draft.llm_profiles as LlmProfile[])[0]?.id;
+		}
+	}
+
+	function patchProfile(s: Settings, id: string, patch: Partial<LlmProfile>) {
+		ensureLlmDraft(s);
+		draft.llm_profiles = (draft.llm_profiles as LlmProfile[]).map((p) =>
+			p.id === id ? { ...p, ...patch } : p,
+		);
+	}
+
+	function setActiveProfile(s: Settings, id: string) {
+		ensureLlmDraft(s);
+		draft.llm_active_id = id;
+	}
+
+	function addProfile(s: Settings) {
+		ensureLlmDraft(s);
+		const id = crypto.randomUUID();
+		draft.llm_profiles = [
+			...(draft.llm_profiles as LlmProfile[]),
+			{
+				id,
+				name: 'New LLM',
+				base_url: 'http://127.0.0.1:11434/v1',
+				model: '',
+				api_key: false,
+			},
+		];
+	}
+
+	function removeProfile(s: Settings, id: string) {
+		ensureLlmDraft(s);
+		const list = (draft.llm_profiles as LlmProfile[]).filter((p) => p.id !== id);
+		if (list.length === 0) return;
+		draft.llm_profiles = list;
+		if (workingActiveId(s) === id) {
+			draft.llm_active_id = list[0].id;
+		}
+		const nextKeys = { ...apiKeyDrafts };
+		delete nextKeys[id];
+		apiKeyDrafts = nextKeys;
+	}
 </script>
 
 <svelte:window onbeforeunload={onBeforeUnload} />
@@ -210,36 +309,112 @@
 				{@const s = $settingsQuery.data}
 				{#if tab === 'llm'}
 					<section class="panel">
-						<h1>LLM</h1>
-						<p class="lead">OpenAI-compatible chat endpoint used for story and script drafting.</p>
-						<label class="field">
-							<span class="field-label">Base URL</span>
-							<input
-								class="field-input"
-								value={String(fieldValue('llm_base_url', s.llm_base_url))}
-								oninput={(e) => (draft.llm_base_url = e.currentTarget.value)}
-								placeholder="http://127.0.0.1:11434/v1"
-							/>
-						</label>
-						<label class="field">
-							<span class="field-label">Model</span>
-							<input
-								class="field-input"
-								value={String(fieldValue('llm_model', s.llm_model))}
-								oninput={(e) => (draft.llm_model = e.currentTarget.value)}
-								placeholder="llama3.2"
-							/>
-						</label>
-						<label class="field">
-							<span class="field-label">API key</span>
-							<input
-								class="field-input"
-								type="password"
-								bind:value={apiKeyDraft}
-								placeholder={s.llm_api_key ? '•••••••• (saved)' : 'Optional for local servers'}
-							/>
-							<p class="field-hint">Stored in local config file, never in the project database.</p>
-						</label>
+						<div class="panel-head">
+							<div>
+								<h1>LLM</h1>
+								<p class="lead">
+									OpenAI-compatible chat endpoints used for story, script, and the agent.
+									Save several, then choose which one Calliope should use.
+								</p>
+							</div>
+							<Button variant="secondary" size="sm" onclick={() => addProfile(s)}>
+								<Icon name="plus" size={14} />
+								Add LLM
+							</Button>
+						</div>
+						{#if validationErrors.llm_profiles}
+							<p class="field-error">{validationErrors.llm_profiles}</p>
+						{/if}
+						<div class="llm-list">
+							{#each workingProfiles(s) as profile (profile.id)}
+								{@const active = workingActiveId(s) === profile.id}
+								<article class="llm-card" class:active>
+									<header class="llm-card-head">
+										<label class="llm-active">
+											<input
+												type="radio"
+												name="llm-active"
+												checked={active}
+												onchange={() => setActiveProfile(s, profile.id)}
+											/>
+											<span>{active ? 'Active' : 'Use this'}</span>
+										</label>
+										{#if workingProfiles(s).length > 1}
+											<Button
+												variant="ghost"
+												size="sm"
+												title="Remove this LLM"
+												onclick={() => removeProfile(s, profile.id)}
+											>
+												<Icon name="trash" size={14} />
+												Remove
+											</Button>
+										{/if}
+									</header>
+									<label class="field">
+										<span class="field-label">Name</span>
+										<input
+											class="field-input"
+											class:invalid={validationErrors[`llm_name_${profile.id}`]}
+											value={profile.name}
+											oninput={(e) => patchProfile(s, profile.id, { name: e.currentTarget.value })}
+											placeholder="Local Ollama"
+										/>
+										{#if validationErrors[`llm_name_${profile.id}`]}
+											<p class="field-error">{validationErrors[`llm_name_${profile.id}`]}</p>
+										{/if}
+									</label>
+									<label class="field">
+										<span class="field-label">Base URL</span>
+										<input
+											class="field-input"
+											class:invalid={validationErrors[`llm_url_${profile.id}`]}
+											value={profile.base_url}
+											oninput={(e) =>
+												patchProfile(s, profile.id, { base_url: e.currentTarget.value })}
+											placeholder="http://127.0.0.1:11434/v1"
+										/>
+										{#if validationErrors[`llm_url_${profile.id}`]}
+											<p class="field-error">{validationErrors[`llm_url_${profile.id}`]}</p>
+										{/if}
+									</label>
+									<label class="field">
+										<span class="field-label">Model</span>
+										<input
+											class="field-input"
+											class:invalid={validationErrors[`llm_model_${profile.id}`]}
+											value={profile.model}
+											oninput={(e) => patchProfile(s, profile.id, { model: e.currentTarget.value })}
+											placeholder="llama3.2"
+										/>
+										{#if validationErrors[`llm_model_${profile.id}`]}
+											<p class="field-error">{validationErrors[`llm_model_${profile.id}`]}</p>
+										{/if}
+									</label>
+									<label class="field">
+										<span class="field-label">API key</span>
+										<input
+											class="field-input"
+											type="password"
+											value={apiKeyDrafts[profile.id] ?? ''}
+											oninput={(e) => {
+												ensureLlmDraft(s);
+												apiKeyDrafts = {
+													...apiKeyDrafts,
+													[profile.id]: e.currentTarget.value,
+												};
+											}}
+											placeholder={profile.api_key
+												? '•••••••• (saved)'
+												: 'Optional for local servers'}
+										/>
+										<p class="field-hint">
+											Stored in local config file, never in the project database.
+										</p>
+									</label>
+								</article>
+							{/each}
+						</div>
 					</section>
 				{:else if tab === 'comfy'}
 					<section class="panel">
@@ -577,5 +752,57 @@
 		margin: 6px 0 0;
 		font-size: 12px;
 		color: var(--error);
+	}
+	.panel-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: var(--space-md);
+		margin-bottom: var(--space-md);
+	}
+	.panel-head h1,
+	.panel-head .lead {
+		margin-bottom: 0;
+	}
+	.panel-head .lead {
+		margin-top: 6px;
+	}
+	.llm-list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-md);
+	}
+	.llm-card {
+		padding: 14px 16px 4px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: var(--radius-md);
+		background: rgba(0, 0, 0, 0.18);
+	}
+	.llm-card.active {
+		border-color: rgba(139, 92, 246, 0.45);
+		background: rgba(139, 92, 246, 0.08);
+	}
+	.llm-card-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: var(--space-sm);
+	}
+	.llm-active {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+	.llm-card.active .llm-active {
+		color: var(--accent);
+	}
+	.llm-active input {
+		width: auto;
+		accent-color: var(--accent);
 	}
 </style>
