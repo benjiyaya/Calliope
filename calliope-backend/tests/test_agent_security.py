@@ -1860,3 +1860,101 @@ def test_assets_role_has_editors_and_they_resolve():
     ctx = ToolContext(session_id=9_999_003, project_id=99)
     names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["assets"])}
     assert {"update_character", "update_location", "update_item", "get_workspace"} <= names
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Append gating + beat CRUD
+# (Observed live 2026-08-25: an unconfirmed generate_story replace=false
+# silently APPENDED a duplicate 25-beat set — 25 -> 50 beats — because the
+# guard only gated replace=true; and with no beat editors, bulk regeneration
+# was the sub-agent's only lever for "align the beats to this story".)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_guard_blocks_append_on_nonempty_project(client):
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Append Film")
+    client.post(f"/api/projects/{pid}/scenes", json={"heading": "S1", "order_index": 1})
+    ctx = ToolContext(session_id=_mk_session(), project_id=pid)
+
+    out = asyncio.run(registry.execute(ctx, "generate_story", {"replace": False}))
+    assert out["ok"] is False
+    assert "APPEND" in out["error"]
+    assert "granular tools" in out["error"]
+
+
+def test_guard_allows_append_after_user_confirms(client):
+    pid = _mk_project(client, "Append OK Film")
+    client.post(f"/api/projects/{pid}/scenes", json={"heading": "S1", "order_index": 1})
+    sid = _mk_session(pid)
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "yes, append the new beats"}
+    )
+    reg = _guard_registry()
+    out = asyncio.run(
+        reg.execute(ToolContext(session_id=sid, project_id=pid), "bulk_replace", {"replace": False})
+    )
+    assert "blocked:" not in str(out.get("error", ""))
+
+
+def test_beat_crud_round_trip(client):
+    from calliope.agent.harness.tools import execute_tool
+
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Beat Film")
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    # Append two, then insert one at position 2 — later beats shift down.
+    a = asyncio.run(execute_tool(ctx, "add_beat", {"title": "Open", "description": "a"}))
+    b = asyncio.run(execute_tool(ctx, "add_beat", {"title": "End", "description": "c"}))
+    assert (a["beat"]["order_index"], b["beat"]["order_index"]) == (1, 2)
+    m = asyncio.run(
+        execute_tool(ctx, "add_beat", {"title": "Turn", "description": "b", "order_index": 2})
+    )
+    assert m["beat"]["order_index"] == 2
+
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT order_index, title FROM story_beats WHERE project_id = ? ORDER BY order_index",
+            (pid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(r["order_index"], r["title"]) for r in rows] == [
+        (1, "Open"), (2, "Turn"), (3, "End"),
+    ]
+
+    # Update content + reject foreign/unknown ids.
+    out = asyncio.run(
+        execute_tool(ctx, "update_beat", {"beat_id": m["beat"]["id"], "description": "the turn"})
+    )
+    assert out["beat"]["description"] == "the turn"
+    out = asyncio.run(execute_tool(ctx, "update_beat", {"beat_id": 999999}))
+    assert out["ok"] is False
+
+    # Delete the middle beat — the gap closes.
+    out = asyncio.run(execute_tool(ctx, "delete_beat", {"beat_id": m["beat"]["id"]}))
+    assert out["ok"] is True
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT order_index, title FROM story_beats WHERE project_id = ? ORDER BY order_index",
+            (pid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(r["order_index"], r["title"]) for r in rows] == [(1, "Open"), (2, "End")]
+
+
+def test_story_role_has_beat_editors():
+    from calliope.agent.harness.orchestrator import ROLE_TOOLS, _scoped_payload
+
+    for tool in ("add_beat", "update_beat", "delete_beat"):
+        assert tool in ROLE_TOOLS["story"]
+    ctx = ToolContext(session_id=9_999_004, project_id=99)
+    names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["story"])}
+    assert {"add_beat", "update_beat"} <= names
+    # delete_beat is destructive but not approval-gated; it should resolve too
+    assert "delete_beat" in names

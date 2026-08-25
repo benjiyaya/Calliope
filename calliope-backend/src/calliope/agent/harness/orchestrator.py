@@ -32,7 +32,15 @@ MAX_HISTORY_USER_TURNS = 40
 # Tool subsets per sub-agent role. Scoped tighter than the full registry so a
 # sub-agent cannot wander into another role's tools.
 ROLE_TOOLS: dict[str, list[str]] = {
-    "story": ["get_workspace", "get_story", "generate_story", "list_workflows"],
+    "story": [
+        "get_workspace",
+        "get_story",
+        "generate_story",
+        "add_beat",
+        "update_beat",
+        "delete_beat",
+        "list_workflows",
+    ],
     "script": [
         "get_workspace",
         "list_scenes",

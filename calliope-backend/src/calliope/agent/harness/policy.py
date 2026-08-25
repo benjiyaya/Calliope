@@ -14,7 +14,7 @@ from calliope.agent.harness.registry import ToolContext
 # (or "replace it" / "start over") for the destructive guard.
 _CONFIRM_RE = re.compile(
     r"\b(yes|yeah|yep|yup|sure|ok|okay|k|confirm(?:ed)?|proceed|"
-    r"go\s+ahead|do\s+it|please\s+do|overwrite|replace|regenerate|"
+    r"go\s+ahead|do\s+it|please\s+do|overwrite|replace|append|regenerate|"
     r"redo|re-?do|start\s+over|restart|delete|wipe|reset|from\s+scratch|"
     r"go\s+for\s+it|fine|sounds\s+good|that'?s\s+fine)\b",
     re.IGNORECASE,
