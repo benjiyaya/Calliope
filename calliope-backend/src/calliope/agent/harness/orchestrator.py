@@ -296,7 +296,14 @@ async def orchestrate(
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            results.append(f"[{role}] FAILED: {exc}")
+            # Some exceptions stringify EMPTY (httpx.ReadTimeout/ReadError,
+            # TimeoutError) — always name the type, and keep the traceback
+            # (observed live 2026-08-25: "Sub-agent failed: " with nothing
+            # after the colon, because a deploy restart killed the in-flight
+            # stream and the ReadError carried no message).
+            logger.exception("Sub-agent %s failed", role)
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            results.append(f"[{role}] FAILED: {detail}")
             session_log.append_event(
                 session_id,
                 session_log.TASK_END,
@@ -309,7 +316,7 @@ async def orchestrate(
                 session_id,
                 session_log.ASSISTANT_MESSAGE,
                 {
-                    "content": f"Sub-agent failed: {exc}",
+                    "content": f"Sub-agent failed: {detail}",
                     "agent_name": f"{role}-agent",
                     "status": "error",
                 },
@@ -318,7 +325,7 @@ async def orchestrate(
                 {
                     "role": "assistant",
                     "agent_name": f"{role}-agent",
-                    "content": f"Sub-agent failed: {exc}",
+                    "content": f"Sub-agent failed: {detail}",
                     "status": "error",
                 }
             )
