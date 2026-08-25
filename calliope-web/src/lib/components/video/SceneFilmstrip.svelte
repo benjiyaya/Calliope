@@ -81,7 +81,7 @@
 						<img class="thumb-media" src={thumb.src} alt="" loading="lazy" />
 					{:else if thumb?.kind === 'video'}
 						<!-- svelte-ignore a11y_media_has_caption -->
-						<video class="thumb-media" src={thumb.src} muted playsinline preload="metadata"></video>
+						<video class="thumb-media" src={thumb.src + '#t=0.1'} muted playsinline preload="metadata"></video>
 					{:else}
 						<span class="thumb-slate">#{scene.order_index}</span>
 					{/if}
