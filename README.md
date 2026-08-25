@@ -1,3 +1,10 @@
+# Extension and changes to the original Benji’s Calliope
+## Settings
+### LLM endpoints
+
+**Settings → LLM** stores a list of OpenAI-compatible chat endpoints (local or hosted). Add as many as you want — for example a local Ollama model and a cloud API — then select **Use this** on the one Calliope should use for story, script, and the agent. Only the **Active** endpoint is used until you switch and save. API keys stay in `calliope_config.json`, not in the project database.
+
+The Original Description:
 # Calliope
 
 Calliope is a local-first story-to-video studio. You type a story idea; Calliope drafts a storyline with beats, characters, and locations, writes a per-scene script, then generates a video clip per scene by driving your own ComfyUI install. When the clips are done, one click stitches them into a finished film with crossfades and matched loudness (ffmpeg). Everything runs on your machine: projects live in SQLite, media lives in folders, and no cloud service is involved beyond the LLM endpoint you point it at.
@@ -50,10 +57,6 @@ Open the app, go to **Settings**, and set:
 2. **ComfyUI** — the base URL of your running ComfyUI (e.g. `http://127.0.0.1:8188`)
 
 Leave **Dry-run** off — it is meant for testing and produces placeholder results instead of real generations.
-
-### LLM endpoints
-
-**Settings → LLM** stores a list of OpenAI-compatible chat endpoints (local or hosted). Add as many as you want — for example a local Ollama model and a cloud API — then select **Use this** on the one Calliope should use for story, script, and the agent. Only the **Active** endpoint is used until you switch and save. API keys stay in `calliope_config.json`, not in the project database.
 
 ### Queue settings
 
