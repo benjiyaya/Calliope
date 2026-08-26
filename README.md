@@ -1,10 +1,3 @@
-# Extension and changes to the original Benji’s Calliope
-## Settings
-### LLM endpoints
-
-**Settings → LLM** stores a list of OpenAI-compatible chat endpoints (local or hosted). Add as many as you want — for example a local Ollama model and a cloud API — then select **Use this** on the one Calliope should use for story, script, and the agent. Only the **Active** endpoint is used until you switch and save. API keys stay in `calliope_config.json`, not in the project database.
-
-The Original Description:
 # Calliope
 
 Calliope is a local-first story-to-video studio. You type a story idea; Calliope drafts a storyline with beats, characters, and locations, writes a per-scene script, then generates a video clip per scene by driving your own ComfyUI install. When the clips are done, one click stitches them into a finished film with crossfades and matched loudness (ffmpeg). Everything runs on your machine: projects live in SQLite, media lives in folders, and no cloud service is involved beyond the LLM endpoint you point it at.
@@ -37,7 +30,7 @@ python -m venv .venv
 .venv\Scripts\python -m calliope.main --host 127.0.0.1 --port 8247
 ```
 
-Optionally copy `calliope_config.example.json` to `calliope_config.json` and edit it before starting (LLM endpoints, ComfyUI URL). You can also configure everything later in the app's **Settings** page. Never commit `calliope_config.json` — it stores your API keys.
+Optionally copy `calliope_config.example.json` to `calliope_config.json` and edit it before starting (LLM endpoint, ComfyUI URL). You can also configure everything later in the app's **Settings** page. Never commit `calliope_config.json` — it stores your API key.
 
 **2. Frontend (SvelteKit)**
 
@@ -53,7 +46,7 @@ Open `http://127.0.0.1:5173`. The dev server proxies `/api` to the backend on `1
 
 Open the app, go to **Settings**, and set:
 
-1. **LLM** — add one or more OpenAI-compatible endpoints (base URL, model, API key) and mark which one is **Active**
+1. **LLM** — base URL, model name, and API key of your OpenAI-compatible endpoint
 2. **ComfyUI** — the base URL of your running ComfyUI (e.g. `http://127.0.0.1:8188`)
 
 Leave **Dry-run** off — it is meant for testing and produces placeholder results instead of real generations.
