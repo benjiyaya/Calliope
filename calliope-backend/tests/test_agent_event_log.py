@@ -298,12 +298,16 @@ def test_destructive_guard_blocks_replace_on_nonempty_project(client):
     )
     assert out["ok"] is False
     assert "blocked:" in out["error"]
-    assert "replace=false" in out["error"]
+    # The old message suggested "pass replace=false" as the escape — that
+    # advice caused a silent beat-doubling (2026-08-25), so append is now
+    # gated too and the message points at the granular tools instead.
+    assert "granular tools" in out["error"]
 
-    # replace=false passes the guard (then may fail later for other reasons —
-    # but NOT with a "blocked:" error).
+    # replace=false on a NON-EMPTY project is also blocked now (it would
+    # append a duplicate full set), with its own explanatory message.
     out2 = asyncio.run(registry.execute(ctx, "generate_story", {"replace": False}))
-    assert "blocked:" not in str(out2.get("error", ""))
+    assert out2["ok"] is False
+    assert "APPEND" in out2["error"]
 
 
 def test_destructive_guard_allows_empty_project(client):

@@ -38,7 +38,10 @@
 	}: Props = $props();
 
 	let errorOpen = $state(false);
-	const previewUrl = $derived(previewPath ? assetUrl(previewPath) : null);
+	// '#t=0.1' media fragment: with preload="metadata" browsers paint NOTHING
+	// until playback, so every clip preview sat black ("no picture, but sound").
+	// The fragment makes the browser seek+paint a first frame without playing.
+	const previewUrl = $derived(previewPath ? assetUrl(previewPath) + '#t=0.1' : null);
 
 	$effect(() => {
 		void previewPath;

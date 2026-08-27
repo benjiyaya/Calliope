@@ -66,6 +66,9 @@ def test_openai_payload_scoping():
     assert "create_project" not in linked_names
     assert "link_project" not in linked_names
     assert "generate_story" in linked_names
+    # unlink_project is the way back: linked-only, hidden in sandbox
+    assert "unlink_project" in linked_names
+    assert "unlink_project" not in blind_names
 
 
 def test_execute_tool_unknown_and_unscoped():
@@ -682,3 +685,53 @@ def test_bulk_video_policy_phrases():
     assert allows_bulk_video_enqueue("yes", 24) is False
     assert allows_bulk_video_enqueue("generate all scenes", 24) is True
     assert allows_bulk_video_enqueue("do every clip", 10) is True
+
+
+def test_sub_agent_failure_names_empty_str_exception(client):
+    """An exception whose str() is EMPTY must still be identifiable in the
+    failure message and event log. Observed live 2026-08-25: 'Sub-agent
+    failed: ' with nothing after the colon — an httpx.ReadError('') raised
+    when a deploy restart killed the in-flight stream."""
+    import httpx
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    r = client.post("/api/agent/sessions", json={"title": "crash-detail"})
+    sid = r.json()["id"]
+    pid = _make_project(client)
+
+    class _SwarmPlanClient:
+        async def chat(self, messages, temperature=0.2, **kw):
+            return json.dumps(
+                {
+                    "mode": "swarm",
+                    "note": "plan",
+                    "tasks": [{"role": "assets", "goal": "update text assets"}],
+                }
+            )
+
+        async def close(self):
+            return None
+
+    async def dying_sub_agent(ctx, sub_history, allowed, *, agent_name, on_message=None, **kw):
+        raise httpx.ReadError("")
+
+    orig_client = orch.LLMClient
+    orig_sub = orch._run_sub_agent
+    orch.LLMClient = lambda: _SwarmPlanClient()
+    orch._run_sub_agent = dying_sub_agent
+    try:
+        ctx = ToolContext(session_id=sid, project_id=pid)
+        asyncio.run(orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch._run_sub_agent = orig_sub
+
+    events = session_log.read_events(sid)
+    fails = [
+        e.data for e in events
+        if e.type == session_log.ASSISTANT_MESSAGE
+        and str(e.data.get("content", "")).startswith("Sub-agent failed:")
+    ]
+    assert fails, "no failure message recorded"
+    assert "ReadError" in fails[0]["content"]

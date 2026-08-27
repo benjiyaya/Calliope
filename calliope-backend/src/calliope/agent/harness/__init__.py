@@ -85,10 +85,11 @@ def _destructive_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> PreEx
     if not has_replace_param:
         return allow()
     replace = bool(args.get("replace", True))
-    if not replace:
-        return allow()
-    # Destructive path: only allow when the project is effectively empty, or
-    # the user explicitly confirmed.
+    # BOTH modes are gated on a non-empty project: replace=true deletes the
+    # existing content, and replace=false APPENDS a second full set alongside
+    # it (observed live 2026-08-25: an unconfirmed replace=false generate_story
+    # silently doubled a project's beats, 25 -> 50). Only allow when the
+    # project is effectively empty, or the user explicitly confirmed.
     from calliope.agent.harness.registry import _db
 
     if ctx.project_id is None:
@@ -117,11 +118,25 @@ def _destructive_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> PreEx
         return allow()
     if _user_confirmed_replacement(ctx):
         return allow()
-    return deny(
+    counts = (
         f"Project #{ctx.project_id} already has content ({scenes} scenes, {beats} beats, "
-        f"{chars} characters, {locs} locations, {items} items). Ask the user to confirm before replacing; "
-        "once they confirm (e.g. 'yes, replace'), call this tool again. "
-        "To append instead, pass replace=false."
+        f"{chars} characters, {locs} locations, {items} items)."
+    )
+    if replace:
+        return deny(
+            counts + " replace=true DELETES all of it first. Ask the user to "
+            "confirm before replacing; once they confirm (e.g. 'yes, replace'), "
+            "call this tool again. For targeted changes use the granular tools "
+            "instead (add/update/delete for beats, characters, locations, "
+            "items, scenes)."
+        )
+    return deny(
+        counts + " replace=false would APPEND a second full set alongside the "
+        "existing content (e.g. doubling the beat list) — usually wrong. Ask "
+        "the user to confirm before appending; once they confirm (e.g. 'yes, "
+        "append'), call this tool again. For targeted changes use the granular "
+        "tools instead (add/update/delete for beats, characters, locations, "
+        "items, scenes)."
     )
 
 

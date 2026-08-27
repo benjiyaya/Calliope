@@ -37,6 +37,16 @@ TASK_START = "task/start"
 TASK_END = "task/end"
 
 TOOL_RESULT_TRUNCATE = 4000
+# Appended wherever a tool result is cut for the LLM. Must TEACH the way out —
+# a bare "[truncated]" sends agents into retry loops hoping for a different
+# cut (observed live 2026-08-24: an assets sub-agent re-called get_workspace
+# repeatedly, blind to characters/locations below the cut).
+TRUNCATE_NOTE = (
+    "…[truncated — the full result is too large for one reply. Fetch a "
+    "smaller slice instead of retrying: get_workspace accepts "
+    "sections=[\"characters\",\"locations\",\"items\",\"beats\",\"scenes\"], "
+    "and scoped tools (get_story, list_scenes) return less.]"
+)
 
 # Cap for ANY single event payload at append time: keeps the append-only log
 # faithful in shape but bounded in size (a 500 KB tool result would otherwise
@@ -311,7 +321,7 @@ def derive_llm_history(
 def _truncate_result(result: Any) -> str:
     text = json.dumps(result, ensure_ascii=False, default=str)
     if len(text) > TOOL_RESULT_TRUNCATE:
-        return text[:TOOL_RESULT_TRUNCATE] + "…[truncated]"
+        return text[:TOOL_RESULT_TRUNCATE] + TRUNCATE_NOTE
     return text
 
 

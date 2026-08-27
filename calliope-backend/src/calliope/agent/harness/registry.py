@@ -161,7 +161,13 @@ class ToolRegistry:
                 "error": "This tool requires a linked project. Create one with create_project first.",
             }
         if t.blind_only and ctx.project_id is not None:
-            return {"ok": False, "error": "This tool is only available in a sandbox (unlinked) session."}
+            return {
+                "ok": False,
+                "error": (
+                    "This tool is only available in a sandbox (unlinked) session. "
+                    "Call unlink_project first to return this session to sandbox."
+                ),
+            }
 
         decision = ALLOW
         for hook in self.pre_execute:
