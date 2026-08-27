@@ -242,7 +242,7 @@ async def run_turn(
                 )
                 result_text = json.dumps(result, ensure_ascii=False, default=str)
                 if len(result_text) > session_log.TOOL_RESULT_TRUNCATE:
-                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + "…[truncated]"
+                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + session_log.TRUNCATE_NOTE
                 messages.append(
                     {
                         "role": "tool",

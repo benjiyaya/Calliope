@@ -32,7 +32,15 @@ MAX_HISTORY_USER_TURNS = 40
 # Tool subsets per sub-agent role. Scoped tighter than the full registry so a
 # sub-agent cannot wander into another role's tools.
 ROLE_TOOLS: dict[str, list[str]] = {
-    "story": ["get_workspace", "get_story", "generate_story", "list_workflows"],
+    "story": [
+        "get_workspace",
+        "get_story",
+        "generate_story",
+        "add_beat",
+        "update_beat",
+        "delete_beat",
+        "list_workflows",
+    ],
     "script": [
         "get_workspace",
         "list_scenes",
@@ -44,6 +52,9 @@ ROLE_TOOLS: dict[str, list[str]] = {
     ],
     "assets": [
         "get_workspace",
+        "update_character",
+        "update_location",
+        "update_item",
         "list_workflows",
         "comfy_server_info",
         "run_workflow",
@@ -285,7 +296,14 @@ async def orchestrate(
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            results.append(f"[{role}] FAILED: {exc}")
+            # Some exceptions stringify EMPTY (httpx.ReadTimeout/ReadError,
+            # TimeoutError) — always name the type, and keep the traceback
+            # (observed live 2026-08-25: "Sub-agent failed: " with nothing
+            # after the colon, because a deploy restart killed the in-flight
+            # stream and the ReadError carried no message).
+            logger.exception("Sub-agent %s failed", role)
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            results.append(f"[{role}] FAILED: {detail}")
             session_log.append_event(
                 session_id,
                 session_log.TASK_END,
@@ -298,7 +316,7 @@ async def orchestrate(
                 session_id,
                 session_log.ASSISTANT_MESSAGE,
                 {
-                    "content": f"Sub-agent failed: {exc}",
+                    "content": f"Sub-agent failed: {detail}",
                     "agent_name": f"{role}-agent",
                     "status": "error",
                 },
@@ -307,7 +325,7 @@ async def orchestrate(
                 {
                     "role": "assistant",
                     "agent_name": f"{role}-agent",
-                    "content": f"Sub-agent failed: {exc}",
+                    "content": f"Sub-agent failed: {detail}",
                     "status": "error",
                 }
             )
@@ -471,7 +489,7 @@ async def _run_sub_agent(
                 )
                 result_text = json.dumps(result, ensure_ascii=False, default=str)
                 if len(result_text) > session_log.TOOL_RESULT_TRUNCATE:
-                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + "…[truncated]"
+                    result_text = result_text[: session_log.TOOL_RESULT_TRUNCATE] + session_log.TRUNCATE_NOTE
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": result_text}
                 )

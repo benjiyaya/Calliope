@@ -21,11 +21,35 @@ def register(registry: ToolRegistry) -> None:
             name="get_workspace",
             description=(
                 "Get the current workspace: session linkage and, when linked, "
-                "the project with story beats, characters, locations, scenes, "
-                "and stats. ALWAYS call this before editing anything or when "
-                "you need current ids/counts."
+                "the project with story beats, characters, locations, items, "
+                "scenes, and stats. ALWAYS call this before editing anything or "
+                "when you need current ids/counts. On a LARGE project the full "
+                "result gets truncated — pass sections (e.g. "
+                "[\"characters\",\"locations\",\"items\"]) to fetch only what "
+                "you need; project + stats are always included."
             ),
-            parameters={"type": "object", "properties": {}},
+            parameters={
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "beats",
+                                "characters",
+                                "locations",
+                                "items",
+                                "scenes",
+                            ],
+                        },
+                        "description": (
+                            "Which sections to include. Omit for all — but on "
+                            "large projects prefer only the sections you need."
+                        ),
+                    }
+                },
+            },
             executor=t_get_workspace,
             requires_project=False,
             category="workspace",
@@ -37,7 +61,8 @@ def register(registry: ToolRegistry) -> None:
             description=(
                 "Link this sandbox session to an EXISTING project (call "
                 "list_projects first to get valid ids). Only possible while the "
-                "session is not yet linked — do NOT create a duplicate project "
+                "session is not yet linked — to switch projects, call "
+                "unlink_project first. Do NOT create a duplicate project "
                 "when one already matches."
             ),
             parameters={
@@ -53,6 +78,21 @@ def register(registry: ToolRegistry) -> None:
             executor=t_link_project,
             requires_project=False,
             blind_only=True,
+            category="workspace",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="unlink_project",
+            description=(
+                "Detach this session from its linked project and return to "
+                "sandbox mode. The project and all its content are untouched — "
+                "only the session binding is cleared. Use this when the user "
+                "wants a NEW project (then create_project) or a DIFFERENT "
+                "existing one (then link_project). Not available in sandbox."
+            ),
+            parameters={"type": "object", "properties": {}},
+            executor=t_unlink_project,
             category="workspace",
         )
     )
@@ -127,6 +167,9 @@ def register(registry: ToolRegistry) -> None:
     )
 
 
+_WS_SECTIONS = ("beats", "characters", "locations", "items", "scenes")
+
+
 # ── executors ───────────────────────────────────────────────────
 
 
@@ -154,6 +197,16 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
             out["mode"] = "sandbox"
             out["hint"] = "Linked project no longer exists."
             return out
+        requested = args.get("sections")
+        if requested:
+            wanted = {sec for sec in requested if sec in _WS_SECTIONS}
+            if not wanted:
+                return {
+                    "ok": False,
+                    "error": f"No valid sections in {requested!r}; valid: {sorted(_WS_SECTIONS)}",
+                }
+        else:
+            wanted = set(_WS_SECTIONS)
         beats = [
             row_to_dict(r)
             for r in conn.execute(
@@ -161,7 +214,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "WHERE project_id = ? ORDER BY order_index",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "beats" in wanted else None
         characters = [
             row_to_dict(r)
             for r in conn.execute(
@@ -169,7 +222,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "sheet_path, consistency_prompt FROM characters WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "characters" in wanted else None
         locations = [
             row_to_dict(r)
             for r in conn.execute(
@@ -177,7 +230,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "FROM locations WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "locations" in wanted else None
         items = [
             row_to_dict(r)
             for r in conn.execute(
@@ -185,7 +238,7 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "FROM items WHERE project_id = ?",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "items" in wanted else None
         scenes = [
             row_to_dict(r)
             for r in conn.execute(
@@ -193,15 +246,21 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "location_id, video_path FROM scenes WHERE project_id = ? ORDER BY order_index",
                 (ctx.project_id,),
             ).fetchall()
-        ]
+        ] if "scenes" in wanted else None
         out["mode"] = "linked"
         out["project"] = project
         out["stats"] = _project_stats(ctx.project_id, conn)
-        out["beats"] = beats
-        out["characters"] = characters
-        out["locations"] = locations
-        out["items"] = items
-        out["scenes"] = scenes
+        for key, value in (
+            ("beats", beats),
+            ("characters", characters),
+            ("locations", locations),
+            ("items", items),
+            ("scenes", scenes),
+        ):
+            if value is not None:
+                out[key] = value
+        if len(wanted) < len(_WS_SECTIONS):
+            out["sections_omitted"] = sorted(set(_WS_SECTIONS) - wanted)
         return out
     finally:
         conn.close()
@@ -226,6 +285,29 @@ async def t_link_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     ctx.project_id = pid
     await publish_session_updated(ctx.session_id)
     return {"ok": True, "project_id": pid, "title": project["title"]}
+
+
+async def t_unlink_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    released_id = ctx.project_id
+    conn = _db()
+    try:
+        project = _project_or_error(conn, released_id)
+        conn.execute(
+            "UPDATE agent_sessions SET project_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (ctx.session_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    ctx.project_id = None
+    await publish_session_updated(ctx.session_id)
+    return {
+        "ok": True,
+        "released_project_id": released_id,
+        "released_title": (project or {}).get("title"),
+        "mode": "sandbox",
+        "hint": "Session is back in sandbox — create_project and link_project are available again.",
+    }
 
 
 _TITLE_MAX = 200  # mirrors ProjectCreate/ProjectUpdate schema bounds

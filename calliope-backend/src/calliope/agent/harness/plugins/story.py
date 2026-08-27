@@ -52,6 +52,182 @@ def register(registry: ToolRegistry) -> None:
         )
     )
     _register_asset_crud(registry)
+    _register_beat_crud(registry)
+
+
+def _register_beat_crud(registry: ToolRegistry) -> None:
+    """Register add/update/delete tools for story beats.
+
+    Before these existed, beats could ONLY be changed via generate_story —
+    a bulk regenerate — so "align the beats to this story" left an agent no
+    non-destructive path (observed live 2026-08-25: a story sub-agent, boxed
+    in, appended a duplicate 25-beat set and then hit the destructive guard).
+    """
+    registry.register(
+        ToolDefinition(
+            name="add_beat",
+            description=(
+                "Insert one story beat. title is required. order_index is the "
+                "1-based timeline position — later beats shift down to make "
+                "room; omit it to append at the end."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "order_index": {
+                        "type": "integer",
+                        "description": "1-based position; omit to append at the end",
+                    },
+                },
+                "required": ["title"],
+            },
+            executor=t_add_beat,
+            category="story",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="update_beat",
+            description=(
+                "Update one existing story beat. beat_id must come from "
+                "get_story/get_workspace — never guess it. Pass only the fields "
+                "to change (title, description, order_index)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "beat_id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "order_index": {"type": "integer"},
+                },
+                "required": ["beat_id"],
+            },
+            executor=t_update_beat,
+            category="story",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="delete_beat",
+            description=(
+                "Delete one story beat permanently; later beats renumber to "
+                "close the gap. beat_id must come from get_story/get_workspace. "
+                "Prefer update_beat for content changes."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"beat_id": {"type": "integer"}},
+                "required": ["beat_id"],
+            },
+            executor=t_delete_beat,
+            category="story",
+            destructive=True,
+        )
+    )
+
+
+async def t_add_beat(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    title = args.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return {"ok": False, "error": "title is required (non-empty string)"}
+    conn = _db()
+    try:
+        max_idx = conn.execute(
+            "SELECT COALESCE(MAX(order_index), 0) AS m FROM story_beats WHERE project_id = ?",
+            (ctx.project_id,),
+        ).fetchone()["m"]
+        idx = args.get("order_index")
+        idx = int(idx) if idx is not None else max_idx + 1
+        idx = max(1, min(idx, max_idx + 1))
+        conn.execute(
+            "UPDATE story_beats SET order_index = order_index + 1 "
+            "WHERE project_id = ? AND order_index >= ?",
+            (ctx.project_id, idx),
+        )
+        cur = conn.execute(
+            "INSERT INTO story_beats (project_id, order_index, title, description) "
+            "VALUES (?, ?, ?, ?)",
+            (ctx.project_id, idx, title.strip(), args.get("description")),
+        )
+        conn.execute(
+            "UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (ctx.project_id,),
+        )
+        conn.commit()
+        beat = conn.execute(
+            "SELECT * FROM story_beats WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        return {"ok": True, "beat": row_to_dict(beat)}
+    finally:
+        conn.close()
+
+
+async def t_update_beat(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    bid = int(args["beat_id"])
+    data = {
+        k: v
+        for k, v in args.items()
+        if k in ("title", "description", "order_index") and v is not None
+    }
+    if "title" in data and not str(data["title"]).strip():
+        data.pop("title")
+    conn = _db()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM story_beats WHERE id = ? AND project_id = ?",
+            (bid, ctx.project_id),
+        ).fetchone()
+        if not existing:
+            return {"ok": False, "error": f"Beat {bid} not found in this project"}
+        if data:
+            fields = ", ".join(f"{k} = :{k}" for k in data)
+            conn.execute(
+                f"UPDATE story_beats SET {fields} WHERE id = :id AND project_id = :project_id",
+                {**data, "id": bid, "project_id": ctx.project_id},
+            )
+            conn.execute(
+                "UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (ctx.project_id,),
+            )
+            conn.commit()
+        beat = conn.execute(
+            "SELECT * FROM story_beats WHERE id = ?", (bid,)
+        ).fetchone()
+        return {"ok": True, "beat": row_to_dict(beat)}
+    finally:
+        conn.close()
+
+
+async def t_delete_beat(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    bid = int(args["beat_id"])
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT order_index FROM story_beats WHERE id = ? AND project_id = ?",
+            (bid, ctx.project_id),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"Beat {bid} not found in this project"}
+        conn.execute(
+            "DELETE FROM story_beats WHERE id = ? AND project_id = ?",
+            (bid, ctx.project_id),
+        )
+        conn.execute(
+            "UPDATE story_beats SET order_index = order_index - 1 "
+            "WHERE project_id = ? AND order_index > ?",
+            (ctx.project_id, row["order_index"]),
+        )
+        conn.execute(
+            "UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (ctx.project_id,),
+        )
+        conn.commit()
+        return {"ok": True, "deleted_beat_id": bid}
+    finally:
+        conn.close()
 
 
 def _register_asset_crud(registry: ToolRegistry) -> None:

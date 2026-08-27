@@ -1727,3 +1727,234 @@ def test_concurrent_start_turn_single_winner(client):
     results = aio.run(scenario())
     assert sorted(results) == ["ok", "rejected"], results
 
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# unlink_project: the way out of the linked-session one-way door
+# (Observed live 2026-08-24, session 82: a linked agent burned three failed
+# tool calls trying to create a fresh project — create_project and
+# link_project are sandbox-only and no unlink existed.)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_unlink_project_round_trip(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    pid = _mk_project(client, "Original Film")
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    # 1. Linked session: create_project is blocked, and the error now says how
+    #    to get out.
+    out = asyncio.run(execute_tool(ctx, "create_project", {"title": "Fresh", "idea": "x"}))
+    assert out["ok"] is False
+    assert "unlink_project" in out["error"]
+
+    # 2. unlink: binding cleared, project untouched.
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is True
+    assert out["released_project_id"] == pid
+    assert ctx.project_id is None
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT project_id FROM agent_sessions WHERE id = ?", (sid,)
+        ).fetchone()
+        assert row["project_id"] is None
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM projects WHERE id = ?", (pid,)
+        ).fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+    # 3. Sandbox again: create_project now works and auto-links.
+    out = asyncio.run(execute_tool(ctx, "create_project", {"title": "Fresh", "idea": "x"}))
+    assert out["ok"] is True
+    assert ctx.project_id == out["project"]["id"]
+    assert ctx.project_id != pid
+
+    # 4. And the session can come back to the original via unlink + link.
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is True
+    out = asyncio.run(execute_tool(ctx, "link_project", {"project_id": pid}))
+    assert out["ok"] is True
+    assert ctx.project_id == pid
+
+
+def test_unlink_project_requires_linked_session(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    sid = _mk_session(project_id=None)
+    ctx = ToolContext(session_id=sid, project_id=None)
+    out = asyncio.run(execute_tool(ctx, "unlink_project", {}))
+    assert out["ok"] is False
+    assert "requires a linked project" in out["error"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# get_workspace sections + teaching truncation + assets-role editors
+# (Observed live 2026-08-25: on a 43-scene project the assets sub-agent's
+# get_workspace result truncated mid-beats, hiding characters/locations/items
+# entirely; it retried in a loop and had no editor tools anyway.)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_get_workspace_sections_scoped_fetch(client):
+    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.harness.tools import execute_tool
+
+    pid = _mk_project(client, "Sectioned")
+    conn = get_db(settings.db_path)
+    try:
+        conn.execute(
+            "INSERT INTO characters (project_id, name, role) VALUES (?, ?, ?)",
+            (pid, "Mia", "lead"),
+        )
+        conn.execute(
+            "INSERT INTO story_beats (project_id, order_index, title, description) "
+            "VALUES (?, 1, 'Open', 'a')",
+            (pid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {"sections": ["characters"]}))
+    assert out["mode"] == "linked"
+    assert [c["name"] for c in out["characters"]] == ["Mia"]
+    assert "beats" not in out and "scenes" not in out
+    assert "beats" in out["sections_omitted"]
+    assert "stats" in out and "project" in out  # always included
+
+    # No sections -> everything (back-compat)
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {}))
+    for key in ("beats", "characters", "locations", "items", "scenes"):
+        assert key in out
+    assert "sections_omitted" not in out
+
+    # Garbage sections -> explicit error, not a silent full fetch
+    out = asyncio.run(execute_tool(ctx, "get_workspace", {"sections": ["bogus"]}))
+    assert out["ok"] is False
+    assert "valid" in out["error"]
+
+
+def test_truncation_note_teaches_scoped_fetch():
+    from calliope.agent.harness import log as session_log
+
+    big = {"blob": "x" * (session_log.TOOL_RESULT_TRUNCATE + 100)}
+    text = session_log._truncate_result(big)
+    assert "sections=" in text
+    assert len(text) < session_log.TOOL_RESULT_TRUNCATE + len(session_log.TRUNCATE_NOTE) + 1
+
+
+def test_assets_role_has_editors_and_they_resolve():
+    from calliope.agent.harness.orchestrator import ROLE_TOOLS, _scoped_payload
+    from calliope.agent.harness.registry import ToolContext
+
+    for tool in ("update_character", "update_location", "update_item"):
+        assert tool in ROLE_TOOLS["assets"]
+    ctx = ToolContext(session_id=9_999_003, project_id=99)
+    names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["assets"])}
+    assert {"update_character", "update_location", "update_item", "get_workspace"} <= names
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Append gating + beat CRUD
+# (Observed live 2026-08-25: an unconfirmed generate_story replace=false
+# silently APPENDED a duplicate 25-beat set — 25 -> 50 beats — because the
+# guard only gated replace=true; and with no beat editors, bulk regeneration
+# was the sub-agent's only lever for "align the beats to this story".)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_guard_blocks_append_on_nonempty_project(client):
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Append Film")
+    client.post(f"/api/projects/{pid}/scenes", json={"heading": "S1", "order_index": 1})
+    ctx = ToolContext(session_id=_mk_session(), project_id=pid)
+
+    out = asyncio.run(registry.execute(ctx, "generate_story", {"replace": False}))
+    assert out["ok"] is False
+    assert "APPEND" in out["error"]
+    assert "granular tools" in out["error"]
+
+
+def test_guard_allows_append_after_user_confirms(client):
+    pid = _mk_project(client, "Append OK Film")
+    client.post(f"/api/projects/{pid}/scenes", json={"heading": "S1", "order_index": 1})
+    sid = _mk_session(pid)
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "yes, append the new beats"}
+    )
+    reg = _guard_registry()
+    out = asyncio.run(
+        reg.execute(ToolContext(session_id=sid, project_id=pid), "bulk_replace", {"replace": False})
+    )
+    assert "blocked:" not in str(out.get("error", ""))
+
+
+def test_beat_crud_round_trip(client):
+    from calliope.agent.harness.tools import execute_tool
+
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Beat Film")
+    sid = _mk_session(project_id=pid)
+    ctx = ToolContext(session_id=sid, project_id=pid)
+
+    # Append two, then insert one at position 2 — later beats shift down.
+    a = asyncio.run(execute_tool(ctx, "add_beat", {"title": "Open", "description": "a"}))
+    b = asyncio.run(execute_tool(ctx, "add_beat", {"title": "End", "description": "c"}))
+    assert (a["beat"]["order_index"], b["beat"]["order_index"]) == (1, 2)
+    m = asyncio.run(
+        execute_tool(ctx, "add_beat", {"title": "Turn", "description": "b", "order_index": 2})
+    )
+    assert m["beat"]["order_index"] == 2
+
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT order_index, title FROM story_beats WHERE project_id = ? ORDER BY order_index",
+            (pid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(r["order_index"], r["title"]) for r in rows] == [
+        (1, "Open"), (2, "Turn"), (3, "End"),
+    ]
+
+    # Update content + reject foreign/unknown ids.
+    out = asyncio.run(
+        execute_tool(ctx, "update_beat", {"beat_id": m["beat"]["id"], "description": "the turn"})
+    )
+    assert out["beat"]["description"] == "the turn"
+    out = asyncio.run(execute_tool(ctx, "update_beat", {"beat_id": 999999}))
+    assert out["ok"] is False
+
+    # Delete the middle beat — the gap closes.
+    out = asyncio.run(execute_tool(ctx, "delete_beat", {"beat_id": m["beat"]["id"]}))
+    assert out["ok"] is True
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT order_index, title FROM story_beats WHERE project_id = ? ORDER BY order_index",
+            (pid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(r["order_index"], r["title"]) for r in rows] == [(1, "Open"), (2, "End")]
+
+
+def test_story_role_has_beat_editors():
+    from calliope.agent.harness.orchestrator import ROLE_TOOLS, _scoped_payload
+
+    for tool in ("add_beat", "update_beat", "delete_beat"):
+        assert tool in ROLE_TOOLS["story"]
+    ctx = ToolContext(session_id=9_999_004, project_id=99)
+    names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["story"])}
+    assert {"add_beat", "update_beat"} <= names
+    # delete_beat is destructive but not approval-gated; it should resolve too
+    assert "delete_beat" in names
