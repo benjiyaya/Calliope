@@ -2,7 +2,7 @@
 	import { page } from '$app/stores';
 
 	const items = [
-		{ id: 'llm', href: '/settings?tab=llm', label: 'LLM', blurb: 'Model endpoint' },
+		{ id: 'llm', href: '/settings?tab=llm', label: 'LLM', blurb: 'Model endpoints' },
 		{ id: 'comfy', href: '/settings?tab=comfy', label: 'ComfyUI', blurb: 'Render farm' },
 		{ id: 'workflows', href: '/settings?tab=workflows', label: 'Workflows', blurb: 'Library' },
 		{ id: 'agent', href: '/settings?tab=agent', label: 'Agent', blurb: 'Hardening rules' },

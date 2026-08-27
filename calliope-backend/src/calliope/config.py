@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -99,6 +101,10 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://127.0.0.1:11434/v1"
     llm_model: str = "llama3.2"
     llm_api_key: str | None = None
+    # Named OpenAI-compatible endpoints. `llm_*` above always mirror the active
+    # profile so LLMClient and env overrides keep working.
+    llm_profiles: list[dict[str, Any]] = Field(default_factory=list)
+    llm_active_id: str | None = None
 
     comfyui_base_url: str = "http://127.0.0.1:8188"
     # Comfy is HTTP-only (upload / prompt / history / view). No local input/output dirs.
@@ -122,8 +128,144 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.assets_dir.mkdir(parents=True, exist_ok=True)
 
+    def ensure_llm_profiles(self) -> bool:
+        """Guarantee at least one profile and that llm_* match the active one.
+
+        Returns True when the in-memory list was created or repaired (caller
+        may persist). Existing configs with only llm_base_url/model/key are
+        migrated into a single named profile.
+        """
+        migrated = False
+        raw_list = self.llm_profiles if isinstance(self.llm_profiles, list) else []
+        if not raw_list:
+            pid = str(uuid.uuid4())
+            self.llm_profiles = [
+                {
+                    "id": pid,
+                    "name": self.llm_model or "Default",
+                    "base_url": self.llm_base_url,
+                    "model": self.llm_model,
+                    "api_key": self.llm_api_key,
+                }
+            ]
+            self.llm_active_id = pid
+            migrated = True
+        else:
+            normalized: list[dict[str, Any]] = []
+            for item in raw_list:
+                if not isinstance(item, dict):
+                    continue
+                pid = str(item.get("id") or uuid.uuid4())
+                model = str(item.get("model") or self.llm_model or "llama3.2").strip()
+                name = str(item.get("name") or model or "LLM").strip()
+                base_url = str(item.get("base_url") or self.llm_base_url).strip()
+                key = item.get("api_key")
+                if not isinstance(key, str) or not key.strip():
+                    key = None
+                normalized.append(
+                    {
+                        "id": pid,
+                        "name": name or model or "LLM",
+                        "base_url": base_url or self.llm_base_url,
+                        "model": model or "llama3.2",
+                        "api_key": key,
+                    }
+                )
+            if not normalized:
+                self.llm_profiles = []
+                return self.ensure_llm_profiles()
+            self.llm_profiles = normalized
+            ids = {p["id"] for p in normalized}
+            if self.llm_active_id not in ids:
+                self.llm_active_id = normalized[0]["id"]
+                migrated = True
+        self.apply_active_llm()
+        return migrated
+
+    def apply_active_llm(self) -> None:
+        """Copy the active profile onto llm_base_url / llm_model / llm_api_key."""
+        profiles = self.llm_profiles if isinstance(self.llm_profiles, list) else []
+        profile = next((p for p in profiles if p.get("id") == self.llm_active_id), None)
+        if profile is None and profiles:
+            profile = profiles[0]
+            self.llm_active_id = str(profile.get("id") or "")
+        if profile is None:
+            return
+        if profile.get("base_url"):
+            self.llm_base_url = str(profile["base_url"])
+        if profile.get("model"):
+            self.llm_model = str(profile["model"])
+        self.llm_api_key = profile.get("api_key") if isinstance(profile.get("api_key"), str) else None
+
+    def replace_llm_profiles(self, incoming: list[dict[str, Any]]) -> None:
+        """Replace the profile list, preserving secrets unless a new key is sent."""
+        existing = {
+            str(p["id"]): p
+            for p in (self.llm_profiles or [])
+            if isinstance(p, dict) and p.get("id")
+        }
+        new_list: list[dict[str, Any]] = []
+        for raw in incoming:
+            if not isinstance(raw, dict):
+                continue
+            pid = str(raw["id"]) if raw.get("id") else str(uuid.uuid4())
+            old = existing.get(pid, {})
+            model = str(raw.get("model") or old.get("model") or self.llm_model or "llama3.2").strip()
+            name = str(raw.get("name") or old.get("name") or model or "LLM").strip()
+            base_url = str(raw.get("base_url") or old.get("base_url") or self.llm_base_url or "").strip()
+            api_key = old.get("api_key") if isinstance(old.get("api_key"), str) else None
+            incoming_key = raw.get("api_key")
+            if isinstance(incoming_key, str) and incoming_key.strip():
+                api_key = incoming_key.strip()
+            new_list.append(
+                {
+                    "id": pid,
+                    "name": name or model or "LLM",
+                    "base_url": base_url or self.llm_base_url,
+                    "model": model or "llama3.2",
+                    "api_key": api_key,
+                }
+            )
+        if not new_list:
+            raise ValueError("At least one LLM is required")
+        self.llm_profiles = new_list
+        ids = {p["id"] for p in new_list}
+        if self.llm_active_id not in ids:
+            self.llm_active_id = new_list[0]["id"]
+        self.apply_active_llm()
+
+    def sync_legacy_llm_into_active(self) -> None:
+        """Write current llm_* fields onto the active profile (legacy PATCH)."""
+        base_url = self.llm_base_url
+        model = self.llm_model
+        api_key = self.llm_api_key
+        self.ensure_llm_profiles()
+        for profile in self.llm_profiles:
+            if profile.get("id") == self.llm_active_id:
+                profile["base_url"] = base_url
+                profile["model"] = model
+                profile["api_key"] = api_key
+                if not str(profile.get("name") or "").strip():
+                    profile["name"] = model
+                break
+        self.apply_active_llm()
+
+    def _public_llm_profiles(self) -> list[dict[str, Any]]:
+        self.ensure_llm_profiles()
+        return [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "base_url": p["base_url"],
+                "model": p["model"],
+                "api_key": bool(p.get("api_key")),
+            }
+            for p in self.llm_profiles
+        ]
+
     def to_public_dict(self) -> dict[str, Any]:
         """Return settings that are safe to expose to the frontend."""
+        profiles = self._public_llm_profiles()
         return {
             "host": self.host,
             "port": self.port,
@@ -133,6 +275,8 @@ class Settings(BaseSettings):
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
             "llm_api_key": bool(self.llm_api_key),
+            "llm_profiles": profiles,
+            "llm_active_id": self.llm_active_id,
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
             "queue_poll_interval_sec": self.queue_poll_interval_sec,
@@ -183,6 +327,7 @@ class Settings(BaseSettings):
         self._apply_storage_paths(data_dir, assets_dir)
         self.dry_run = bool(data.get("dry_run", False))
         self.ensure_storage_dirs()
+        profiles_migrated = self.ensure_llm_profiles()
 
         # Auto-heal poisoned config (temp paths / quoted dirs / legacy comfy dirs) back to disk
         needs_rewrite = is_ephemeral_path(normalize_path(data.get("data_dir"))) or any(
@@ -211,6 +356,8 @@ class Settings(BaseSettings):
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
             "llm_api_key": self.llm_api_key,
+            "llm_profiles": self.llm_profiles,
+            "llm_active_id": self.llm_active_id,
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
             "queue_poll_interval_sec": self.queue_poll_interval_sec,

@@ -5,6 +5,7 @@
 	import {
 		assetUrl,
 		jobsApi,
+		playgroundApi,
 		projects,
 		workflows,
 		type Character,
@@ -72,6 +73,9 @@
 	type DeleteTarget = { kind: 'character' | 'location' | 'item'; id: number; name: string };
 	let deleteTarget = $state<DeleteTarget | null>(null);
 	let deleteOpen = $state(false);
+	let fileInput: HTMLInputElement | null = $state(null);
+	let uploadTarget = $state<DeleteTarget | null>(null);
+	let uploadingKey = $state<string | null>(null);
 
 	const assetsQuery = createQuery(
 		toStore(() => ({
@@ -502,14 +506,73 @@
 	function goToStory() {
 		goto('?stage=story', { keepFocus: true, noScroll: true });
 	}
+
+	function uploadKey(kind: DeleteTarget['kind'], id: number) {
+		if (kind === 'character') return charKey(id);
+		if (kind === 'location') return locKey(id);
+		return itemKey(id);
+	}
+
+	function openOwnImage(target: DeleteTarget) {
+		uploadTarget = target;
+		fileInput?.click();
+	}
+
+	async function onOwnImageChosen(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		const target = uploadTarget;
+		uploadTarget = null;
+		if (!file || !target) return;
+		if (!file.type.startsWith('image/')) {
+			toast.error('Please choose an image file (png, jpg, webp, gif)');
+			return;
+		}
+		const key = uploadKey(target.kind, target.id);
+		uploadingKey = key;
+		try {
+			const uploaded = await playgroundApi.upload(file);
+			if (uploaded.kind !== 'image') {
+				toast.error('That file is not an image');
+				return;
+			}
+			if (target.kind === 'character') {
+				await projects.updateCharacter(projectId, target.id, { sheet_path: uploaded.path });
+			} else if (target.kind === 'location') {
+				await projects.updateLocation(projectId, target.id, {
+					reference_image_path: uploaded.path,
+				});
+			} else {
+				await projects.updateItem(projectId, target.id, { reference_image_path: uploaded.path });
+			}
+			await client.invalidateQueries({ queryKey: ['assets', projectId] });
+			await client.invalidateQueries({ queryKey: ['project', projectId] });
+			await client.invalidateQueries({ queryKey: ['projects'] });
+			toast.success(`Image added for ${target.name}`);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not add image');
+		} finally {
+			uploadingKey = null;
+		}
+	}
 </script>
+
+<input
+	bind:this={fileInput}
+	type="file"
+	class="sr-only"
+	accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+	onchange={onOwnImageChosen}
+/>
 
 <header class="stage-header">
 	<div>
 		<h2>2. Characters, Environments &amp; Items</h2>
 		<p class="lead">
-			Pick a workflow below. Sheet/environment/item prompts use the built-in template by
-			default — expand Edit prompt only if you need to tweak text.
+			Pick a workflow below, or upload your own image on any card. Sheet/environment/item
+			prompts use the built-in template by default — expand Edit prompt only if you need to
+			tweak text.
 		</p>
 	</div>
 	<div class="stage-actions">
@@ -733,6 +796,18 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title="Upload your own image"
+									disabled={jstate === 'generating' || uploadingKey === charKey(char.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'character', id: char.id, name: char.name })}
+								>
+									<Icon name="upload" size={14} /><span class="sr-only"
+										>Upload image for {char.name}</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title="Regenerate sheet"
 									disabled={busy || sheetWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateCharacter(char)}
@@ -812,6 +887,17 @@
 										: char.sheet_path
 											? 'Regenerate sheet'
 											: 'Generate sheet'}
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									disabled={jstate === 'generating' || uploadingKey === charKey(char.id)}
+									loading={uploadingKey === charKey(char.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'character', id: char.id, name: char.name })}
+								>
+									<Icon name="upload" size={13} />
+									{char.sheet_path ? 'Replace image' : 'Upload image'}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
@@ -913,6 +999,18 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title="Upload your own image"
+									disabled={jstate === 'generating' || uploadingKey === locKey(loc.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'location', id: loc.id, name: loc.name })}
+								>
+									<Icon name="upload" size={14} /><span class="sr-only"
+										>Upload image for {loc.name}</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title="Regenerate image"
 									disabled={busy || envWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateLocation(loc)}
@@ -978,6 +1076,17 @@
 										: loc.reference_image_path
 											? 'Regenerate image'
 											: 'Generate image'}
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									disabled={jstate === 'generating' || uploadingKey === locKey(loc.id)}
+									loading={uploadingKey === locKey(loc.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'location', id: loc.id, name: loc.name })}
+								>
+									<Icon name="upload" size={13} />
+									{loc.reference_image_path ? 'Replace image' : 'Upload image'}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
@@ -1079,6 +1188,18 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title="Upload your own image"
+									disabled={jstate === 'generating' || uploadingKey === itemKey(item.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'item', id: item.id, name: item.name })}
+								>
+									<Icon name="upload" size={14} /><span class="sr-only"
+										>Upload image for {item.name}</span
+									>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title="Regenerate image"
 									disabled={busy || itemWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateItem(item)}
@@ -1144,6 +1265,17 @@
 										: item.reference_image_path
 											? 'Regenerate image'
 											: 'Generate image'}
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
+									disabled={jstate === 'generating' || uploadingKey === itemKey(item.id)}
+									loading={uploadingKey === itemKey(item.id)}
+									onclick={() =>
+										openOwnImage({ kind: 'item', id: item.id, name: item.name })}
+								>
+									<Icon name="upload" size={13} />
+									{item.reference_image_path ? 'Replace image' : 'Upload image'}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
