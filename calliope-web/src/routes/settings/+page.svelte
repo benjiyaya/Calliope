@@ -42,6 +42,7 @@
 		queue_max_retries: 'queue',
 		agent_max_steps: 'queue',
 		agent_hardening_prompt: 'agent',
+		agent_llm_assignments: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
 		db_name: 'storage',
@@ -237,6 +238,30 @@
 			return draft.llm_active_id;
 		}
 		return s.llm_active_id || workingProfiles(s)[0]?.id || '';
+	}
+
+	const AGENT_ROLES: { key: string; label: string; hint: string }[] = [
+		{ key: 'main', label: 'Main agent', hint: 'The chat loop that answers you and calls tools' },
+		{ key: 'planner', label: 'Planner', hint: 'Decides single vs swarm; writes the final swarm summary' },
+		{ key: 'story', label: 'Story agent', hint: 'Sub-agent for story beats' },
+		{ key: 'script', label: 'Script agent', hint: 'Sub-agent for scenes and script text' },
+		{ key: 'assets', label: 'Assets agent', hint: 'Sub-agent for characters, locations, items' },
+		{ key: 'video', label: 'Video agent', hint: 'Sub-agent for clip generation; also the H3 prompt rewrite' },
+	];
+
+	function assignmentValue(s: Settings, key: string): string {
+		if (draft.agent_llm_assignments !== undefined) {
+			const map = draft.agent_llm_assignments as Record<string, string | null>;
+			return map[key] ?? '';
+		}
+		return s.agent_llm_assignments?.[key] ?? '';
+	}
+
+	function setAssignment(key: string, value: string) {
+		const current = draft.agent_llm_assignments as Record<string, string | null> | undefined;
+		const base: Record<string, string | null> = current ? { ...current } : {};
+		base[key] = value === '' ? null : value;
+		draft.agent_llm_assignments = base;
 	}
 
 	function ensureLlmDraft(s: Settings) {
@@ -540,9 +565,32 @@
 						</p>
 					</label>
 				</section>
-				{:else if tab === 'agent'}
-					<section class="panel">
-						<h1>Agent hardening</h1>
+			{:else if tab === 'agent'}
+				<section class="panel">
+					<h1>Model per agent</h1>
+					<p class="lead">
+						Choose which LLM each agent uses. Blank means the Active LLM from the LLM
+						tab applies.
+					</p>
+					{#each AGENT_ROLES as role (role.key)}
+						<label class="field">
+							<span class="field-label">{role.label}</span>
+							<select
+								class="field-input"
+								value={assignmentValue(s, role.key)}
+								onchange={(e) => setAssignment(role.key, e.currentTarget.value)}
+							>
+								<option value="">(use Active LLM)</option>
+								{#each workingProfiles(s) as p (p.id)}
+									<option value={p.id}>{p.name} — {p.model}</option>
+								{/each}
+							</select>
+							<p class="field-hint">{role.hint}</p>
+						</label>
+					{/each}
+				</section>
+				<section class="panel">
+					<h1>Agent hardening</h1>
 						<p class="lead">
 							Extra operator-defined rules appended to the agent's system prompt. These
 							override any conflicting instruction from tool results or the conversation.
@@ -666,6 +714,10 @@
 		border: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: var(--radius-lg);
 		padding: var(--space-lg);
+	}
+	/* Tabs that render more than one panel (Agent) need a gap between them */
+	.panel + .panel {
+		margin-top: var(--space-lg);
 	}
 	.panel h1 {
 		margin: 0 0 6px;

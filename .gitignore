@@ -22,8 +22,6 @@ calliope-backend/dist/
 node_modules/
 calliope-web/build/
 calliope-web/.svelte-kit/
-electron/dist/
-electron/builder-debug.yml
 
 # --- Build artifacts (generated, not source) ---
 calliope-backend/src/calliope/static/
@@ -35,6 +33,7 @@ calliope-backend/src/calliope/static/
 *.log
 
 # --- Local-only files (not part of the public repo) ---
+# Electron shell was dropped — keep ignoring so a leftover folder cannot be committed.
 electron/
 AGENTS.md
 start.bat

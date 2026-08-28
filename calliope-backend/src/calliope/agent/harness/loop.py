@@ -38,6 +38,16 @@ def _default_max_iterations() -> int:
     except (TypeError, ValueError):
         return MAX_ITERATIONS
 
+
+def _llm_for_role(role: str) -> LLMClient:
+    # Tests patch loop.LLMClient with zero-arg fakes that lack for_role;
+    # prefer role resolution, fall back to a bare instance.
+    factory = LLMClient
+    for_role = getattr(factory, "for_role", None)
+    if callable(for_role):
+        return for_role(role)
+    return factory()
+
 # Async callback that persists + broadcasts one harness message.
 MessageSink = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -77,7 +87,7 @@ async def run_turn(
     turn_no = _next_turn_number(ctx.session_id)
     log_append(session_log.TURN_START, {"turn": turn_no})
 
-    client = LLMClient()
+    client = _llm_for_role("main")
     final_text = ""
     turn_status = "completed"
     try:

@@ -133,3 +133,125 @@ def test_legacy_llm_fields_update_active_profile(client):
         assert active["base_url"] == "http://127.0.0.1:1234/v1"
     finally:
         _restore(prev)
+
+
+def _assignments_snapshot() -> dict:
+    return dict(settings.agent_llm_assignments or {})
+
+
+def test_resolve_role_defaults_to_active_profile(client):
+    prev = _snapshot()
+    prev_a = _assignments_snapshot()
+    try:
+        a_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        b_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        client.post(
+            "/api/settings",
+            json={
+                "llm_profiles": [
+                    {"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a", "api_key": "k-a"},
+                    {"id": b_id, "name": "Cloud", "base_url": "https://x/b/v1", "model": "m-b", "api_key": "k-b"},
+                ],
+                "llm_active_id": a_id,
+            },
+        )
+        prof = settings.resolve_llm_for_role("story")
+        assert prof["id"] == a_id  # unassigned → active
+        assert prof["model"] == "m-a"
+        # Unknown roles also fall back to active, never raise
+        assert settings.resolve_llm_for_role("nonexistent")["id"] == a_id
+    finally:
+        _restore(prev)
+        settings.agent_llm_assignments = prev_a
+
+
+def test_resolve_role_assigned_profile_and_dangling_id(client):
+    prev = _snapshot()
+    prev_a = _assignments_snapshot()
+    try:
+        a_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        b_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        client.post(
+            "/api/settings",
+            json={
+                "llm_profiles": [
+                    {"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a", "api_key": "k-a"},
+                    {"id": b_id, "name": "Cloud", "base_url": "https://x/b/v1", "model": "m-b", "api_key": "k-b"},
+                ],
+                "llm_active_id": a_id,
+            },
+        )
+        # Assigned directly (router support for assignments lands in the next task)
+        settings.agent_llm_assignments = {"video": b_id}
+        assert settings.resolve_llm_for_role("video")["id"] == b_id
+        assert settings.resolve_llm_for_role("video")["model"] == "m-b"
+        # Dangling assignment (profile deleted afterwards) → active fallback
+        settings.llm_profiles = [p for p in settings.llm_profiles if p["id"] != b_id]
+        assert settings.resolve_llm_for_role("video")["id"] == a_id
+    finally:
+        _restore(prev)
+        settings.agent_llm_assignments = prev_a
+
+
+def test_settings_accepts_agent_llm_assignments(client):
+    prev = _snapshot()
+    prev_a = _assignments_snapshot()
+    try:
+        a_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        client.post(
+            "/api/settings",
+            json={
+                "llm_profiles": [
+                    {"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a", "api_key": None}
+                ],
+                "llm_active_id": a_id,
+            },
+        )
+        r = client.post(
+            "/api/settings",
+            json={"agent_llm_assignments": {"video": a_id, "bogus_role": a_id, "story": None}},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # Unknown role keys are dropped, known roles stored (incl. explicit None)
+        assert body["agent_llm_assignments"] == {"video": a_id, "story": None}
+
+        r = client.post(
+            "/api/settings",
+            json={"agent_llm_assignments": {"video": "no-such-profile"}},
+        )
+        assert r.status_code == 400
+        assert "Unknown LLM profile for role: video" in r.json()["detail"]
+    finally:
+        _restore(prev)
+        settings.agent_llm_assignments = prev_a
+
+
+def test_replace_llm_profiles_prunes_dangling_assignments(client):
+    prev = _snapshot()
+    prev_a = _assignments_snapshot()
+    try:
+        a_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        b_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        client.post(
+            "/api/settings",
+            json={
+                "llm_profiles": [
+                    {"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a", "api_key": None},
+                    {"id": b_id, "name": "Cloud", "base_url": "https://x/b/v1", "model": "m-b", "api_key": None},
+                ],
+                "llm_active_id": a_id,
+            },
+        )
+        # Set directly (router support lands in the next task)
+        settings.agent_llm_assignments = {"video": b_id, "story": a_id}
+        # Save without b → its assignment must be pruned, others kept
+        client.post(
+            "/api/settings",
+            json={"llm_profiles": [{"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a"}]},
+        )
+        assert settings.agent_llm_assignments.get("video") is None
+        assert settings.agent_llm_assignments.get("story") == a_id
+    finally:
+        _restore(prev)
+        settings.agent_llm_assignments = prev_a

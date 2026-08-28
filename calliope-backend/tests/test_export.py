@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from calliope.comfyui.client import ComfyUIClient
-from calliope.export.runner import build_ffmpeg_cmd, collect_clips
+from calliope.export.runner import DEFAULT_EXPORT_FPS, build_ffmpeg_cmd, collect_clips, parse_rate, target_fps
 
 
 def _make_project_with_clips(client, title: str = "My Film") -> int:
@@ -205,3 +205,64 @@ def test_cancel_comfy_job_calls_interrupt(client, monkeypatch):
         assert calls["kill"] == 0
     finally:
         client.post("/api/jobs/resume")
+
+
+def test_parse_rate():
+    assert parse_rate("24/1") == 24.0
+    assert abs(parse_rate("24000/1001") - 23.976023976) < 1e-6
+    assert parse_rate("30000/1001") > 29.9
+    assert parse_rate("0/0") == 0.0
+    assert parse_rate("0/1") == 0.0
+    assert parse_rate("garbage") == 0.0
+    assert parse_rate(None) == 0.0
+    assert parse_rate("") == 0.0
+
+
+def test_target_fps_majority():
+    probes = [{"fps": 24.0}, {"fps": 24.0}, {"fps": 30.0}]
+    assert target_fps(probes) == 24.0
+
+
+def test_target_fps_tie_prefers_lower():
+    probes = [{"fps": 30.0}, {"fps": 24.0}]
+    assert target_fps(probes) == 24.0
+
+
+def test_target_fps_missing_falls_back_to_default():
+    assert target_fps([]) == DEFAULT_EXPORT_FPS == 30.0
+    assert target_fps([{"fps": 0.0}, {"fps": None}]) == 30.0
+    assert target_fps([{"duration": 5.0, "has_audio": True}]) == 30.0
+
+
+def test_build_ffmpeg_cmd_explicit_fps_24():
+    clips = [{"video_path": "a.mp4"}]
+    probes = [{"duration": 5.0, "has_audio": True, "fps": 30.0}]
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4", fps=24.0)
+    joined = " ".join(str(c) for c in cmd)
+    assert "fps=24" in joined
+    assert "fps=30" not in joined
+
+
+def test_build_ffmpeg_cmd_defaults_to_target_fps_vote():
+    clips = [{"video_path": "a.mp4"}, {"video_path": "b.mp4"}]
+    probes = [
+        {"duration": 5.0, "has_audio": True, "fps": 24.0},
+        {"duration": 5.0, "has_audio": True, "fps": 24.0},
+    ]
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4")
+    joined = " ".join(str(c) for c in cmd)
+    assert "fps=24" in joined
+    assert "fps=30" not in joined
+
+
+def test_build_ffmpeg_cmd_fractional_fps_formatting():
+    clips = [{"video_path": "a.mp4"}]
+    probes = [{"duration": 5.0, "has_audio": True, "fps": 23.976023976}]
+    # Explicit fractional rate: target_fps votes on rounded fps (24), so :.6g
+    # formatting is only reachable via the explicit override.
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4", fps=23.976023976)
+    joined = " ".join(str(c) for c in cmd)
+    # :.6g keeps six significant digits — a valid ffmpeg fps value
+    assert "fps=23.976" in joined
+    assert "fps=23.976023976" not in joined
+    assert "fps=24" not in joined

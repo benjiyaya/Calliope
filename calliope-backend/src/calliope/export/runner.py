@@ -22,9 +22,11 @@ from calliope.db import get_db, row_to_dict
 logger = logging.getLogger("calliope.export")
 
 # Normalization targets — every clip is conformed to these before stitching.
+# The fps target is the clips' own majority fps (see target_fps), not a fixed
+# rate: 24 fps generated clips must export at 24 fps, not be retimed to 30.
 EXPORT_WIDTH = 1920
 EXPORT_HEIGHT = 1080
-EXPORT_FPS = 30
+DEFAULT_EXPORT_FPS = 30.0
 XFADE_SEC = 0.5
 PROGRESS_MIN_INTERVAL_SEC = 1.0
 
@@ -53,6 +55,37 @@ def _require_binary(name: str) -> str:
 def slugify(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return slug or "film"
+
+
+def parse_rate(rate: str | None) -> float:
+    """ffprobe r_frame_rate ("24000/1001") as a float; 0.0 when unusable."""
+    if not rate or "/" not in rate:
+        return 0.0
+    num, _, den = rate.partition("/")
+    try:
+        d = float(den)
+        if d == 0:
+            return 0.0
+        return float(num) / d
+    except ValueError:
+        return 0.0
+
+
+def target_fps(probes: list[dict[str, Any]]) -> float:
+    """Majority rounded fps across clips; tie → lower; none → default.
+
+    xfade needs one common timebase, so a mixed 24/30 fps project is conformed
+    to whichever rate most clips already use.
+    """
+    votes = [round(p["fps"]) for p in probes if p.get("fps")]
+    if not votes:
+        return DEFAULT_EXPORT_FPS
+    counts: dict[int, int] = {}
+    for v in votes:
+        counts[v] = counts.get(v, 0) + 1
+    best = max(counts.values())
+    winners = sorted(v for v, c in counts.items() if c == best)
+    return float(winners[0])
 
 
 def collect_clips(project_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -88,7 +121,7 @@ async def probe(path: str | Path) -> dict[str, Any]:
         "-v",
         "error",
         "-show_entries",
-        "format=duration:stream=codec_type",
+        "format=duration:stream=codec_type,r_frame_rate",
         "-of",
         "json",
         str(path),
@@ -101,20 +134,34 @@ async def probe(path: str | Path) -> dict[str, Any]:
         raise RuntimeError(f"ffprobe failed for {path}: {tail}")
     data = json.loads(out.decode("utf-8", "replace") or "{}")
     duration = float((data.get("format") or {}).get("duration") or 0.0)
-    has_audio = any(s.get("codec_type") == "audio" for s in data.get("streams") or [])
-    return {"duration": duration, "has_audio": has_audio}
+    streams = data.get("streams") or []
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    video_fps = 0.0
+    for s in streams:
+        if s.get("codec_type") == "video":
+            video_fps = parse_rate(s.get("r_frame_rate"))
+            break
+    return {"duration": duration, "has_audio": has_audio, "fps": video_fps}
 
 
 def build_ffmpeg_cmd(
     clips: list[dict[str, Any]],
     probes: list[dict[str, Any]],
     dest: str | Path,
+    *,
+    fps: float | None = None,
 ) -> list[str]:
-    """Assemble the validated normalize → xfade → loudnorm ffmpeg command."""
+    """Assemble the validated normalize → xfade → loudnorm ffmpeg command.
+
+    fps=None conforms every clip to target_fps(probes) — the clips' own
+    majority rate. Pass an explicit fps to override the vote.
+    """
     if not clips:
         raise RuntimeError("No clips to export")
     if len(clips) != len(probes):
         raise ValueError("clips and probes must align")
+    rate = float(fps) if fps else target_fps(probes)
+    rate_str = f"{rate:.6g}"
 
     n = len(clips)
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
@@ -134,7 +181,7 @@ def build_ffmpeg_cmd(
     v_chain = (
         f"scale={EXPORT_WIDTH}:{EXPORT_HEIGHT}:force_original_aspect_ratio=decrease,"
         f"pad={EXPORT_WIDTH}:{EXPORT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-        f"setsar=1,fps={EXPORT_FPS},settb=AVTB"
+        f"setsar=1,fps={rate_str},settb=AVTB"
     )
     a_chain = "aformat=sample_rates=48000:channel_layouts=stereo"
 
@@ -223,15 +270,16 @@ async def run_export(
 
     _require_binary("ffmpeg")
     probes = [await probe(clip["video_path"]) for clip in clips]
+    fps = target_fps(probes)
     durations = [float(p["duration"]) for p in probes]
     total_us = (sum(durations) - XFADE_SEC * max(0, len(clips) - 1)) * 1_000_000
 
-    cmd = build_ffmpeg_cmd(clips, probes, dest)
+    cmd = build_ffmpeg_cmd(clips, probes, dest, fps=fps)
     logger.info("Export job %s: %s", job_id, " ".join(cmd))
 
     await bus.publish(
         "job.progress",
-        {"job_id": job_id, "kind": "export", "percent": 0.0, "message": "Exporting film…"},
+        {"job_id": job_id, "kind": "export", "percent": 0.0, "message": f"Exporting film ({fps:.6g} fps)…"},
     )
     last_publish = time.monotonic()
 
