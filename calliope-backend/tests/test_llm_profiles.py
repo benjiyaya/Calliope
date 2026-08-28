@@ -193,6 +193,40 @@ def test_resolve_role_assigned_profile_and_dangling_id(client):
         settings.agent_llm_assignments = prev_a
 
 
+def test_settings_accepts_agent_llm_assignments(client):
+    prev = _snapshot()
+    prev_a = _assignments_snapshot()
+    try:
+        a_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        client.post(
+            "/api/settings",
+            json={
+                "llm_profiles": [
+                    {"id": a_id, "name": "Local", "base_url": "http://x/a/v1", "model": "m-a", "api_key": None}
+                ],
+                "llm_active_id": a_id,
+            },
+        )
+        r = client.post(
+            "/api/settings",
+            json={"agent_llm_assignments": {"video": a_id, "bogus_role": a_id, "story": None}},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # Unknown role keys are dropped, known roles stored (incl. explicit None)
+        assert body["agent_llm_assignments"] == {"video": a_id, "story": None}
+
+        r = client.post(
+            "/api/settings",
+            json={"agent_llm_assignments": {"video": "no-such-profile"}},
+        )
+        assert r.status_code == 400
+        assert "Unknown LLM profile for role: video" in r.json()["detail"]
+    finally:
+        _restore(prev)
+        settings.agent_llm_assignments = prev_a
+
+
 def test_replace_llm_profiles_prunes_dangling_assignments(client):
     prev = _snapshot()
     prev_a = _assignments_snapshot()

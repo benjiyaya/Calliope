@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from calliope.config import normalize_path, settings
+from calliope.config import AGENT_LLM_ROLES, normalize_path, settings
 
 router = APIRouter()
 
@@ -26,6 +26,7 @@ class SettingsUpdate(BaseModel):
     llm_api_key: str | None = None
     llm_profiles: list[LlmProfileIn] | None = None
     llm_active_id: str | None = None
+    agent_llm_assignments: dict[str, str | None] | None = None
     comfyui_base_url: str | None = None
     data_dir: str | None = None
     assets_dir: str | None = None
@@ -48,6 +49,7 @@ async def update_settings(payload: SettingsUpdate) -> dict[str, Any]:
     data = payload.model_dump(exclude_unset=True)
     profiles_in = data.pop("llm_profiles", None)
     active_in = data.pop("llm_active_id", None)
+    assignments_in = data.pop("agent_llm_assignments", None)
     legacy_llm = {k: data.pop(k) for k in list(data) if k in _LEGACY_LLM_KEYS}
 
     for key, value in data.items():
@@ -74,6 +76,21 @@ async def update_settings(payload: SettingsUpdate) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="Unknown LLM profile")
         settings.llm_active_id = active_in
         settings.apply_active_llm()
+
+    if assignments_in is not None:
+        settings.ensure_llm_profiles()
+        ids = {p["id"] for p in settings.llm_profiles}
+        cleaned: dict[str, str | None] = {}
+        for role, pid in assignments_in.items():
+            if role not in AGENT_LLM_ROLES:
+                continue
+            if pid is not None and pid not in ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown LLM profile for role: {role}",
+                )
+            cleaned[role] = pid
+        settings.agent_llm_assignments = cleaned
 
     if legacy_llm:
         for key, value in legacy_llm.items():
