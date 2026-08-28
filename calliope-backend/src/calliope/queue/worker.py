@@ -6,10 +6,14 @@ import json
 import logging
 from typing import Any
 
+from pathlib import Path as _fs_path
+
 from calliope import config
 from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
+from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.patcher import patch_workflow
+from calliope.comfyui.roles import input_has_role
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import run_export
@@ -128,6 +132,10 @@ class QueueWorker:
                 raise RuntimeError("No workflow found for job")
 
             input_values = payload.get("input_values") or {}
+            if payload.get("continue_source") and kind == "video":
+                input_values = await self._resolve_continue_source(
+                    job, payload, workflow, dict(input_values)
+                )
             patched = patch_workflow(workflow, input_values)
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
@@ -160,6 +168,78 @@ class QueueWorker:
             return paths
         finally:
             await client.close()
+
+    async def _resolve_continue_source(
+        self,
+        job: dict[str, Any],
+        payload: dict[str, Any],
+        workflow: dict[str, Any],
+        input_values: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Fill the workflow's video input with the previous scene's clip.
+
+        Enqueue defers continue-scenes whose earlier clip does not exist yet
+        (batch generation); the queue is concurrency-1, so by the time this job
+        runs the earlier clip has been rendered and attached to its scene. The
+        path is injected into ``input_values`` like any user-provided value —
+        ``patch_workflow`` writes it onto the ``(Input:video)`` node and
+        ``prepare_media_inputs`` uploads it to ComfyUI before queuing.
+        """
+        project_id = job["project_id"]
+        order_index = (payload.get("continue_source") or {}).get("scene_order_index")
+        if order_index is None:
+            order_index = payload.get("scene_order_index") or 0
+
+        prev_order: int | None = None
+        prev_clip: str | None = None
+        conn = get_db(config.settings.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT order_index, video_path FROM scenes
+                WHERE project_id = ? AND order_index < ?
+                ORDER BY order_index DESC LIMIT 1
+                """,
+                (project_id, order_index),
+            ).fetchone()
+            if row:
+                prev_order = row["order_index"]
+                prev_clip = row["video_path"]
+        finally:
+            conn.close()
+
+        scene_n = order_index
+        if prev_order is None:
+            raise RuntimeError(
+                f"Continue scene {scene_n}: no earlier scene in this project to continue from."
+            )
+        if not prev_clip or not _fs_path(prev_clip).exists():
+            raise RuntimeError(
+                f"Continue scene {scene_n}: previous clip (scene {prev_order}) has no video file "
+                "— generate the earlier clip first."
+            )
+
+        video_node: str | None = None
+        for inp in parse_dynamic_inputs(workflow):
+            if input_has_role(inp, "video"):
+                video_node = str(inp["nodeId"])
+                break
+        if video_node is None:
+            raise RuntimeError(
+                "Continue scene "
+                f"{scene_n}: workflow has no (Input:video) node to receive the previous clip."
+            )
+
+        input_values[video_node] = prev_clip
+        await event_bus.publish(
+            "job.progress",
+            {
+                "job_id": job["id"],
+                "project_id": project_id,
+                "message": f"Continuing from scene {prev_order} clip",
+            },
+        )
+        return input_values
 
     async def _dry_run(self, job: dict[str, Any], payload: dict[str, Any]) -> list[str]:
         project_id = job["project_id"]
