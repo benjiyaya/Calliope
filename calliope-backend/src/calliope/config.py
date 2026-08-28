@@ -56,6 +56,11 @@ DEFAULT_AGENT_HARDENING_PROMPT = """You are operating under additional operator-
 5. CONCISE, HONEST REPLIES: Prefer short, factual answers. State what changed, any ids enqueued, and any failures. Do not overclaim.
 6. ONE STEP AT A TIME: Wait for each tool result before the next call. Never assume a tool succeeded without its result."""
 
+# Agent roles that can be pinned to a specific LLM profile. Values live in
+# Settings.agent_llm_assignments (role -> profile id or None). A missing or
+# None entry means "use the Active LLM".
+AGENT_LLM_ROLES: tuple[str, ...] = ("main", "planner", "story", "script", "assets", "video")
+
 
 def is_ephemeral_path(path: Path | str | None) -> bool:
     """True for OS temp / pytest TemporaryDirectory paths — never use as default storage."""
@@ -105,6 +110,8 @@ class Settings(BaseSettings):
     # profile so LLMClient and env overrides keep working.
     llm_profiles: list[dict[str, Any]] = Field(default_factory=list)
     llm_active_id: str | None = None
+    # role (AGENT_LLM_ROLES) -> LLM profile id; None/absent = use Active LLM
+    agent_llm_assignments: dict[str, str | None] = Field(default_factory=dict)
 
     comfyui_base_url: str = "http://127.0.0.1:8188"
     # Comfy is HTTP-only (upload / prompt / history / view). No local input/output dirs.
@@ -197,6 +204,22 @@ class Settings(BaseSettings):
             self.llm_model = str(profile["model"])
         self.llm_api_key = profile.get("api_key") if isinstance(profile.get("api_key"), str) else None
 
+    def resolve_llm_for_role(self, role: str) -> dict[str, Any]:
+        """Profile dict for an agent role: assignment → active fallback.
+
+        Unknown roles and dangling profile ids fall back to the active
+        profile, mirroring apply_active_llm's leniency.
+        """
+        self.ensure_llm_profiles()
+        assigned_id = (self.agent_llm_assignments or {}).get(role)
+        profiles = self.llm_profiles
+        if assigned_id:
+            for profile in profiles:
+                if profile.get("id") == assigned_id:
+                    return profile
+        active = next((p for p in profiles if p.get("id") == self.llm_active_id), None)
+        return active or profiles[0]
+
     def replace_llm_profiles(self, incoming: list[dict[str, Any]]) -> None:
         """Replace the profile list, preserving secrets unless a new key is sent."""
         existing = {
@@ -232,6 +255,11 @@ class Settings(BaseSettings):
         ids = {p["id"] for p in new_list}
         if self.llm_active_id not in ids:
             self.llm_active_id = new_list[0]["id"]
+        self.agent_llm_assignments = {
+            role: pid
+            for role, pid in (self.agent_llm_assignments or {}).items()
+            if pid is None or pid in ids
+        }
         self.apply_active_llm()
 
     def sync_legacy_llm_into_active(self) -> None:
@@ -277,6 +305,7 @@ class Settings(BaseSettings):
             "llm_api_key": bool(self.llm_api_key),
             "llm_profiles": profiles,
             "llm_active_id": self.llm_active_id,
+            "agent_llm_assignments": dict(self.agent_llm_assignments or {}),
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
             "queue_poll_interval_sec": self.queue_poll_interval_sec,
@@ -358,6 +387,7 @@ class Settings(BaseSettings):
             "llm_api_key": self.llm_api_key,
             "llm_profiles": self.llm_profiles,
             "llm_active_id": self.llm_active_id,
+            "agent_llm_assignments": dict(self.agent_llm_assignments or {}),
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
             "queue_poll_interval_sec": self.queue_poll_interval_sec,
