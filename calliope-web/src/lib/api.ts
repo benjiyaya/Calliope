@@ -235,7 +235,6 @@ export const workflows = {
 			inputs: ComfyDynamicInput[];
 			outputs: ComfyDynamicOutput[];
 			suggested_profile?: string;
-			motion_role?: 'first' | 'next' | null;
 		}>('/api/workflows/analyze', {
 			method: 'POST',
 			body: JSON.stringify({ workflow_json }),
@@ -275,7 +274,6 @@ export const jobsApi = {
 			scene_ids?: number[];
 			workflow_id?: number;
 			input_values?: Record<string, unknown>;
-			continue_motion?: boolean;
 		} = {},
 	) =>
 		api<{ ok: boolean; jobs: Job[] }>(`/api/jobs/projects/${projectId}/generate-videos`, {

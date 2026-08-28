@@ -29,7 +29,6 @@ const INPUT_ROLE_ALIASES: Record<string, string[]> = {
 	image: ['image', 'img'],
 	video: ['video', 'vid'],
 	audio: ['audio', 'sound', 'sfx'],
-	clipindex: ['clipindex', 'clip_index'],
 	seed: ['seed'],
 	duration: ['duration', 'dur', 'length', 'seconds'],
 };

@@ -49,11 +49,6 @@ export function classifyInput(inp: ComfyDynamicInput): ClassifiedInput {
 		return { input: inp, zone: 'composer', widget: 'negativeTextarea' };
 	}
 
-	// Timeline-owned — filled on enqueue, never a user widget.
-	if (role === 'clipindex') {
-		return { input: inp, zone: 'hidden', widget: 'numberPill' };
-	}
-
 	// --- Media tray ---
 	if (
 		role === 'character' ||

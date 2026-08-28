@@ -35,8 +35,6 @@ export interface Workflow {
 	description: string | null;
 	prompt_profile: string;
 	is_enabled: boolean;
-	/** H3 Motion Context pair: FirstMotion vs NextMotion. */
-	motion_role?: 'first' | 'next' | null;
 }
 
 export interface Job {
