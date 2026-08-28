@@ -232,3 +232,37 @@ def test_target_fps_missing_falls_back_to_default():
     assert target_fps([]) == DEFAULT_EXPORT_FPS == 30.0
     assert target_fps([{"fps": 0.0}, {"fps": None}]) == 30.0
     assert target_fps([{"duration": 5.0, "has_audio": True}]) == 30.0
+
+
+def test_build_ffmpeg_cmd_explicit_fps_24():
+    clips = [{"video_path": "a.mp4"}]
+    probes = [{"duration": 5.0, "has_audio": True, "fps": 30.0}]
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4", fps=24.0)
+    joined = " ".join(str(c) for c in cmd)
+    assert "fps=24" in joined
+    assert "fps=30" not in joined
+
+
+def test_build_ffmpeg_cmd_defaults_to_target_fps_vote():
+    clips = [{"video_path": "a.mp4"}, {"video_path": "b.mp4"}]
+    probes = [
+        {"duration": 5.0, "has_audio": True, "fps": 24.0},
+        {"duration": 5.0, "has_audio": True, "fps": 24.0},
+    ]
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4")
+    joined = " ".join(str(c) for c in cmd)
+    assert "fps=24" in joined
+    assert "fps=30" not in joined
+
+
+def test_build_ffmpeg_cmd_fractional_fps_formatting():
+    clips = [{"video_path": "a.mp4"}]
+    probes = [{"duration": 5.0, "has_audio": True, "fps": 23.976023976}]
+    # Explicit fractional rate: target_fps votes on rounded fps (24), so :.6g
+    # formatting is only reachable via the explicit override.
+    cmd = build_ffmpeg_cmd(clips, probes, "out.mp4", fps=23.976023976)
+    joined = " ".join(str(c) for c in cmd)
+    # :.6g keeps six significant digits — a valid ffmpeg fps value
+    assert "fps=23.976" in joined
+    assert "fps=23.976023976" not in joined
+    assert "fps=24" not in joined

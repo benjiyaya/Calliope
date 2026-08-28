@@ -30,10 +30,6 @@ DEFAULT_EXPORT_FPS = 30.0
 XFADE_SEC = 0.5
 PROGRESS_MIN_INTERVAL_SEC = 1.0
 
-# Retained for the pre-B2 v_chain reference; removed when build_ffmpeg_cmd
-# switches to the voted rate.
-EXPORT_FPS = DEFAULT_EXPORT_FPS
-
 _running: dict[int, asyncio.subprocess.Process] = {}
 
 
@@ -125,7 +121,7 @@ async def probe(path: str | Path) -> dict[str, Any]:
         "-v",
         "error",
         "-show_entries",
-        "format=duration:stream=codec_type",
+        "format=duration:stream=codec_type,r_frame_rate",
         "-of",
         "json",
         str(path),
@@ -138,20 +134,34 @@ async def probe(path: str | Path) -> dict[str, Any]:
         raise RuntimeError(f"ffprobe failed for {path}: {tail}")
     data = json.loads(out.decode("utf-8", "replace") or "{}")
     duration = float((data.get("format") or {}).get("duration") or 0.0)
-    has_audio = any(s.get("codec_type") == "audio" for s in data.get("streams") or [])
-    return {"duration": duration, "has_audio": has_audio}
+    streams = data.get("streams") or []
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    video_fps = 0.0
+    for s in streams:
+        if s.get("codec_type") == "video":
+            video_fps = parse_rate(s.get("r_frame_rate"))
+            break
+    return {"duration": duration, "has_audio": has_audio, "fps": video_fps}
 
 
 def build_ffmpeg_cmd(
     clips: list[dict[str, Any]],
     probes: list[dict[str, Any]],
     dest: str | Path,
+    *,
+    fps: float | None = None,
 ) -> list[str]:
-    """Assemble the validated normalize → xfade → loudnorm ffmpeg command."""
+    """Assemble the validated normalize → xfade → loudnorm ffmpeg command.
+
+    fps=None conforms every clip to target_fps(probes) — the clips' own
+    majority rate. Pass an explicit fps to override the vote.
+    """
     if not clips:
         raise RuntimeError("No clips to export")
     if len(clips) != len(probes):
         raise ValueError("clips and probes must align")
+    rate = float(fps) if fps else target_fps(probes)
+    rate_str = f"{rate:.6g}"
 
     n = len(clips)
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
@@ -171,7 +181,7 @@ def build_ffmpeg_cmd(
     v_chain = (
         f"scale={EXPORT_WIDTH}:{EXPORT_HEIGHT}:force_original_aspect_ratio=decrease,"
         f"pad={EXPORT_WIDTH}:{EXPORT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-        f"setsar=1,fps={EXPORT_FPS},settb=AVTB"
+        f"setsar=1,fps={rate_str},settb=AVTB"
     )
     a_chain = "aformat=sample_rates=48000:channel_layouts=stereo"
 
