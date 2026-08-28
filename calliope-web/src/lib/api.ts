@@ -100,6 +100,7 @@ export interface Settings {
 	queue_max_retries: number;
 	agent_max_steps: number;
 	agent_hardening_prompt: string;
+	agent_llm_assignments: Record<string, string | null>;
 	dry_run: boolean;
 }
 
