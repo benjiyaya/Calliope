@@ -380,11 +380,11 @@
 							class="chip chip-toggle"
 							class:chip-on={Boolean(scene.chain_from_prev)}
 							disabled={chainPendingId === scene.id}
-							title="When on, this clip's <Picture 1> / first image is the LAST FRAME of the previous scene's clip (resolved when the render actually runs, so batches chain correctly). Replaces the location reference for this scene."
-							onclick={() => toggleChain(scene)}
-						>
-							<Icon name="film" size={12} />
-							{Boolean(scene.chain_from_prev) ? 'Chained from prev clip' : 'Chain from prev clip'}
+						title="This scene's clip continues from a previous video (Extend-style). Requires a workflow with a video input; pick the source clip in the Video stage."
+						onclick={() => toggleChain(scene)}
+					>
+						<Icon name="film" size={12} />
+						{Boolean(scene.chain_from_prev) ? 'Continues from previous video' : 'Continue from previous video'}
 						</button>
 					{/if}
 				</div>
