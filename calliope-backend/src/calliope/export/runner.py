@@ -270,15 +270,16 @@ async def run_export(
 
     _require_binary("ffmpeg")
     probes = [await probe(clip["video_path"]) for clip in clips]
+    fps = target_fps(probes)
     durations = [float(p["duration"]) for p in probes]
     total_us = (sum(durations) - XFADE_SEC * max(0, len(clips) - 1)) * 1_000_000
 
-    cmd = build_ffmpeg_cmd(clips, probes, dest)
+    cmd = build_ffmpeg_cmd(clips, probes, dest, fps=fps)
     logger.info("Export job %s: %s", job_id, " ".join(cmd))
 
     await bus.publish(
         "job.progress",
-        {"job_id": job_id, "kind": "export", "percent": 0.0, "message": "Exporting film…"},
+        {"job_id": job_id, "kind": "export", "percent": 0.0, "message": f"Exporting film ({fps:.6g} fps)…"},
     )
     last_publish = time.monotonic()
 
