@@ -22,11 +22,17 @@ from calliope.db import get_db, row_to_dict
 logger = logging.getLogger("calliope.export")
 
 # Normalization targets — every clip is conformed to these before stitching.
+# The fps target is the clips' own majority fps (see target_fps), not a fixed
+# rate: 24 fps generated clips must export at 24 fps, not be retimed to 30.
 EXPORT_WIDTH = 1920
 EXPORT_HEIGHT = 1080
-EXPORT_FPS = 30
+DEFAULT_EXPORT_FPS = 30.0
 XFADE_SEC = 0.5
 PROGRESS_MIN_INTERVAL_SEC = 1.0
+
+# Retained for the pre-B2 v_chain reference; removed when build_ffmpeg_cmd
+# switches to the voted rate.
+EXPORT_FPS = DEFAULT_EXPORT_FPS
 
 _running: dict[int, asyncio.subprocess.Process] = {}
 
@@ -53,6 +59,37 @@ def _require_binary(name: str) -> str:
 def slugify(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return slug or "film"
+
+
+def parse_rate(rate: str | None) -> float:
+    """ffprobe r_frame_rate ("24000/1001") as a float; 0.0 when unusable."""
+    if not rate or "/" not in rate:
+        return 0.0
+    num, _, den = rate.partition("/")
+    try:
+        d = float(den)
+        if d == 0:
+            return 0.0
+        return float(num) / d
+    except ValueError:
+        return 0.0
+
+
+def target_fps(probes: list[dict[str, Any]]) -> float:
+    """Majority rounded fps across clips; tie → lower; none → default.
+
+    xfade needs one common timebase, so a mixed 24/30 fps project is conformed
+    to whichever rate most clips already use.
+    """
+    votes = [round(p["fps"]) for p in probes if p.get("fps")]
+    if not votes:
+        return DEFAULT_EXPORT_FPS
+    counts: dict[int, int] = {}
+    for v in votes:
+        counts[v] = counts.get(v, 0) + 1
+    best = max(counts.values())
+    winners = sorted(v for v, c in counts.items() if c == best)
+    return float(winners[0])
 
 
 def collect_clips(project_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
