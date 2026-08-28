@@ -24,6 +24,16 @@ from calliope.events.bus import event_bus
 
 logger = logging.getLogger("calliope.harness.orchestrator")
 
+
+def _llm_for_role(role: str) -> LLMClient:
+    # Tests patch orch.LLMClient with zero-arg fakes that lack for_role;
+    # prefer role resolution, fall back to a bare instance.
+    factory = LLMClient
+    for_role = getattr(factory, "for_role", None)
+    if callable(for_role):
+        return for_role(role)
+    return factory()
+
 # LLM context window bound: the last N user turns are replayed into each
 # request. Tool exchanges never span user turns, so tool_call/result pairs
 # always survive the trim intact.
@@ -125,7 +135,7 @@ def _scoped_payload(ctx: ToolContext, allowed: list[str]) -> list[dict[str, Any]
 
 
 async def _plan(goal: str, workspace_summary: str) -> dict[str, Any]:
-    client = LLMClient()
+    client = _llm_for_role("planner")
     try:
         text = await client.chat(
             [
@@ -337,7 +347,7 @@ async def orchestrate(
         + "\n\nWrite a concise final summary for the user: what was done, "
         "job ids enqueued, and any failures. Plain text."
     )
-    client = LLMClient()
+    client = _llm_for_role("planner")
     try:
         final = await client.chat(
             [
@@ -390,7 +400,8 @@ async def _run_sub_agent(
         else:
             await event_bus.publish("agent.message", {"session_id": ctx.session_id, **message})
 
-    client = LLMClient()
+    role = agent_name.removesuffix("-agent")
+    client = _llm_for_role(role)
     messages = list(sub_history)
     system = (
         "You are a specialized sub-agent in Calliope's production swarm. "

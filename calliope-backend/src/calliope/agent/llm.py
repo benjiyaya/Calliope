@@ -17,16 +17,31 @@ _STREAM_UNSUPPORTED_STATUS = frozenset({400, 404, 405, 501})
 
 
 class LLMClient:
-    def __init__(self) -> None:
-        self.base_url = settings.llm_base_url.rstrip("/")
-        self.model = settings.llm_model
-        self.api_key = settings.llm_api_key
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self.base_url = (base_url or settings.llm_base_url).rstrip("/")
+        self.model = model or settings.llm_model
+        self.api_key = api_key if api_key is not None else settings.llm_api_key
         # With every completion streamed (chat/chat_with_tools consume
         # chat_stream), 120 s bounds the gap BETWEEN chunks, not total
         # generation time: a thinking model streaming reasoning_content keeps
         # the connection fed for as long as it genuinely works, while a dead
         # server still fails fast.
         self.client = httpx.AsyncClient(timeout=120.0)
+
+    @classmethod
+    def for_role(cls, role: str) -> LLMClient:
+        """Client for an agent role's assigned profile (active fallback)."""
+        profile = settings.resolve_llm_for_role(role)
+        return cls(
+            base_url=profile.get("base_url"),
+            model=profile.get("model"),
+            api_key=profile.get("api_key") if isinstance(profile.get("api_key"), str) else None,
+        )
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

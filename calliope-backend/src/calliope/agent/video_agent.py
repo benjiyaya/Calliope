@@ -69,7 +69,7 @@ def _h3_subjects(
 
 async def _h3_rewrite(scene: dict[str, Any], subjects: list[dict[str, Any]]) -> str:
     """LLM rewrite into H3's six-section format, deterministic template on failure."""
-    client = LLMClient()
+    client = LLMClient.for_role("video")
     try:
         return await client.chat(
             build_minimax_h3_ref_messages(scene, subjects), temperature=0.4
