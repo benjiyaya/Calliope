@@ -715,6 +715,10 @@
 		border-radius: var(--radius-lg);
 		padding: var(--space-lg);
 	}
+	/* Tabs that render more than one panel (Agent) need a gap between them */
+	.panel + .panel {
+		margin-top: var(--space-lg);
+	}
 	.panel h1 {
 		margin: 0 0 6px;
 		font-size: 22px;
