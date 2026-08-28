@@ -43,34 +43,6 @@ def ref_audio_slots(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _find_all_by_role(inputs, "audio")
 
 
-def _clipindex_kind(inp: dict[str, Any]) -> str | None:
-    """``load`` or ``save`` from the stripped title label. None if unclear."""
-    label = (inp.get("label") or "").lower()
-    if "load" in label:
-        return "load"
-    if "save" in label:
-        return "save"
-    return None
-
-
-def _fill_clipindex(
-    inputs: list[dict[str, Any]],
-    values: dict[str, Any],
-    clip_index_load: int | None,
-    clip_index_save: int | None,
-) -> None:
-    """Write every ``(Input:clipindex)`` primitive. Timeline owns these values."""
-    for inp in _find_all_by_role(inputs, "clipindex"):
-        kind = _clipindex_kind(inp)
-        if kind == "load" and clip_index_load is not None:
-            values[str(inp["nodeId"])] = max(int(clip_index_load), 1)
-        elif kind == "save" and clip_index_save is not None:
-            values[str(inp["nodeId"])] = max(int(clip_index_save), 1)
-        elif kind is None and clip_index_save is not None:
-            # Single untagged clipindex (FirstMotion Save-only) → this clip.
-            values[str(inp["nodeId"])] = max(int(clip_index_save), 1)
-
-
 def _legacy_prompt_node(inputs: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Deprecated: untagged (Input) text nodes — prefer (Input:prompt)."""
     for inp in inputs:
@@ -104,8 +76,6 @@ def smart_fill_inputs(
     ref_videos: list[str] | None = None,
     ref_audios: list[str] | None = None,
     duration: int | float | None = None,
-    clip_index_load: int | None = None,
-    clip_index_save: int | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build valuesByNodeId from workflow dynamic inputs + context.
@@ -201,7 +171,7 @@ def smart_fill_inputs(
         reserved = {
             str(inp["nodeId"])
             for inp in inputs
-            if normalize_input_role(inp.get("role")) in ("duration", "clipindex")
+            if normalize_input_role(inp.get("role")) == "duration"
         }
         for k, v in extra.items():
             if v is None:
@@ -211,8 +181,5 @@ def smart_fill_inputs(
             if str(k) in reserved:
                 continue
             values[str(k)] = v
-
-    # Timeline-owned — always overwrite form defaults / extras.
-    _fill_clipindex(inputs, values, clip_index_load, clip_index_save)
 
     return values

@@ -11,10 +11,6 @@ from calliope.agent.prompts import (
     minimax_h3_ref_fallback,
     scene_video_prompt,
 )
-from calliope.comfyui.motion_context import (
-    classify_motion_role,
-    continued_duration,
-)
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.smart_fill import ref_image_slots, smart_fill_inputs
 from calliope.config import settings
@@ -90,20 +86,6 @@ def _workflow_json(workflow: dict[str, Any] | None) -> dict[str, Any]:
     return raw or {}
 
 
-def _motion_pair(
-    workflows: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    first: dict[str, Any] | None = None
-    nxt: dict[str, Any] | None = None
-    for wf in workflows:
-        role = classify_motion_role(_workflow_json(wf))
-        if role == "first" and first is None:
-            first = wf
-        elif role == "next" and nxt is None:
-            nxt = wf
-    return first, nxt
-
-
 def _get_workflow(workflow_id: int | None = None) -> dict[str, Any] | None:
     conn = get_db(settings.db_path)
     try:
@@ -130,7 +112,6 @@ async def enqueue_video_jobs(
     scene_ids: list[int] | None = None,
     workflow_id: int | None = None,
     input_values_override: dict[str, Any] | None = None,
-    continue_motion: bool | None = None,
 ) -> list[dict[str, Any]]:
     await event_bus.publish(
         "agent.thinking", {"message": "Queuing video jobs…", "project_id": project_id}
@@ -146,21 +127,6 @@ async def enqueue_video_jobs(
             params.extend(scene_ids)
         query += " ORDER BY order_index"
         scenes = [row_to_dict(r) for r in conn.execute(query, params).fetchall()]
-        all_scenes = [
-            row_to_dict(r)
-            for r in conn.execute(
-                "SELECT * FROM scenes WHERE project_id = ? ORDER BY order_index",
-                (project_id,),
-            ).fetchall()
-        ]
-        video_wfs = [
-            row_to_dict(r)
-            for r in conn.execute(
-                "SELECT * FROM workflows WHERE is_enabled = 1 AND kind = 'video' ORDER BY id ASC"
-            ).fetchall()
-        ]
-        first_wf, next_wf = _motion_pair(video_wfs)
-        batch_ids = {s["id"] for s in scenes}
 
         for scene in scenes:
             # Supersede leftover pending jobs so a re-Generate always starts fresh
@@ -182,49 +148,12 @@ async def enqueue_video_jobs(
             # self-deadlocks (sqlite3.OperationalError: database is locked).
             conn.commit()
 
-            earlier = [s for s in all_scenes if s["order_index"] < scene["order_index"]]
-            prev = earlier[-1] if earlier else None
-
-            prev_ready = False
-            if prev:
-                if prev.get("video_path") or prev["id"] in batch_ids:
-                    prev_ready = True
-                else:
-                    pending = conn.execute(
-                        """
-                        SELECT id FROM jobs
-                        WHERE scene_id = ? AND kind = 'video'
-                          AND status IN ('pending', 'running')
-                        """,
-                        (prev["id"],),
-                    ).fetchone()
-                    prev_ready = bool(pending)
-
-            want_continue = bool(prev) and (continue_motion if continue_motion is not None else prev_ready)
-            if want_continue and prev and not prev_ready:
-                raise ValueError(
-                    "Continue motion needs the previous clip "
-                    f"(scene {prev.get('order_index')}) generated first."
-                )
-
             wf_id = workflow_id or scene.get("workflow_id")
-            explicit = _get_workflow(wf_id) if wf_id else None
-            explicit_role = classify_motion_role(_workflow_json(explicit)) if explicit else None
-            if first_wf and next_wf and (explicit is None or explicit_role in ("first", "next")):
-                # Pair swap: clip 1 / continue-off → First; clips 2+ → Next.
-                workflow = next_wf if want_continue else first_wf
-            else:
-                workflow = explicit or _get_workflow(wf_id)
+            workflow = _get_workflow(wf_id)
 
             workflow_json = _workflow_json(workflow)
             inputs = parse_dynamic_inputs(workflow_json) if workflow_json else []
-            motion_role = classify_motion_role(workflow_json)
-            is_next = motion_role == "next" and want_continue
             duration = scene.get("duration_sec")
-            if is_next:
-                duration = continued_duration(duration)
-            save_index = max(int(scene.get("order_index") or 1), 1)
-            load_index = max(int(prev["order_index"]), 1) if prev and want_continue else None
 
             char_rows = conn.execute(
                 """
@@ -268,8 +197,6 @@ async def enqueue_video_jobs(
                     prompt=prompt,
                     ref_images=ref_paths,
                     duration=duration,
-                    clip_index_load=load_index,
-                    clip_index_save=save_index,
                     extra=input_values_override,
                 )
             else:
@@ -280,8 +207,6 @@ async def enqueue_video_jobs(
                     character_image=char_image,
                     location_image=loc_image,
                     duration=duration,
-                    clip_index_load=load_index,
-                    clip_index_save=save_index,
                     extra=input_values_override,
                 )
             payload: dict[str, Any] = {"input_values": values, "prompt": prompt}
@@ -293,7 +218,6 @@ async def enqueue_video_jobs(
                 # The value the location/first-image ref slot holds right now, so the
                 # worker can find and replace that exact slot whatever the layout.
                 payload["chain_replace_value"] = loc_image
-            payload["continue_motion"] = bool(want_continue and motion_role == "next")
             job = queue_manager.enqueue(
                 project_id=project_id,
                 kind="video",
