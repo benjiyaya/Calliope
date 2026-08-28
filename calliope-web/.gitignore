@@ -1,0 +1,9 @@
+# --- Node / Svelte ---
+node_modules/
+build/
+.svelte-kit/
+
+# --- Env / logs ---
+.env
+.env.*
+*.log

@@ -46,8 +46,9 @@ Open `http://127.0.0.1:5173`. The dev server proxies `/api` to the backend on `1
 
 Open the app, go to **Settings**, and set:
 
-1. **LLM** — base URL, model name, and API key of your OpenAI-compatible endpoint
+1. **LLM** — one or more OpenAI-compatible endpoints (base URL, model name, API key). Save several, then pick which one is **Active**.
 2. **ComfyUI** — the base URL of your running ComfyUI (e.g. `http://127.0.0.1:8188`)
+3. **Agent** *(optional)* — assign a specific LLM per agent role (see below)
 
 Leave **Dry-run** off — it is meant for testing and produces placeholder results instead of real generations.
 
@@ -60,6 +61,13 @@ In **Settings → Queue** you can tune how the worker talks to ComfyUI:
 - **Poll timeout (seconds)** — how long Calliope keeps waiting on ComfyUI for a single job before failing it. **Default is `1800` (30 minutes).** Long video generations can easily exceed 10 minutes, so raise this for heavy workflows — or set it to **`0` to wait indefinitely** (until the job finishes or you cancel it).
 - **Max retries** — automatic retries before a job is marked failed.
 
+### Agent settings
+
+In **Settings → Agent**:
+
+- **Model per agent** — assign any saved LLM to each role: **Main agent, Planner, Story agent, Script agent, Assets agent, Video agent**. Blank means the **Active LLM** from Settings → LLM applies, so a single-endpoint setup needs no configuration here. A common setup is a strong cloud model for the main agent and planner, and a fast local model for the sub-agents. The Video agent's assignment also drives the MiniMax H3 prompt rewrite.
+- **System-prompt rules (hardening)** — operator rules appended to every agent system prompt. Leave blank to disable.
+
 ## Using the app
 
 The app walks a project through four stages — **Story, Assets, Script, Video**:
@@ -68,7 +76,7 @@ The app walks a project through four stages — **Story, Assets, Script, Video**
 - **Assets:** each character, location, and item has its own **Image prompt**. Pick a workflow and shared settings (width/height/etc.) at the top, then click Generate per entity to produce reference images on your ComfyUI. Regenerate any single entity without touching the others.
 - **Script:** **Regenerate Script** also opens a project-linked Agents chat (pre-filled) to rewrite the per-scene script. Scenes link back to the characters and locations from the Story stage.
 - **Video:** each scene gets a **Generate** button that queues a clip job on ComfyUI with the right prompt and reference images (plus optional video/audio file refs). Import a FirstMotion + NextMotion H3 pair to chain clips: clip 1 starts a motion, clips 2+ continue the last 22 frames and 1s of audio from the previous latent so the export stitch reads as one long take.
-- **Film view:** once scenes have clips, **Export film** stitches them with ffmpeg: every clip is normalized to 1080p30, joined with 0.5s crossfades, and loudness-normalized into one final file.
+- **Film view:** once scenes have clips, **Export film** stitches them with ffmpeg: clips are normalized to 1080p at the **majority frame rate of the clips themselves** (24 fps clips export at 24 fps; mixed-rate projects conform to whichever rate most clips use), joined with 0.5s crossfades, and loudness-normalized into one final file.
 - When everything is done the project is automatically marked **Completed**.
 
 **Playground** is a free-form generation page outside the project pipeline: run any imported workflow with arbitrary inputs, upload your own files (image / video / audio) as inputs, and optionally attach a result to a project as an asset.
