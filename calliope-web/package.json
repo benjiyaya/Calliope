@@ -1,6 +1,6 @@
 {
-  "name": "calliope-web",
-  "version": "1.2.1",
+	"name": "calliope-web",
+	"version": "1.2.3",
   "private": true,
   "scripts": {
     "dev": "vite dev",

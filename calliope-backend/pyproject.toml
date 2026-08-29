@@ -1,6 +1,6 @@
 [project]
 name = "calliope"
-version = "1.2.1"
+version = "1.2.3"
 description = "Local-first AI story-to-video studio"
 requires-python = ">=3.11"
 dependencies = [
