@@ -13,6 +13,7 @@
 		type Workflow,
 	} from '$lib/api';
 	import { compactInputValues } from '$lib/comfy/promptInput';
+	import { createUploadManager } from '$lib/comfy/useUpload.svelte';
 	import { normalizeInputRole } from '$lib/comfy/parser';
 	import type { ComfyDynamicInput } from '$lib/comfy/types';
 	import type { AssetOption } from '$lib/assetPicker';
@@ -40,6 +41,21 @@
 	let lastFormScene = $state<number | null>(null);
 	// Clip source for continue scenes, keyed per scene: 'auto' | 'upload' | scene id.
 	let clipSource = $state<Record<number, string>>({});
+	// Hidden file input backing "Upload file" in the video source modal.
+	let videoFileInput = $state<HTMLInputElement | null>(null);
+	const videoUploadMgr = createUploadManager();
+
+	async function onVideoFileChosen(e: Event) {
+		const el = e.currentTarget as HTMLInputElement;
+		const file = el.files?.[0];
+		el.value = '';
+		const node = videoInputNodeFor(selected ? workflowFor(selected) : undefined);
+		if (!file || !selected || !node) return;
+		const path = await videoUploadMgr.uploadSafe(node.nodeId, file);
+		if (path) {
+			formValues = { ...formValues, [node.nodeId]: path };
+		}
+	}
 
 	// Per-scene input cache — switching scenes no longer wipes the form.
 	const formCache = new Map<number, Record<string, string | number>>();
@@ -183,12 +199,12 @@
 		return wf?.input_schema?.find((inp) => normalizeInputRole(inp.role ?? null) === 'video');
 	}
 
-	// Timeline source options for a continue scene: earlier scenes that already
+	// Timeline source options for a continue scene: any other scene that has
 	// rendered a clip, ordered by timeline position.
 	function timelineClipOptions(current: Scene | null): Scene[] {
 		if (!current) return [];
 		return scenes
-			.filter((s) => s.id !== current.id && s.order_index < current.order_index && s.video_path)
+			.filter((s) => s.id !== current.id && s.video_path)
 			.sort((a, b) => a.order_index - b.order_index);
 	}
 
@@ -546,6 +562,13 @@
 		{@const selSource = clipSource[selected.id] ?? 'auto'}
 		{@const selSourceValid = selSource === 'auto' || selSource === 'upload' || selClips.some((s) => String(s.id) === selSource)}
 		{@const selBlocked = selChain && !selHasVideoInput}
+		<input
+			bind:this={videoFileInput}
+			type="file"
+			class="sr-only-video-file"
+			accept="video/*,.mp4,.webm,.mov,.mkv"
+			onchange={onVideoFileChosen}
+		/>
 		<VideoEditWorkspace
 			{scenes}
 			{selected}
@@ -572,7 +595,11 @@
 			clipSource={{
 				enabled: selChain && selHasVideoInput && Boolean(selVideoNode),
 				value: selSourceValid ? selSource : 'auto',
-				options: selClips.map((s) => ({ id: String(s.id), label: `#${s.order_index} ${s.heading || 'Scene'}` })),
+				options: selClips.map((s) => ({
+					id: String(s.id),
+					label: `#${s.order_index} ${s.heading || 'Scene'}`,
+					path: s.video_path ?? undefined,
+				})),
 			}}
 			onClipSourceChange={(val) => {
 				if (val === 'auto') {
@@ -591,6 +618,7 @@
 					}
 				}
 			}}
+			onClipSourceUpload={() => videoFileInput?.click()}
 			onSelect={selectScene}
 			onStep={step}
 			onWorkflowChange={(id) => {
@@ -739,6 +767,18 @@
 </div>
 
 <style>
+	.sr-only-video-file {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
 	.queue-root {
 		display: flex;
 		flex-direction: column;

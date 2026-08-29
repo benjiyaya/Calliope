@@ -9,6 +9,7 @@
 	import type { AssetOption } from '$lib/assetPicker';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import ClipMonitor from './ClipMonitor.svelte';
+	import ClipSourceModal from './ClipSourceModal.svelte';
 	import SceneFilmstrip from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
 
@@ -20,9 +21,11 @@
 	}
 
 	interface ClipSourceOption {
-		/** Scene id as string, for a native select. */
+		/** Scene id as string, or the 'auto' / 'upload' sentinels. */
 		id: string;
 		label: string;
+		/** Clip path — the source modal renders video thumbnails when present. */
+		path?: string;
 	}
 
 	interface ClipSourceConfig {
@@ -52,6 +55,8 @@
 		/** Where this continue scene's video input comes from (auto / upload / a timeline clip). */
 		clipSource?: ClipSourceConfig;
 		onClipSourceChange?: (value: string) => void;
+		/** Upload file picked in the source modal — caller opens the file dialog. */
+		onClipSourceUpload?: () => void;
 		chained?: (scene: Scene) => boolean;
 		submitting?: boolean;
 		statusOf: (scene: Scene) => string;
@@ -82,6 +87,7 @@
 		generateDisabledReason = '',
 		clipSource,
 		onClipSourceChange,
+		onClipSourceUpload,
 		chained = () => false,
 		submitting = false,
 		statusOf,
@@ -93,6 +99,17 @@
 		onFormChange,
 		onGenerate,
 	}: Props = $props();
+
+	let clipSourceOpen = $state(false);
+
+	/** The label shown on the Video source trigger. */
+	const clipSourceLabel = $derived.by(() => {
+		if (!clipSource?.enabled) return '';
+		const val = clipSource.value;
+		if (val === 'auto') return 'Auto (previous clip)';
+		if (val === 'upload') return 'Upload file';
+		return clipSource.options.find((o) => o.id === val)?.label ?? 'Auto (previous clip)';
+	});
 </script>
 
 <div class="workspace">
@@ -136,26 +153,29 @@
 					</div>
 				</div>
 			{:else if clipSource?.enabled}
-				<div class="clip-source-row">
-					<label class="clip-source-label" for="clip-source-select">Video source</label>
-					<select
-						id="clip-source-select"
-						class="clip-source-select"
-						value={clipSource.value}
-						onchange={(e) => onClipSourceChange?.(e.currentTarget.value)}
-					>
-						<option value="auto">Auto (previous clip)</option>
-						<option value="upload">Upload file</option>
-						{#if clipSource.options.length > 0}
-							<optgroup label="From timeline">
-								{#each clipSource.options as opt (opt.id)}
-									<option value={opt.id}>{opt.label}</option>
-								{/each}
-							</optgroup>
-						{/if}
-					</select>
-				</div>
-			{/if}
+			<div class="clip-source-row">
+				<span class="clip-source-label" id="clip-source-label">Video source</span>
+				<button
+					type="button"
+					class="clip-source-trigger"
+					aria-haspopup="dialog"
+					aria-expanded={clipSourceOpen}
+					aria-labelledby="clip-source-label clip-source-value"
+					onclick={() => (clipSourceOpen = true)}
+				>
+					<Icon name="film" size={14} />
+					<span id="clip-source-value" class="clip-source-value">{clipSourceLabel}</span>
+					<Icon name="chevron-down" size={12} />
+				</button>
+			</div>
+			<ClipSourceModal
+				bind:open={clipSourceOpen}
+				value={clipSource.value}
+				options={clipSource.options}
+				onselect={(source) => onClipSourceChange?.(source)}
+				onupload={() => onClipSourceUpload?.()}
+			/>
+		{/if}
 			{#if assetOptions.length === 0}
 				<p class="asset-hint">
 					No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
@@ -260,15 +280,38 @@
 		white-space: nowrap;
 	}
 
-	.clip-source-select {
-		max-width: 320px;
-		padding: 6px 10px;
+	.clip-source-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		max-width: 360px;
+		padding: 6px 12px;
+		font: inherit;
 		font-size: 13px;
 		color: var(--text-primary);
 		background: var(--bg-elevated);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		font-family: var(--font-body);
+		cursor: pointer;
+	}
+
+	.clip-source-trigger:hover {
+		border-color: var(--text-muted);
+	}
+
+	.clip-source-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.clip-source-trigger :global(svg:last-child) {
+		color: var(--text-muted);
+	}
+
+	.clip-source-value {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.asset-hint {

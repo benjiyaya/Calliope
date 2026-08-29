@@ -5,7 +5,7 @@
 	interface Props {
 		open?: boolean;
 		title?: string;
-		size?: 'md' | 'lg';
+		size?: 'md' | 'lg' | 'xl';
 		dismissible?: boolean;
 		onclose?: () => void;
 		footer?: Snippet;
@@ -162,6 +162,9 @@
 	}
 	.modal-panel.size-lg {
 		width: min(920px, 100%);
+	}
+	.modal-panel.size-xl {
+		width: min(1180px, 100%);
 	}
 	.modal-header {
 		display: flex;
