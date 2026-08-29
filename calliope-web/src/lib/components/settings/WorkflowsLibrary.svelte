@@ -20,7 +20,6 @@
 	let analyzedInputs = $state<ComfyDynamicInput[]>([]);
 	let analyzedOutputs = $state<ComfyDynamicOutput[]>([]);
 	let analyzed = $state(false);
-	let analyzedMotion = $state<'first' | 'next' | null>(null);
 	let pendingJson = $state<Record<string, unknown> | null>(null);
 
 	let wfName = $state('');
@@ -40,7 +39,6 @@
 		analyzed = false;
 		analyzedInputs = [];
 		analyzedOutputs = [];
-		analyzedMotion = null;
 		pendingJson = null;
 		try {
 			const json = JSON.parse(text) as Record<string, unknown>;
@@ -48,10 +46,8 @@
 			const result = await workflows.analyze(json);
 			analyzedInputs = result.inputs;
 			analyzedOutputs = result.outputs;
-			analyzedMotion = result.motion_role ?? null;
 			analyzed = true;
 			wfProfile = result.suggested_profile ?? 'prose';
-			if (result.motion_role) wfKind = 'video';
 			if (!wfName.trim() && uploadedFileName) {
 				wfName = uploadedFileName.replace(/\.json$/i, '');
 			}
@@ -231,11 +227,6 @@
 		{/if}
 
 		{#if analyzed}
-			{#if analyzedMotion}
-				<p class="muted">
-					Motion chain: {analyzedMotion === 'first' ? 'First motion (clip 1)' : 'Next motion (clips 2+)'}
-				</p>
-			{/if}
 			<div class="io-panel">
 				<div class="io-col">
 					<h4>Detected inputs ({analyzedInputs.length})</h4>
@@ -362,11 +353,6 @@
 										<span class="kind-badge" class:video={wf.kind === 'video'}>{wf.kind}</span>
 										{#if wf.prompt_profile === 'minimax_h3_ref'}
 											<span class="kind-badge h3">H3-ref</span>
-										{/if}
-										{#if wf.motion_role === 'first'}
-											<span class="kind-badge h3">First motion</span>
-										{:else if wf.motion_role === 'next'}
-											<span class="kind-badge h3">Next motion</span>
 										{/if}
 										<span class="count">{wf.input_schema?.length ?? 0} inputs</span>
 										<span class="count">{wf.output_schema?.length ?? 0} outputs</span>

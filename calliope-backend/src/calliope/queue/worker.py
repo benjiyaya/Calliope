@@ -6,11 +6,14 @@ import json
 import logging
 from typing import Any
 
+from pathlib import Path as _fs_path
+
 from calliope import config
 from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
-from calliope.comfyui.motion_context import apply_motion_context
+from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.patcher import patch_workflow
+from calliope.comfyui.roles import input_has_role
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import run_export
@@ -129,16 +132,11 @@ class QueueWorker:
                 raise RuntimeError("No workflow found for job")
 
             input_values = payload.get("input_values") or {}
-            if payload.get("chain_from_prev") and kind == "video":
-                input_values = await self._apply_chain_from_prev(
+            if payload.get("continue_source") and kind == "video":
+                input_values = await self._resolve_continue_source(
                     job, payload, workflow, dict(input_values)
                 )
             patched = patch_workflow(workflow, input_values)
-            patched = apply_motion_context(
-                patched,
-                project_id=project_id,
-                continue_motion=bool(payload.get("continue_motion")),
-            )
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
 
@@ -171,112 +169,74 @@ class QueueWorker:
         finally:
             await client.close()
 
-    async def _apply_chain_from_prev(
+    async def _resolve_continue_source(
         self,
         job: dict[str, Any],
         payload: dict[str, Any],
         workflow: dict[str, Any],
         input_values: dict[str, Any],
     ) -> dict[str, Any]:
-        """Start this clip from the previous scene's last frame.
+        """Fill the workflow's video input with the previous scene's clip.
 
-        Runs at job time — in a batch the previous scene has rendered by now even
-        though it had not at enqueue time. Extracts the nearest earlier scene's
-        last frame and swaps it into the slot that held the location/first-image
-        reference (found by value; falls back to the location-role node). If no
-        previous clip exists, the job proceeds with its original refs.
+        Enqueue defers continue-scenes whose earlier clip does not exist yet
+        (batch generation); the queue is concurrency-1, so by the time this job
+        runs the earlier clip has been rendered and attached to its scene. The
+        path is injected into ``input_values`` like any user-provided value —
+        ``patch_workflow`` writes it onto the ``(Input:video)`` node and
+        ``prepare_media_inputs`` uploads it to ComfyUI before queuing.
         """
-        import subprocess
-
-        from calliope.comfyui.parser import parse_dynamic_inputs
-        from calliope.comfyui.roles import normalize_input_role
-
         project_id = job["project_id"]
-        order_index = payload.get("scene_order_index")
+        order_index = (payload.get("continue_source") or {}).get("scene_order_index")
+        if order_index is None:
+            order_index = payload.get("scene_order_index") or 0
+
+        prev_order: int | None = None
         prev_clip: str | None = None
         conn = get_db(config.settings.db_path)
         try:
-            rows = conn.execute(
+            row = conn.execute(
                 """
-                SELECT video_path FROM scenes
-                WHERE project_id = ? AND order_index < ? AND video_path IS NOT NULL
-                ORDER BY order_index DESC
+                SELECT order_index, video_path FROM scenes
+                WHERE project_id = ? AND order_index < ?
+                ORDER BY order_index DESC LIMIT 1
                 """,
-                (project_id, order_index if order_index is not None else 0),
-            ).fetchall()
-            for r in rows:
-                from pathlib import Path as _P
-
-                if r["video_path"] and _P(r["video_path"]).exists():
-                    prev_clip = r["video_path"]
-                    break
+                (project_id, order_index),
+            ).fetchone()
+            if row:
+                prev_order = row["order_index"]
+                prev_clip = row["video_path"]
         finally:
             conn.close()
 
-        if not prev_clip:
-            await event_bus.publish(
-                "job.progress",
-                {
-                    "job_id": job["id"],
-                    "project_id": project_id,
-                    "message": "Chain-from-previous: no earlier clip yet — using the scene's own refs",
-                },
+        scene_n = order_index
+        if prev_order is None:
+            raise RuntimeError(
+                f"Continue scene {scene_n}: no earlier scene in this project to continue from."
             )
-            return input_values
-
-        from pathlib import Path
-
-        frame_dir = config.settings.assets_dir / str(project_id) / "chain"
-        frame_dir.mkdir(parents=True, exist_ok=True)
-        frame = frame_dir / f"scene{job.get('scene_id')}_from_prev.png"
-        proc = subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-sseof", "-0.1", "-i", prev_clip,
-             "-update", "1", "-vframes", "1", str(frame)],
-            capture_output=True, text=True, timeout=60,
-        )
-        if proc.returncode != 0 or not frame.exists():
-            await event_bus.publish(
-                "job.progress",
-                {
-                    "job_id": job["id"],
-                    "project_id": project_id,
-                    "message": f"Chain-from-previous: frame extraction failed ({proc.stderr[:120]}) — using original refs",
-                },
+        if not prev_clip or not _fs_path(prev_clip).exists():
+            raise RuntimeError(
+                f"Continue scene {scene_n}: previous clip (scene {prev_order}) has no video file "
+                "— generate the earlier clip first."
             )
-            return input_values
 
-        # Find the slot to replace: the node holding the enqueue-time location value,
-        # else the workflow's location-role input (may be empty when no location is set).
-        replace_value = payload.get("chain_replace_value")
-        target_node: str | None = None
-        if replace_value:
-            for node_id, value in input_values.items():
-                if value == replace_value:
-                    target_node = str(node_id)
-                    break
-        if target_node is None:
-            for inp in parse_dynamic_inputs(workflow):
-                if normalize_input_role(inp.get("role")) == "location":
-                    target_node = str(inp["nodeId"])
-                    break
-        if target_node is None:
-            await event_bus.publish(
-                "job.progress",
-                {
-                    "job_id": job["id"],
-                    "project_id": project_id,
-                    "message": "Chain-from-previous: no ref slot found to carry the frame — using original refs",
-                },
+        video_node: str | None = None
+        for inp in parse_dynamic_inputs(workflow):
+            if input_has_role(inp, "video"):
+                video_node = str(inp["nodeId"])
+                break
+        if video_node is None:
+            raise RuntimeError(
+                "Continue scene "
+                f"{scene_n}: workflow has no (Input:video) node to receive the previous clip."
             )
-            return input_values
 
-        input_values[target_node] = str(frame)
+        input_values[video_node] = prev_clip
         await event_bus.publish(
             "job.progress",
             {
                 "job_id": job["id"],
                 "project_id": project_id,
-                "message": "Chain-from-previous: starting from the previous clip's last frame",
+                "message": f"Continuing from scene {prev_order} clip",
             },
         )
         return input_values

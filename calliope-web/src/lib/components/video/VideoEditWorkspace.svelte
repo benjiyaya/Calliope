@@ -7,7 +7,9 @@
 	import type { Scene, Workflow } from '$lib/api';
 	import OmniComposer from '$lib/components/OmniComposer.svelte';
 	import type { AssetOption } from '$lib/assetPicker';
+	import Icon from '$lib/components/ui/Icon.svelte';
 	import ClipMonitor from './ClipMonitor.svelte';
+	import ClipSourceModal from './ClipSourceModal.svelte';
 	import SceneFilmstrip from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
 
@@ -16,6 +18,21 @@
 	interface Progress {
 		progress?: number;
 		message?: string;
+	}
+
+	interface ClipSourceOption {
+		/** Scene id as string, or the 'auto' / 'upload' sentinels. */
+		id: string;
+		label: string;
+		/** Clip path — the source modal renders video thumbnails when present. */
+		path?: string;
+	}
+
+	interface ClipSourceConfig {
+		/** Only offered when the scene continues from the previous video and the workflow can accept it. */
+		enabled: boolean;
+		value: string;
+		options: ClipSourceOption[];
 	}
 
 	interface Props {
@@ -32,9 +49,14 @@
 		formValues: Record<string, string | number>;
 		assetOptions: AssetOption[];
 		allowUpload?: boolean;
-		showContinueMotion?: boolean;
-		continueMotion?: boolean;
-		onContinueChange?: (on: boolean) => void;
+		/** Disable Generate: scene continues from the previous video but the workflow cannot accept it. */
+		generateDisabled?: boolean;
+		generateDisabledReason?: string;
+		/** Where this continue scene's video input comes from (auto / upload / a timeline clip). */
+		clipSource?: ClipSourceConfig;
+		onClipSourceChange?: (value: string) => void;
+		/** Upload file picked in the source modal — caller opens the file dialog. */
+		onClipSourceUpload?: () => void;
 		chained?: (scene: Scene) => boolean;
 		submitting?: boolean;
 		statusOf: (scene: Scene) => string;
@@ -61,9 +83,11 @@
 		formValues = $bindable(),
 		assetOptions,
 		allowUpload = true,
-		showContinueMotion = false,
-		continueMotion = false,
-		onContinueChange,
+		generateDisabled = false,
+		generateDisabledReason = '',
+		clipSource,
+		onClipSourceChange,
+		onClipSourceUpload,
 		chained = () => false,
 		submitting = false,
 		statusOf,
@@ -75,6 +99,17 @@
 		onFormChange,
 		onGenerate,
 	}: Props = $props();
+
+	let clipSourceOpen = $state(false);
+
+	/** The label shown on the Video source trigger. */
+	const clipSourceLabel = $derived.by(() => {
+		if (!clipSource?.enabled) return '';
+		const val = clipSource.value;
+		if (val === 'auto') return 'Auto (previous clip)';
+		if (val === 'upload') return 'Upload file';
+		return clipSource.options.find((o) => o.id === val)?.label ?? 'Auto (previous clip)';
+	});
 </script>
 
 <div class="workspace">
@@ -106,21 +141,46 @@
 
 	<div class="composer-dock">
 		{#if workflow}
+			{#if generateDisabled}
+				<div class="continue-warning" role="alert">
+					<Icon name="alert" size={16} />
+					<div class="continue-warning-text">
+						<span class="continue-warning-title">Workflow has no video input</span>
+						<span>
+							This scene continues from the previous video. Switch to a workflow that has a video
+							input (LoadVideo node tagged (Input:video)).
+						</span>
+					</div>
+				</div>
+			{:else if clipSource?.enabled}
+			<div class="clip-source-row">
+				<span class="clip-source-label" id="clip-source-label">Video source</span>
+				<button
+					type="button"
+					class="clip-source-trigger"
+					aria-haspopup="dialog"
+					aria-expanded={clipSourceOpen}
+					aria-labelledby="clip-source-label clip-source-value"
+					onclick={() => (clipSourceOpen = true)}
+				>
+					<Icon name="film" size={14} />
+					<span id="clip-source-value" class="clip-source-value">{clipSourceLabel}</span>
+					<Icon name="chevron-down" size={12} />
+				</button>
+			</div>
+			<ClipSourceModal
+				bind:open={clipSourceOpen}
+				value={clipSource.value}
+				options={clipSource.options}
+				onselect={(source) => onClipSourceChange?.(source)}
+				onupload={() => onClipSourceUpload?.()}
+			/>
+		{/if}
 			{#if assetOptions.length === 0}
 				<p class="asset-hint">
 					No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
 					file here.
 				</p>
-			{/if}
-			{#if showContinueMotion}
-				<label class="continue-row">
-					<input
-						type="checkbox"
-						checked={continueMotion}
-						onchange={(e) => onContinueChange?.(e.currentTarget.checked)}
-					/>
-					<span>Continue motion from previous clip</span>
-				</label>
 			{/if}
 			<OmniComposer
 				inputs={workflow.input_schema}
@@ -128,13 +188,15 @@
 				{workflow}
 				{workflows}
 				onWorkflowChange={onWorkflowChange}
-				{assetOptions}
-				{allowUpload}
-				generateLabel="Generate clip"
-				{submitting}
-				onChange={onFormChange}
-				onSubmit={onGenerate}
-			/>
+			{assetOptions}
+			{allowUpload}
+			generateLabel="Generate clip"
+			{submitting}
+			disabled={generateDisabled}
+			generateDisabledHint={generateDisabledReason}
+			onChange={onFormChange}
+			onSubmit={onGenerate}
+		/>
 		{:else}
 			<div class="no-wf">
 				<p class="empty-title">No video workflow enabled</p>
@@ -175,18 +237,81 @@
 		flex-shrink: 0;
 	}
 
-	.continue-row {
+	.continue-warning {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 10px 12px;
+		margin: 0 0 8px;
+		border-radius: var(--radius-md);
+		border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+		background: color-mix(in srgb, var(--warning) 10%, var(--bg-surface));
+		color: var(--text-secondary);
+		font-size: 13px;
+	}
+
+	.continue-warning :global(svg) {
+		flex-shrink: 0;
+		margin-top: 2px;
+		color: var(--warning);
+	}
+
+	.continue-warning-text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.continue-warning-title {
+		font-weight: 650;
+		color: var(--text-primary);
+	}
+
+	.clip-source-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		margin: 0 0 8px;
+	}
+
+	.clip-source-label {
 		font-size: 12px;
 		color: var(--text-secondary);
+		white-space: nowrap;
+	}
+
+	.clip-source-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		max-width: 360px;
+		padding: 6px 12px;
+		font: inherit;
+		font-size: 13px;
+		color: var(--text-primary);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
 		cursor: pointer;
 	}
 
-	.continue-row input {
-		accent-color: var(--accent);
+	.clip-source-trigger:hover {
+		border-color: var(--text-muted);
+	}
+
+	.clip-source-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.clip-source-trigger :global(svg:last-child) {
+		color: var(--text-muted);
+	}
+
+	.clip-source-value {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.asset-hint {

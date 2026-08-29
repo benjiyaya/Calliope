@@ -75,7 +75,7 @@ The app walks a project through four stages — **Story, Assets, Script, Video**
 - **Story:** describe your idea and **Draft Storyline** — this opens a project-linked chat in the Agents view with the prompt pre-filled, and the agent writes beats, characters, locations, and misc. items. Edit anything by hand before moving on.
 - **Assets:** each character, location, and item has its own **Image prompt**. Pick a workflow and shared settings (width/height/etc.) at the top, then click Generate per entity to produce reference images on your ComfyUI. Regenerate any single entity without touching the others.
 - **Script:** **Regenerate Script** also opens a project-linked Agents chat (pre-filled) to rewrite the per-scene script. Scenes link back to the characters and locations from the Story stage.
-- **Video:** each scene gets a **Generate** button that queues a clip job on ComfyUI with the right prompt and reference images (plus optional video/audio file refs). Import a FirstMotion + NextMotion H3 pair to chain clips: clip 1 starts a motion, clips 2+ continue the last 22 frames and 1s of audio from the previous latent so the export stitch reads as one long take.
+- **Video:** each scene gets a **Generate** button that queues a clip job on ComfyUI with the right prompt and reference images (plus optional video/audio file refs). Scenes marked **Continue from previous video** in Script extend the previous clip instead of cutting fresh — see [Continue from previous clip (video extend)](#continue-from-previous-clip-video-extend).
 - **Film view:** once scenes have clips, **Export film** stitches them with ffmpeg: clips are normalized to 1080p at the **majority frame rate of the clips themselves** (24 fps clips export at 24 fps; mixed-rate projects conform to whichever rate most clips use), joined with 0.5s crossfades, and loudness-normalized into one final file.
 - When everything is done the project is automatically marked **Completed**.
 
@@ -124,7 +124,6 @@ Input roles:
 | `image` | `img` | Generic image input (ordered ref slot — see below) |
 | `video` | `vid` | Video file input (`LoadVideo`) |
 | `audio` | `sound`, `sfx` | Audio file input (`LoadAudio`) |
-| `clipindex` | `clip_index` | H3 Motion Context Primitive INT (`Load` / `Save` in the title) |
 | `seed` | — | Shared form |
 | `duration` | `dur`, `length`, `seconds` | Scene duration (video jobs) |
 
@@ -148,6 +147,22 @@ For multi-reference workflows, generic `(Input:image)` inputs are filled in **no
 - **Text Prompt — leave it empty.** An empty field gets the LLM-rewritten six-section H3 prompt built from the scene's action, dialogue, characters, and location. If you type anything, your text is sent verbatim and the model receives plain prose instead of the H3 format.
 - **Ref 1 / Ref 2 — leave them on "Choose asset…"** to auto-fill from the scene's characters (in scene order) then the location, with `<Subject N>` numbering matched to those slots. Picking an asset manually overrides just that slot (and you take over subject numbering for it).
 - **Duration** auto-fills from the scene's estimated duration; edit it only when you want a different clip length.
+
+### Continue from previous clip (video extend)
+
+Long takes don't have to be one giant generation. Mark a scene **Continue from previous video** in the **Script** stage and instead of cutting a fresh clip, it extends the previous scene's clip as real continuation footage (the first scene can't use the toggle).
+
+The **Video** stage enforces one requirement: the scene's workflow must have an input tagged `(Input:video)` (a `LoadVideo` node). Continue scenes on a workflow without one have Generate disabled with a warning.
+
+When the workflow qualifies, a **clip source picker** appears on the continue scene:
+
+- **Auto** (default) — the previous scene's clip is used, resolved when the job actually runs.
+- **Upload file** — extend from any video you provide (a Playground upload).
+- **From timeline** — pick a specific earlier scene's clip explicitly.
+
+Auto is safe even when scenes are queued in one batch: Calliope's queue renders one job at a time, so by the time a continue scene runs, the scene before it has already rendered and its clip is picked up automatically.
+
+The workflow pattern (per [kat3ri/ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend)) is a `LoadVideo (Input:video)` node feeding the MiniMax H3 extend patched nodes (`MiniMaxH3EncodeAVPatched` → `MiniMaxH3VideoExtendPatched`) with the `(Output:video)` node at the end. Recommended starting settings from that repo: `context_frames` **2**, `ref_spacing` **1–2**, `ref_decay` **0.3**, `ref_ramp` **3–4** (5–6 if the prior clip had heavy motion).
 
 ### 3. Export the workflow
 

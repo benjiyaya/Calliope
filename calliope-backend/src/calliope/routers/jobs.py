@@ -63,7 +63,6 @@ async def generate_videos(
             scene_ids=body.scene_ids,
             workflow_id=body.workflow_id,
             input_values_override=body.input_values,
-            continue_motion=body.continue_motion,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

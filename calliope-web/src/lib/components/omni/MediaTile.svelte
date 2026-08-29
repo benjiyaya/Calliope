@@ -73,11 +73,19 @@
 
 	const isImageKind = $derived(input.kind === 'image' || input.kind === 'image_url');
 	const isVideoKind = $derived(input.kind === 'video');
-	const matchingAssets = $derived(
-		assetOptions.filter(
-			(o) => !o.kind || o.kind === input.kind || (isImageKind && o.kind === 'image'),
-		),
-	);
+	const matchingAssets = $derived.by(() => {
+		// The same path can arrive twice (e.g. a scene clip that was also
+		// uploaded to the playground). Duplicate keys crash the keyed each
+		// in the picker grid, so dedupe by path first.
+		const seen = new Set<string>();
+		return assetOptions.filter((o) => {
+			const match =
+				!o.kind || o.kind === input.kind || (isImageKind && o.kind === 'image');
+			if (!match || seen.has(o.path)) return false;
+			seen.add(o.path);
+			return true;
+		});
+	});
 
 	const displayLabel = $derived(
 		input.role === 'character'

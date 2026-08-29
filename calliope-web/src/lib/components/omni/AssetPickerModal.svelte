@@ -65,6 +65,16 @@
 		wasOpen = now;
 	});
 
+	// The modal instance can be reused across tiles whose kind differs (e.g. a
+	// workflow swap turns an image node into video). If the stored tab is not in
+	// the visible list, the body would render one tab while the header shows
+	// another — clamp it instead.
+	$effect(() => {
+		if (tabs.length > 0 && !tabs.some((t) => t.id === tab)) {
+			tab = tabs[0].id;
+		}
+	});
+
 	const q = $derived(query.trim().toLowerCase());
 
 	const visible = $derived.by(() => {

@@ -48,6 +48,10 @@
 		onSubmit?: () => void;
 		/** Pending state for the Generate button (shows spinner-ish label). */
 		submitting?: boolean;
+	/** Disable the Generate button (e.g. workflow cannot fulfil the scene). */
+	disabled?: boolean;
+	/** Why Generate is disabled — surfaced as the button's title tooltip. */
+	generateDisabledHint?: string;
 		/** Custom label for the Generate button. */
 		generateLabel?: string;
 	}
@@ -65,6 +69,8 @@
 		onChange,
 		onSubmit,
 		submitting = false,
+		disabled = false,
+		generateDisabledHint = '',
 		generateLabel = 'Generate',
 	}: Props = $props();
 
@@ -355,8 +361,9 @@
 		<button
 			type="button"
 			class="generate-btn"
-			class:disabled={submitting}
-			disabled={submitting}
+			class:disabled={submitting || disabled}
+			disabled={submitting || disabled}
+			title={disabled ? generateDisabledHint : undefined}
 			onclick={() => onSubmit?.()}
 			aria-label="Generate"
 		>

@@ -201,4 +201,3 @@ class GenerateVideosRequest(BaseModel):
     scene_ids: list[int] | None = None
     workflow_id: int | None = None
     input_values: dict[str, Any] | None = None
-    continue_motion: bool | None = None

@@ -13,6 +13,9 @@
 		type Workflow,
 	} from '$lib/api';
 	import { compactInputValues } from '$lib/comfy/promptInput';
+	import { createUploadManager } from '$lib/comfy/useUpload.svelte';
+	import { normalizeInputRole } from '$lib/comfy/parser';
+	import type { ComfyDynamicInput } from '$lib/comfy/types';
 	import type { AssetOption } from '$lib/assetPicker';
 	import { progressFor } from '$lib/jobProgress';
 	import SafeMedia from './SafeMedia.svelte';
@@ -36,8 +39,25 @@
 	let formValues = $state<Record<string, string | number>>({});
 	let selectedWorkflow = $state<Record<number, number>>({});
 	let lastFormScene = $state<number | null>(null);
+	// Clip source for continue scenes, keyed per scene: 'auto' | 'upload' | scene id.
+	let clipSource = $state<Record<number, string>>({});
+	// Hidden file input backing "Upload file" in the video source modal.
+	let videoFileInput = $state<HTMLInputElement | null>(null);
+	const videoUploadMgr = createUploadManager();
 
-	// Per-scene input cache â€” switching scenes no longer wipes the form.
+	async function onVideoFileChosen(e: Event) {
+		const el = e.currentTarget as HTMLInputElement;
+		const file = el.files?.[0];
+		el.value = '';
+		const node = videoInputNodeFor(selected ? workflowFor(selected) : undefined);
+		if (!file || !selected || !node) return;
+		const path = await videoUploadMgr.uploadSafe(node.nodeId, file);
+		if (path) {
+			formValues = { ...formValues, [node.nodeId]: path };
+		}
+	}
+
+	// Per-scene input cache — switching scenes no longer wipes the form.
 	const formCache = new Map<number, Record<string, string | number>>();
 
 	const scenesQuery = createQuery(
@@ -72,8 +92,6 @@
 		queryKey: ['playground-uploads'],
 		queryFn: playgroundApi.listUploads,
 	});
-
-	let continueByScene = $state<Record<number, boolean>>({});
 
 	const scenes = $derived(($scenesQuery.data?.scenes ?? []) as Scene[]);
 	const totalSec = $derived(
@@ -139,10 +157,6 @@
 			? videoWorkflows
 			: (($workflowsQuery.data ?? []) as Workflow[]).filter((w) => w.is_enabled),
 	);
-	const motionPairReady = $derived(
-		enabledWorkflows.some((w) => w.motion_role === 'first') &&
-			enabledWorkflows.some((w) => w.motion_role === 'next'),
-	);
 
 	$effect(() => {
 		if (selectedId != null) return;
@@ -175,17 +189,23 @@
 		return seed;
 	}
 
-	function previousScene(scene: Scene | null): Scene | null {
-		if (!scene) return null;
-		const earlier = scenes.filter((s) => s.order_index < scene.order_index);
-		return earlier.length ? earlier[earlier.length - 1] : null;
+	function workflowHasVideoInput(wf: Workflow | undefined): boolean {
+		return Boolean(
+			wf?.input_schema?.some((inp) => normalizeInputRole(inp.role ?? null) === 'video'),
+		);
 	}
 
-	function continueMotionFor(scene: Scene): boolean {
-		const prev = previousScene(scene);
-		if (!prev) return false;
-		if (continueByScene[scene.id] !== undefined) return continueByScene[scene.id];
-		return Boolean(prev.video_path);
+	function videoInputNodeFor(wf: Workflow | undefined): ComfyDynamicInput | undefined {
+		return wf?.input_schema?.find((inp) => normalizeInputRole(inp.role ?? null) === 'video');
+	}
+
+	// Timeline source options for a continue scene: any other scene that has
+	// rendered a clip, ordered by timeline position.
+	function timelineClipOptions(current: Scene | null): Scene[] {
+		if (!current) return [];
+		return scenes
+			.filter((s) => s.id !== current.id && s.video_path)
+			.sort((a, b) => a.order_index - b.order_index);
 	}
 
 	const generateOne = createMutation({
@@ -196,7 +216,6 @@
 				scene_ids: [sceneId],
 				workflow_id: selectedWorkflow[sceneId] ?? wf?.id,
 				input_values: compactInputValues(formValues),
-				continue_motion: scene ? continueMotionFor(scene) : false,
 			});
 		},
 		onSuccess: async () => {
@@ -211,8 +230,8 @@
 	// One POST per scene (the H3 prompt rewrite runs synchronously inside each
 	// request, so a single all-scenes POST could take minutes and time out).
 	// The queue worker then renders them strictly in sequence (concurrency 1).
-	// Do not send continue_motion here: omit it so the backend can treat a
-	// just-queued previous scene as "ready" and pick First/Next correctly.
+	// No per-scene form values here: continue scenes resolve their previous
+	// clip at enqueue or run time on the backend.
 	let batching = $state(false);
 	let batchNote = $state('');
 
@@ -316,7 +335,7 @@
 		return `${m}:${r.toString().padStart(2, '0')}`;
 	}
 
-	// Same compact "3m ago" style as ProjectCard â€” local copy keeps this stage self-contained.
+	// Same compact "3m ago" style as ProjectCard — local copy keeps this stage self-contained.
 	function relativeTime(iso: string): string {
 		const then = new Date(iso).getTime();
 		if (Number.isNaN(then)) return '';
@@ -349,7 +368,7 @@
 		selectedId = id;
 	}
 
-	// Filmstrip click â†’ jump back to the editor with that scene selected.
+	// Filmstrip click → jump back to the editor with that scene selected.
 	function editScene(id: number) {
 		selectedId = id;
 		view = 'edit';
@@ -386,7 +405,7 @@
 			? ((exportJob.output_paths ?? []).find((p) => /\.mp4$/i.test(p)) ?? null)
 			: null,
 	);
-	// A clip finished after the export completed â†’ the film no longer matches the timeline.
+	// A clip finished after the export completed → the film no longer matches the timeline.
 	const exportStale = $derived.by(() => {
 		if (exportJob?.status !== 'done' || !exportJob.completed_at) return false;
 		const exportAt = Date.parse(exportJob.completed_at);
@@ -468,7 +487,7 @@
 			{#if scenes.length === 0}
 				Build a script first, then cut clips on the timeline.
 			{:else}
-				{doneCount}/{scenes.length} clips done Â· {formatClock(totalSec)} total
+				{doneCount}/{scenes.length} clips done · {formatClock(totalSec)} total
 			{/if}
 		</p>
 	</div>
@@ -520,7 +539,7 @@
 		<div class="paused-banner" role="status">
 			<Icon name="alert" size={16} />
 			<StatusChip status="paused" label="Queue paused" />
-			<span class="paused-text">Renders are held â€” workers sit idle until you resume.</span>
+			<span class="paused-text">Renders are held — workers sit idle until you resume.</span>
 			<span class="paused-action">
 				<Button size="sm" variant="secondary" onclick={resumeQueue}>Resume now</Button>
 			</span>
@@ -536,6 +555,20 @@
 		{@const selWf = workflowFor(selected)}
 		{@const selStatus = statusOf(selected)}
 		{@const selPreview = previewPath(selected)}
+		{@const selHasVideoInput = workflowHasVideoInput(selWf)}
+		{@const selVideoNode = videoInputNodeFor(selWf)}
+		{@const selClips = timelineClipOptions(selected)}
+		{@const selChain = Boolean(selected.chain_from_prev)}
+		{@const selSource = clipSource[selected.id] ?? 'auto'}
+		{@const selSourceValid = selSource === 'auto' || selSource === 'upload' || selClips.some((s) => String(s.id) === selSource)}
+		{@const selBlocked = selChain && !selHasVideoInput}
+		<input
+			bind:this={videoFileInput}
+			type="file"
+			class="sr-only-video-file"
+			accept="video/*,.mp4,.webm,.mov,.mkv"
+			onchange={onVideoFileChosen}
+		/>
 		<VideoEditWorkspace
 			{scenes}
 			{selected}
@@ -554,12 +587,38 @@
 			{statusOf}
 			{thumbFor}
 			{formatClock}
-			showContinueMotion={motionPairReady && previousScene(selected) != null}
-			continueMotion={continueMotionFor(selected)}
-			chained={continueMotionFor}
-			onContinueChange={(on) => {
-				continueByScene = { ...continueByScene, [selected.id]: on };
+			chained={(scene) => Boolean(scene.chain_from_prev)}
+			generateDisabled={selBlocked}
+			generateDisabledReason={selBlocked
+				? 'This scene continues from the previous video — pick a workflow with a video input'
+				: ''}
+			clipSource={{
+				enabled: selChain && selHasVideoInput && Boolean(selVideoNode),
+				value: selSourceValid ? selSource : 'auto',
+				options: selClips.map((s) => ({
+					id: String(s.id),
+					label: `#${s.order_index} ${s.heading || 'Scene'}`,
+					path: s.video_path ?? undefined,
+				})),
 			}}
+			onClipSourceChange={(val) => {
+				if (val === 'auto') {
+					// Back to Auto: send nothing — the backend resolves the previous clip.
+					const next = { ...clipSource };
+					delete next[selected.id];
+					clipSource = next;
+					if (selVideoNode) formValues = { ...formValues, [selVideoNode.nodeId]: '' };
+				} else if (val === 'upload') {
+					clipSource = { ...clipSource, [selected.id]: 'upload' };
+				} else {
+					clipSource = { ...clipSource, [selected.id]: val };
+					const clip = selClips.find((s) => String(s.id) === val);
+					if (clip?.video_path && selVideoNode) {
+						formValues = { ...formValues, [selVideoNode.nodeId]: clip.video_path };
+					}
+				}
+			}}
+			onClipSourceUpload={() => videoFileInput?.click()}
 			onSelect={selectScene}
 			onStep={step}
 			onWorkflowChange={(id) => {
@@ -589,13 +648,13 @@
 				{#if exportStale}
 					<div class="stale-banner" role="status">
 						<Icon name="alert" size={14} />
-						<span>Clips changed since this export â€” re-export to update.</span>
+						<span>Clips changed since this export — re-export to update.</span>
 					</div>
 				{/if}
 			{:else if exportState === 'active'}
 				<div class="program-slate">
 					<Spinner size="lg" />
-					<h3 class="slate-title">Exporting your filmâ€¦</h3>
+					<h3 class="slate-title">Exporting your film…</h3>
 					<div class="slate-progress">
 						<ProgressBar
 							value={exportProg?.progress ?? 0}
@@ -603,7 +662,7 @@
 							label={exportProg?.message}
 						/>
 					</div>
-					<p class="slate-sub">You can keep editing â€” export runs in the background.</p>
+					<p class="slate-sub">You can keep editing — export runs in the background.</p>
 					<Button variant="ghost" size="sm" onclick={cancelExport}>Cancel</Button>
 				</div>
 			{:else if exportState === 'failed'}
@@ -630,7 +689,7 @@
 					</span>
 					<h3 class="slate-title">Your film isn't exported yet</h3>
 					<p class="slate-sub">
-						{clipsReady} clips Â· {formatClock(totalSec)} Â· 0.5s crossfades Â· loudness matched
+						{clipsReady} clips · {formatClock(totalSec)} · 0.5s crossfades · loudness matched
 					</p>
 					{#if clipsMissing > 0}
 						<p class="slate-warn" role="status">
@@ -657,7 +716,7 @@
 			{@const exportUrl = assetUrl(exportPath)}
 			<div class="film-meta">
 				<span class="film-meta-text">
-					{exportClipCount} clips Â· {formatClock(totalSec)}{#if exportedAgo} Â· Exported {exportedAgo}{/if}
+					{exportClipCount} clips · {formatClock(totalSec)}{#if exportedAgo} · Exported {exportedAgo}{/if}
 				</span>
 				<div class="film-actions">
 					{#if exportUrl}
@@ -686,7 +745,7 @@
 						<button
 							type="button"
 							class="filmstrip-item"
-							title={`${scene.heading || 'Scene'} â€” edit in timeline`}
+							title={`${scene.heading || 'Scene'} — edit in timeline`}
 							onclick={() => editScene(scene.id)}
 						>
 							{#if thumb?.kind === 'image'}
@@ -708,6 +767,18 @@
 </div>
 
 <style>
+	.sr-only-video-file {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
 	.queue-root {
 		display: flex;
 		flex-direction: column;
