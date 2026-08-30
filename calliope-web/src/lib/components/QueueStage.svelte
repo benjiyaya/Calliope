@@ -19,6 +19,7 @@
 	import type { AssetOption } from '$lib/assetPicker';
 	import { progressFor } from '$lib/jobProgress';
 	import SafeMedia from './SafeMedia.svelte';
+	import PromptPreviewModal from './video/PromptPreviewModal.svelte';
 	import VideoEditWorkspace from './video/VideoEditWorkspace.svelte';
 	import Button from './ui/Button.svelte';
 	import Icon from './ui/Icon.svelte';
@@ -170,8 +171,77 @@
 		if (id === lastFormScene) return;
 		if (lastFormScene != null) formCache.set(lastFormScene, formValues);
 		lastFormScene = id;
-		formValues = id != null ? { ...(formCache.get(id) ?? seedSceneDefaults(selected)) } : {};
+		if (id != null) {
+			const stored = formCache.get(id);
+			if (stored) {
+				formValues = { ...stored };
+			} else if (selected?.video_settings?.input_values) {
+				// First open of a persisted setup: hydrate from the scene row.
+				formValues = {
+					...seedSceneDefaults(selected),
+					...selected.video_settings.input_values,
+				};
+			} else {
+				formValues = { ...seedSceneDefaults(selected) };
+			}
+		} else {
+			formValues = {};
+		}
 	});
+
+	// --- Auto-save scene setup (issue #28) ---
+	// Debounced write-through: in-memory formCache stays source of truth for
+	// the session; the scene row makes it survive restarts. Hash-compare so
+	// polling refetches never trigger PATCH churn.
+	let saveTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastSavedHash = $state('');
+
+	function currentVideoSettings(): Record<string, unknown> {
+		if (!selected) return {};
+		const out: Record<string, unknown> = {
+			input_values: compactInputValues(formValues),
+		};
+		const wfId = selectedWorkflow[selected.id];
+		if (wfId) out.form_workflow_id = wfId;
+		const src = clipSource[selected.id];
+		if (src) out.clip_source = src;
+		const draft = selected.video_settings?.prompt_draft;
+		const meta = selected.video_settings?.prompt_draft_meta;
+		if (draft) {
+			out.prompt_draft = draft;
+			if (meta) out.prompt_draft_meta = meta;
+		}
+		return out;
+	}
+
+	function settingsHash(obj: Record<string, unknown>): string {
+		return JSON.stringify(obj);
+	}
+
+	$effect(() => {
+		// Track the pieces that make up the persisted settings.
+		const _unused = [formValues, selectedWorkflow, clipSource, selected?.id];
+		void _unused;
+		if (!selected || saveTimer) return;
+		saveTimer = setTimeout(() => {
+			saveTimer = null;
+			if (!selected) return;
+			const next = currentVideoSettings();
+			const hash = settingsHash(next);
+			if (hash === lastSavedHash) return;
+			lastSavedHash = hash;
+			projects
+				.updateScene(projectId, selected.id, { video_settings: next })
+				.catch(() => {
+					/* transient — next change retries */
+				});
+		}, 800);
+	});
+
+	async function onFormChangePersist() {
+		// formCache write-through happens in the switch effect; autosave effect
+		// handles persistence. Kept as an explicit hook for future callers.
+	}
 
 	// Context-aware defaults for a freshly opened scene form (user edits and the
 	// workflow's static defaults must not override these). Duration-role inputs
@@ -209,13 +279,15 @@
 	}
 
 	const generateOne = createMutation({
-		mutationFn: (sceneId: number) => {
+		mutationFn: (vars: { sceneId: number; prompt?: string }) => {
+			const { sceneId } = vars;
 			const scene = scenes.find((s) => s.id === sceneId);
 			const wf = scene ? workflowFor(scene) : undefined;
 			return jobsApi.generateVideos(projectId, {
 				scene_ids: [sceneId],
 				workflow_id: selectedWorkflow[sceneId] ?? wf?.id,
 				input_values: compactInputValues(formValues),
+				prompts: vars.prompt ? { [String(sceneId)]: vars.prompt } : undefined,
 			});
 		},
 		onSuccess: async () => {
@@ -225,6 +297,19 @@
 		},
 		onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
 	});
+
+	// --- HITL review gate (issue #27) ---
+	let previewOpen = $state(false);
+
+	function beginGenerate() {
+		if (!selected) return;
+		previewOpen = true;
+	}
+
+	function onGenerateConfirmed(prompt: string) {
+		if (!selected) return;
+		$generateOne.mutate({ sceneId: selected.id, prompt });
+	}
 
 	// --- Batch generate: queue clips one by one, in timeline order. ---
 	// One POST per scene (the H3 prompt rewrite runs synchronously inside each
@@ -255,6 +340,7 @@
 		if (batching || batchTargets.length === 0) return;
 		batching = true;
 		let queued = 0;
+		let drafted = 0;
 		const targets = [...batchTargets].sort((a, b) => a.order_index - b.order_index);
 		for (let i = 0; i < targets.length; i++) {
 			const scene = targets[i];
@@ -263,11 +349,20 @@
 				// Resolve like the per-scene button does: session pick → scene's stored
 				// workflow → first enabled video workflow. A scene whose stored workflow
 				// was deleted would otherwise enqueue a job doomed to "No workflow found".
+				// Saved prompt drafts ride along; un-drafted scenes get the backend's
+				// auto-rewrite (deterministic template on LLM failure).
+				const draft = scene.video_settings?.prompt_draft;
+				const draftFresh =
+					draft && scene.video_settings?.prompt_draft_meta?.based_on
+						? scene.video_settings.prompt_draft_meta.based_on
+						: null;
 				await jobsApi.generateVideos(projectId, {
 					scene_ids: [scene.id],
 					workflow_id: workflowFor(scene)?.id,
+					prompts: draft ? { [String(scene.id)]: draft } : undefined,
 				});
 				queued++;
+				if (draft) drafted++;
 				client.invalidateQueries({ queryKey: ['jobs'] });
 				client.invalidateQueries({ queryKey: ['scenes'] });
 			} catch (err) {
@@ -278,7 +373,12 @@
 		}
 		batching = false;
 		batchNote = '';
-		if (queued > 0) toast.success(`${queued} clip${queued === 1 ? '' : 's'} queued — rendering in sequence`);
+		if (queued > 0) {
+			const draftNote = drafted > 0 ? ` · ${drafted} saved draft${drafted === 1 ? '' : 's'}` : '';
+			toast.success(
+				`${queued} clip${queued === 1 ? '' : 's'} queued — rendering in sequence${draftNote}`,
+			);
+		}
 		await client.invalidateQueries({ queryKey: ['jobs'] });
 		await client.invalidateQueries({ queryKey: ['scenes'] });
 	}
@@ -578,6 +678,10 @@
 			progress={selProg}
 			error={selError}
 			errorLong={selErrorLong}
+			job={selJob}
+			sceneJobs={($jobsQuery.data ?? []).filter(
+				(j) => j.scene_id === selected.id && j.kind === 'video',
+			)}
 			workflow={selWf}
 			workflows={enabledWorkflows}
 			bind:formValues
@@ -624,8 +728,18 @@
 			onWorkflowChange={(id) => {
 				selectedWorkflow = { ...selectedWorkflow, [selected.id]: Number(id) };
 			}}
-			onGenerate={() => $generateOne.mutate(selected.id)}
-		/>
+		onGenerate={() => $generateOne.mutate({ sceneId: selected.id })}
+		onPreviewPrompt={beginGenerate}
+	/>
+
+	<PromptPreviewModal
+		bind:open={previewOpen}
+		{projectId}
+		scene={selected}
+		workflow={selWf}
+		inputValues={formValues}
+		onConfirm={onGenerateConfirmed}
+	/>
 	{/if}
 {:else}
 	<section class="film-view" aria-label="Film screening room">

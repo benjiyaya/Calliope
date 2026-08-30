@@ -142,6 +142,9 @@ class SceneUpdate(BaseModel):
     location_id: int | None = None
     video_path: str | None = None
     chain_from_prev: bool | None = None
+    # Persisted video-stage setup: form input_values, clip source, prompt
+    # draft + metadata. Serialized into scenes.video_settings_json.
+    video_settings: dict[str, Any] | None = None
 
 
 class SceneReorder(BaseModel):
@@ -201,3 +204,11 @@ class GenerateVideosRequest(BaseModel):
     scene_ids: list[int] | None = None
     workflow_id: int | None = None
     input_values: dict[str, Any] | None = None
+    # Scene-id → confirmed prompt text (from the review modal). Wins over the
+    # LLM rewrite and over any saved draft.
+    prompts: dict[int, str] | None = None
+
+
+class PreviewPromptRequest(BaseModel):
+    scene_id: int
+    workflow_id: int | None = None

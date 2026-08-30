@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     env_image_path TEXT,
     location_id INTEGER,
     video_path TEXT,
+    video_settings_json TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -192,6 +193,8 @@ async def migrate_db(db_path: Path) -> None:
         conn.execute(
             "ALTER TABLE scenes ADD COLUMN chain_from_prev INTEGER NOT NULL DEFAULT 0"
         )
+    if "video_settings_json" not in scene_cols:
+        conn.execute("ALTER TABLE scenes ADD COLUMN video_settings_json TEXT")
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "cover_path" not in project_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN cover_path TEXT")
@@ -272,4 +275,31 @@ def rebase_stale_asset_paths(conn: sqlite3.Connection, data_dir: Path, assets_di
                 (json.dumps(new_paths), row["id"]),
             )
             count += 1
+    # Scene video settings embed absolute asset paths (ref images, uploaded
+    # clips) in input_values — rebase those too so a moved install keeps the
+    # saved setups working.
+    rows = conn.execute(
+        "SELECT id, video_settings_json FROM scenes WHERE video_settings_json IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        try:
+            data = json.loads(row["video_settings_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        values = data.get("input_values")
+        if isinstance(values, dict):
+            data["input_values"] = {
+                k: (_rebase_path(v, data_dir, assets_dir) or v if isinstance(v, str) else v)
+                for k, v in values.items()
+            }
+        draft = data.get("prompt_draft")
+        if isinstance(draft, str) and not draft:
+            data.pop("prompt_draft", None)
+        conn.execute(
+            "UPDATE scenes SET video_settings_json = ? WHERE id = ?",
+            (json.dumps(data), row["id"]),
+        )
+        count += 1
     return count

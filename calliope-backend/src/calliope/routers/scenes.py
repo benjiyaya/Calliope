@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -25,6 +26,14 @@ def _scene_with_chars(conn, scene_row) -> dict[str, Any]:
     ).fetchall()
     scene["characters"] = [row_to_dict(c) for c in chars]
     scene["character_ids"] = [c["id"] for c in scene["characters"]]
+    raw_settings = scene.pop("video_settings_json", None)
+    if raw_settings:
+        try:
+            scene["video_settings"] = json.loads(raw_settings)
+        except (json.JSONDecodeError, TypeError):
+            scene["video_settings"] = None
+    else:
+        scene["video_settings"] = None
     return scene
 
 
@@ -111,11 +120,22 @@ async def update_scene(project_id: int, scene_id: int, payload: SceneUpdate) -> 
             raise HTTPException(status_code=404, detail="Scene not found")
         data = payload.model_dump(exclude_unset=True)
         char_ids = data.pop("character_ids", None)
+        # video_settings arrives as a dict — the generic UPDATE path below only
+        # handles scalars, so serialize it into its JSON column (or NULL it).
+        video_settings = data.pop("video_settings", None)
         data = {k: v for k, v in data.items() if v is not None}
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
             data["id"] = scene_id
+            if video_settings is not None:
+                data["video_settings_json"] = json.dumps(video_settings)
+                fields += ", video_settings_json = :video_settings_json"
             conn.execute(f"UPDATE scenes SET {fields} WHERE id = :id", data)
+        elif video_settings is not None:
+            conn.execute(
+                "UPDATE scenes SET video_settings_json = ? WHERE id = ?",
+                (json.dumps(video_settings), scene_id),
+            )
         if char_ids is not None:
             conn.execute("DELETE FROM scene_characters WHERE scene_id = ?", (scene_id,))
             for cid in char_ids:
