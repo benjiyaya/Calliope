@@ -164,6 +164,23 @@ Auto is safe even when scenes are queued in one batch: Calliope's queue renders 
 
 The workflow pattern (per [kat3ri/ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend)) is a `LoadVideo (Input:video)` node feeding the MiniMax H3 extend patched nodes (`MiniMaxH3EncodeAVPatched` → `MiniMaxH3VideoExtendPatched`) with the `(Output:video)` node at the end. Recommended starting settings from that repo: `context_frames` **2**, `ref_spacing` **1–2**, `ref_decay` **0.3**, `ref_ramp` **3–4** (5–6 if the prior clip had heavy motion).
 
+### Review the prompt before you generate
+
+Generate no longer fires blind. Hitting **Generate clip** first opens a prompt preview: the exact text that will land on the workflow's `(Input:prompt)` node — your saved draft if there is one, otherwise a fresh MiniMax H3 rewrite (six-section format) or the prose scene prompt.
+
+- **Edit it inline** — typos, camera notes, pacing, anything. The edited text is what gets sent.
+- **Regenerate** re-runs the H3 rewrite for a different take.
+- **Save draft** keeps it on the scene; future generates (single or **Generate all**) reuse the draft instead of calling the LLM again. A hint appears when the draft predates changes to the scene.
+- **Cancel** aborts with nothing enqueued.
+
+After a render, **View prompt & inputs** opens the scene's render history: every job as a chip, the payload each one actually sent to ComfyUI, and **Copy settings to form** to pull a past job's input values back into the live form.
+
+Your video-stage setup (workflow choice, input values, clip source) auto-saves per scene and comes back after a reload or app restart. **Generate all** honors every scene's saved setup and drafts — the toast reports how many drafts were used.
+
+### Better ComfyUI errors
+
+When ComfyUI rejects a workflow, the job error now names the actual cause and node — e.g. `ComfyUI rejected the workflow (400): prompt_outputs_failed_validation; node 12: Invalid audio file: "voice.m4a"` — instead of a bare status code. Audio reference inputs upload to ComfyUI's flat input directory and work with both stock `LoadAudio` and VHS's `VHS_LoadAudio`.
+
 ### 3. Export the workflow
 
 In ComfyUI, use **Save (API Format)** — not the regular UI workflow graph format. Calliope only understands API Format JSON.

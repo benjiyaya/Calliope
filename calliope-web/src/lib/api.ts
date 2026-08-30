@@ -104,8 +104,15 @@ export interface Settings {
 	dry_run: boolean;
 }
 
-import type { Job, Scene, Workflow, ComfyDynamicInput, ComfyDynamicOutput } from './comfy/types';
-export type { Job, Scene, Workflow, ComfyDynamicInput, ComfyDynamicOutput };
+import type {
+	Job,
+	Scene,
+	SceneVideoSettings,
+	Workflow,
+	ComfyDynamicInput,
+	ComfyDynamicOutput,
+} from './comfy/types';
+export type { Job, Scene, SceneVideoSettings, Workflow, ComfyDynamicInput, ComfyDynamicOutput };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`${API_BASE}${path}`, {
@@ -274,9 +281,23 @@ export const jobsApi = {
 			scene_ids?: number[];
 			workflow_id?: number;
 			input_values?: Record<string, unknown>;
+			prompts?: Record<string, string>;
 		} = {},
 	) =>
 		api<{ ok: boolean; jobs: Job[] }>(`/api/jobs/projects/${projectId}/generate-videos`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	previewPrompt: (
+		projectId: number,
+		payload: { scene_id: number; workflow_id?: number },
+	) =>
+		api<{
+			prompt: string;
+			profile: string;
+			from_draft: boolean;
+			based_on: string;
+		}>(`/api/jobs/projects/${projectId}/preview-prompt`, {
 			method: 'POST',
 			body: JSON.stringify(payload),
 		}),

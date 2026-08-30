@@ -4,12 +4,14 @@
 	 * Hero monitor + filmstrip + meta strip + docked Omni composer.
 	 * Does not reuse the old top two-card clip-stage layout.
 	 */
-	import type { Scene, Workflow } from '$lib/api';
+	import type { Job, Scene, Workflow } from '$lib/api';
 	import OmniComposer from '$lib/components/OmniComposer.svelte';
 	import type { AssetOption } from '$lib/assetPicker';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import ClipMonitor from './ClipMonitor.svelte';
 	import ClipSourceModal from './ClipSourceModal.svelte';
+	import JobInputsDrawer from './JobInputsDrawer.svelte';
+	import PromptPreviewModal from './PromptPreviewModal.svelte';
 	import SceneFilmstrip from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
 
@@ -44,6 +46,10 @@
 		progress?: Progress | null;
 		error?: string;
 		errorLong?: boolean;
+	/** Latest video job for the scene — drives the "what was sent" drawer. */
+	job?: Job | null;
+	/** All video jobs for the scene (history strip in the drawer). */
+	sceneJobs?: Job[];
 		workflow: Workflow | undefined;
 		workflows: Workflow[];
 		formValues: Record<string, string | number>;
@@ -52,11 +58,14 @@
 		/** Disable Generate: scene continues from the previous video but the workflow cannot accept it. */
 		generateDisabled?: boolean;
 		generateDisabledReason?: string;
-		/** Where this continue scene's video input comes from (auto / upload / a timeline clip). */
-		clipSource?: ClipSourceConfig;
-		onClipSourceChange?: (value: string) => void;
-		/** Upload file picked in the source modal — caller opens the file dialog. */
-		onClipSourceUpload?: () => void;
+	/** Where this continue scene's video input comes from (auto / upload / a timeline clip). */
+	clipSource?: ClipSourceConfig;
+	onClipSourceChange?: (value: string) => void;
+	/** Upload file picked in the source modal — caller opens the file dialog. */
+	onClipSourceUpload?: () => void;
+	/** HITL prompt review before Generate: caller resolves + shows the modal. */
+	onPreviewPrompt?: () => void;
+	generateLabel?: string;
 		chained?: (scene: Scene) => boolean;
 		submitting?: boolean;
 		statusOf: (scene: Scene) => string;
@@ -78,6 +87,8 @@
 		progress = null,
 		error = '',
 		errorLong = false,
+		job = null,
+		sceneJobs = [],
 		workflow,
 		workflows,
 		formValues = $bindable(),
@@ -88,6 +99,8 @@
 		clipSource,
 		onClipSourceChange,
 		onClipSourceUpload,
+		onPreviewPrompt,
+		generateLabel = 'Generate clip',
 		chained = () => false,
 		submitting = false,
 		statusOf,
@@ -101,6 +114,15 @@
 	}: Props = $props();
 
 	let clipSourceOpen = $state(false);
+	let inputsOpen = $state(false);
+
+	const hasJobPayload = $derived(
+		Boolean(
+			job &&
+				((typeof job.payload?.prompt === 'string' && job.payload.prompt) ||
+					job.payload?.input_values),
+		),
+	);
 
 	/** The label shown on the Video source trigger. */
 	const clipSourceLabel = $derived.by(() => {
@@ -176,12 +198,36 @@
 				onupload={() => onClipSourceUpload?.()}
 			/>
 		{/if}
-			{#if assetOptions.length === 0}
-				<p class="asset-hint">
-					No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
-					file here.
-				</p>
-			{/if}
+		{#if assetOptions.length === 0}
+			<p class="asset-hint">
+				No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
+				file here.
+			</p>
+		{/if}
+		{#if hasJobPayload}
+			<div class="job-inputs-row">
+				<button
+					type="button"
+					class="job-inputs-trigger"
+					aria-haspopup="dialog"
+					aria-expanded={inputsOpen}
+					onclick={() => (inputsOpen = true)}
+				>
+					<Icon name="info" size={14} />
+					<span>View prompt &amp; inputs</span>
+				</button>
+			</div>
+			<JobInputsDrawer
+				bind:open={inputsOpen}
+				{job}
+				jobs={sceneJobs}
+				{workflow}
+				onCopySettings={(values) => {
+					formValues = { ...formValues, ...values };
+					onFormChange?.({ ...formValues });
+				}}
+			/>
+		{/if}
 			<OmniComposer
 				inputs={workflow.input_schema}
 				bind:values={formValues}
@@ -190,12 +236,12 @@
 				onWorkflowChange={onWorkflowChange}
 			{assetOptions}
 			{allowUpload}
-			generateLabel="Generate clip"
+			{generateLabel}
 			{submitting}
 			disabled={generateDisabled}
 			generateDisabledHint={generateDisabledReason}
 			onChange={onFormChange}
-			onSubmit={onGenerate}
+			onSubmit={onPreviewPrompt ?? onGenerate}
 		/>
 		{:else}
 			<div class="no-wf">
@@ -319,6 +365,40 @@
 		font-size: 12px;
 		color: var(--text-muted);
 		line-height: 1.4;
+	}
+
+	.job-inputs-row {
+		display: flex;
+		justify-content: flex-end;
+		margin: 0 0 6px;
+	}
+
+	.job-inputs-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 10px;
+		font: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--text-secondary);
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition:
+			color 150ms ease,
+			border-color 150ms ease;
+	}
+
+	.job-inputs-trigger:hover {
+		color: var(--text-primary);
+		border-color: var(--text-muted);
+	}
+
+	.job-inputs-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
 	.no-wf {

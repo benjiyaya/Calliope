@@ -53,6 +53,16 @@ export interface Job {
 	retry_count: number;
 }
 
+export interface SceneVideoSettings {
+	input_values?: Record<string, string | number>;
+	/** 'auto' | 'upload' | target scene id as string. */
+	clip_source?: string;
+	form_workflow_id?: number;
+	prompt_draft?: string;
+	prompt_draft_meta?: { based_on?: string; saved_at?: string };
+	[key: string]: unknown;
+}
+
 export interface Scene {
 	id: number;
 	project_id: number;
@@ -66,6 +76,7 @@ export interface Scene {
 	location_id: number | null;
 	video_path: string | null;
 	chain_from_prev?: number | boolean | null;
+	video_settings?: SceneVideoSettings | null;
 	character_ids: number[];
 	characters: Array<{
 		id: number;

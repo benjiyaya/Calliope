@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from calliope.comfyui.parser import parse_dynamic_inputs, parse_dynamic_outputs
 from calliope.comfyui.patcher import patch_workflow
@@ -51,6 +52,127 @@ def test_patch_workflow_by_node_id():
     assert patched["209"]["inputs"]["value"] == "New prompt"
     assert patched["102"]["inputs"]["value"] == 720
     assert patched["10"]["inputs"]["image"] == "ref.png"
+
+
+def test_patch_workflow_vhs_audio_colon_widget():
+    """VHS_LoadAudio's widget is literally `audio:` — the patcher must write it."""
+    wf = {
+        "5": {
+            "inputs": {"audio:": "old.wav"},
+            "class_type": "VHS_LoadAudio",
+            "_meta": {"title": "Ref Audio (Input:audio)"},
+        }
+    }
+    patched = patch_workflow(wf, {"5": "C:/assets/new.wav"})
+    assert patched["5"]["inputs"]["audio:"] == "C:/assets/new.wav"
+    # no bogus `audio` key gets added alongside
+    assert "audio" not in patched["5"]["inputs"]
+
+
+def test_patch_workflow_no_fuzzy_fallback():
+    """Unknown field on a node with unrelated keys must not get rewritten."""
+    wf = {
+        "7": {
+            "inputs": {"aspect_ratio": "16:9", "megapixels": 1.0},
+            "class_type": "ResolutionSelector",
+            "_meta": {"title": "Resolution (Input)"},
+        }
+    }
+    patched = patch_workflow(wf, {"7": "9:16"})
+    # computed field 'value' doesn't exist and has no sibling pair — stays put
+    assert patched["7"]["inputs"].get("value") == "9:16"
+    assert patched["7"]["inputs"]["aspect_ratio"] == "16:9"
+
+
+def test_queue_prompt_surfaces_comfy_error_body(monkeypatch):
+    """A 400 from Comfy /prompt must name the node, not just the status code."""
+    import httpx
+    from calliope.comfyui.client import ComfyUIClient
+
+    body = {
+        "error": {"type": "prompt_outputs_failed_validation"},
+        "node_errors": {
+            "12": {"errors": [{"message": "Invalid audio file: ref.m4a"}]},
+        },
+    }
+
+    def fake_send(request, **kwargs):
+        return httpx.Response(400, json=body, request=request)
+
+    transport = httpx.MockTransport(fake_send)
+    client = ComfyUIClient(base_url="http://comfy.test")
+    client._http = httpx.AsyncClient(transport=transport)
+    import asyncio
+
+    async def run():
+        try:
+            await client.queue_prompt({"1": {"class_type": "X", "inputs": {}}})
+        except RuntimeError as exc:
+            return str(exc)
+        finally:
+            await client.close()
+
+    msg = asyncio.run(run())
+    assert "prompt_outputs_failed_validation" in msg
+    assert "node 12" in msg
+    assert "Invalid audio file" in msg
+
+
+def test_upload_audio_flat_no_subfolder(tmp_path, monkeypatch):
+    """Audio uploads go to the flat input dir and return a bare filename."""
+    import asyncio
+    import httpx
+    from calliope.comfyui.client import ComfyUIClient
+
+    sent: dict = {}
+
+    def fake_send(request, **kwargs):
+        sent["url"] = str(request.url)
+        sent["content_type"] = request.headers.get("content-type", "")
+        return httpx.Response(200, json={"name": "ref.wav", "subfolder": ""}, request=request)
+
+    transport = httpx.MockTransport(fake_send)
+    client = ComfyUIClient(base_url="http://comfy.test")
+    client._http = httpx.AsyncClient(transport=transport)
+
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"wav-placeholder")
+
+    async def run():
+        try:
+            return await client.upload_audio(audio)
+        finally:
+            await client.close()
+
+    name = asyncio.run(run())
+    assert name == "ref.wav"  # bare filename, no calliope/ prefix
+    assert sent["url"].endswith("/upload/image")
+
+
+def test_prepare_media_inputs_vhs_audio(tmp_path):
+    """VHS_LoadAudio with an `audio:` widget gets its file uploaded in place."""
+    import asyncio
+    from calliope.comfyui.client import ComfyUIClient
+
+    audio = tmp_path / "voice.wav"
+    audio.write_bytes(b"wav-placeholder")
+
+    client = ComfyUIClient.__new__(ComfyUIClient)  # skip __init__ HTTP client
+
+    async def fake_upload(path, subfolder=""):
+        assert Path(path) == audio
+        return "voice.wav"
+
+    client.upload_audio = fake_upload  # type: ignore[method-assign]
+    wf = {
+        "5": {
+            "inputs": {"audio:": str(audio)},
+            "class_type": "VHS_LoadAudio",
+            "_meta": {"title": "Ref Audio (Input:audio)"},
+        }
+    }
+    out = asyncio.run(client.prepare_media_inputs(wf))
+    assert out["5"]["inputs"]["audio:"] == "voice.wav"
 
 
 def test_workflow_analyze_and_create(client):

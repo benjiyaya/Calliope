@@ -1,6 +1,7 @@
 """Enqueue per-scene video generation jobs."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -145,12 +146,122 @@ def _get_workflow(workflow_id: int | None = None) -> dict[str, Any] | None:
         conn.close()
 
 
+def _scene_video_settings(scene: dict[str, Any]) -> dict[str, Any]:
+    """Parsed scenes.video_settings_json — {} when unset or malformed."""
+    raw = scene.get("video_settings_json")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_input_values(scene: dict[str, Any]) -> dict[str, Any]:
+    """Saved per-scene form values (input_values inside video_settings)."""
+    values = _scene_video_settings(scene).get("input_values")
+    if isinstance(values, dict):
+        return {k: v for k, v in values.items() if v not in (None, "")}
+    return {}
+
+
+def _stored_prompt_draft(scene: dict[str, Any]) -> str | None:
+    draft = _scene_video_settings(scene).get("prompt_draft")
+    return draft if isinstance(draft, str) and draft.strip() else None
+
+
+def _scene_prompt_hash(scene: dict[str, Any]) -> str:
+    """Cheap fingerprint of the inputs a draft was based on (stale detection)."""
+    basis = "|".join(
+        str(scene.get(k) or "")
+        for k in ("heading", "action", "dialog", "duration_sec", "location_id")
+    )
+    chars = ",".join(str(c) for c in sorted(scene.get("character_ids") or []))
+    return hashlib.sha256((basis + "|" + chars).encode()).hexdigest()[:16]
+
+
+async def preview_scene_prompt(
+    project_id: int,
+    scene_id: int,
+    workflow_id: int | None = None,
+) -> dict[str, Any]:
+    """Resolve the exact prompt a Generate would send — without enqueueing.
+
+    Returns {"prompt": str, "profile": str, "from_draft": bool, "based_on": str}
+    so the UI can show/edit/save it before the user commits to a render.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM scenes WHERE id = ? AND project_id = ?",
+            (scene_id, project_id),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Scene {scene_id} not found in project {project_id}")
+        scene = row_to_dict(row)
+        char_rows = conn.execute(
+            """
+            SELECT c.* FROM characters c
+            JOIN scene_characters sc ON sc.character_id = c.id
+            WHERE sc.scene_id = ?
+            """,
+            (scene_id,),
+        ).fetchall()
+        characters = [row_to_dict(r) for r in char_rows]
+        loc_image = scene.get("env_image_path")
+        loc_row: dict[str, Any] | None = None
+        if scene.get("location_id"):
+            loc = conn.execute(
+                "SELECT name, description, consistency_prompt, reference_image_path "
+                "FROM locations WHERE id = ?",
+                (scene["location_id"],),
+            ).fetchone()
+            if loc:
+                loc_row = row_to_dict(loc)
+                if not loc_image:
+                    loc_image = loc_row["reference_image_path"]
+    finally:
+        conn.close()
+
+    wf_id = workflow_id or scene.get("workflow_id")
+    workflow = _get_workflow(wf_id)
+    if not workflow:
+        raise ValueError("No enabled video workflow found — configure one in Settings")
+    inputs = parse_dynamic_inputs(_workflow_json(workflow))
+    profile = workflow.get("prompt_profile") or "prose"
+    based_on = _scene_prompt_hash(scene)
+
+    if profile == "minimax_h3_ref":
+        # Fresh saved draft short-circuits the LLM call
+        draft = _stored_prompt_draft(scene)
+        if draft:
+            meta = _scene_video_settings(scene).get("prompt_draft_meta") or {}
+            if meta.get("based_on") == based_on:
+                return {
+                    "prompt": draft,
+                    "profile": profile,
+                    "from_draft": True,
+                    "based_on": based_on,
+                }
+        subjects, _ = _h3_subjects(characters, loc_row, loc_image, inputs)
+        await event_bus.publish(
+            "agent.thinking",
+            {"message": f"H3 prompt rewrite · scene {scene.get('order_index')}", "project_id": project_id},
+        )
+        prompt = await _h3_rewrite(scene, subjects)
+    else:
+        prompt = scene_video_prompt(scene, characters)
+    return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
+
+
 async def enqueue_video_jobs(
     project_id: int,
     *,
     scene_ids: list[int] | None = None,
     workflow_id: int | None = None,
     input_values_override: dict[str, Any] | None = None,
+    prompts: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     await event_bus.publish(
         "agent.thinking", {"message": "Queuing video jobs…", "project_id": project_id}
@@ -221,33 +332,67 @@ async def enqueue_video_jobs(
                         loc_image = loc_row["reference_image_path"]
 
             profile = (workflow or {}).get("prompt_profile") or "prose"
+            # Merge base: saved per-scene setup first, explicit request wins on
+            # top — so batch Generate-all honors persisted form setups.
+            stored_values = _stored_input_values(scene)
+            extra_values: dict[str, Any] = {**stored_values}
+            if input_values_override:
+                extra_values.update(
+                    {k: v for k, v in input_values_override.items() if v not in (None, "")}
+                )
             if profile == "minimax_h3_ref":
                 subjects, ref_paths = _h3_subjects(characters, loc_row, loc_image, inputs)
-                await event_bus.publish(
-                    "agent.thinking",
-                    {
-                        "message": f"H3 prompt rewrite · scene {scene.get('order_index')}",
-                        "project_id": project_id,
-                    },
-                )
-                prompt = await _h3_rewrite(scene, subjects)
+                # Prompt precedence: explicit request → saved (fresh) draft → LLM.
+                explicit_prompt = (prompts or {}).get(scene["id"])
+                fresh_draft = None
+                if explicit_prompt is None:
+                    candidate = _stored_prompt_draft(scene)
+                    if candidate:
+                        meta = _scene_video_settings(scene).get("prompt_draft_meta") or {}
+                        if meta.get("based_on") == _scene_prompt_hash(scene):
+                            fresh_draft = candidate
+                if explicit_prompt is not None:
+                    prompt = explicit_prompt
+                elif fresh_draft:
+                    prompt = fresh_draft
+                else:
+                    await event_bus.publish(
+                        "agent.thinking",
+                        {
+                            "message": f"H3 prompt rewrite · scene {scene.get('order_index')}",
+                            "project_id": project_id,
+                        },
+                    )
+                    prompt = await _h3_rewrite(scene, subjects)
                 values = smart_fill_inputs(
                     inputs,
                     prompt=prompt,
                     ref_images=ref_paths,
                     duration=duration,
-                    extra=input_values_override,
+                    extra=extra_values,
                 )
             else:
-                prompt = scene_video_prompt(scene, characters)
+                prompt = (prompts or {}).get(scene["id"]) or scene_video_prompt(
+                    scene, characters
+                )
                 values = smart_fill_inputs(
                     inputs,
                     prompt=prompt,
                     character_image=char_image,
                     location_image=loc_image,
                     duration=duration,
-                    extra=input_values_override,
+                    extra=extra_values,
                 )
+            # Stored per-scene setups override smart-fill's context choices
+            # (e.g. an edited duration). smart_fill skips duration-role nodes
+            # in `extra` by design — re-apply them here, request values win.
+            explicit_final = {
+                **stored_values,
+                **{k: v for k, v in (input_values_override or {}).items() if v not in (None, "")},
+            }
+            for k, v in explicit_final.items():
+                if v not in (None, ""):
+                    values[str(k)] = v
             payload: dict[str, Any] = {"input_values": values, "prompt": prompt}
             if scene.get("chain_from_prev"):
                 video_input = _video_input(inputs)

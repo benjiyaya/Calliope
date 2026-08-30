@@ -5,13 +5,17 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from calliope.agent.video_agent import enqueue_video_jobs
+from calliope.agent.video_agent import enqueue_video_jobs, preview_scene_prompt
 from calliope.comfyui.client import ComfyUIClient
 from calliope.config import settings
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import kill_running
-from calliope.models.schemas import GenerateVideosRequest, JobCreate
+from calliope.models.schemas import (
+    GenerateVideosRequest,
+    JobCreate,
+    PreviewPromptRequest,
+)
 from calliope.queue.manager import queue_manager
 
 router = APIRouter()
@@ -63,10 +67,22 @@ async def generate_videos(
             scene_ids=body.scene_ids,
             workflow_id=body.workflow_id,
             input_values_override=body.input_values,
+            prompts=body.prompts,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "jobs": [_job_public(j) for j in jobs]}
+
+
+@router.post("/projects/{project_id}/preview-prompt")
+async def preview_prompt(project_id: int, payload: PreviewPromptRequest) -> dict[str, Any]:
+    """HITL review step: the exact prompt a Generate would send, no enqueue."""
+    try:
+        return await preview_scene_prompt(
+            project_id, payload.scene_id, workflow_id=payload.workflow_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/projects/{project_id}/export")

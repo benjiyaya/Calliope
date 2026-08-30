@@ -114,6 +114,9 @@ UPLOAD_KIND_BY_EXT: dict[str, str] = {
     ".wav": "audio",
     ".flac": "audio",
     ".ogg": "audio",
+    # Note: core ComfyUI's LoadAudio file list is typically wav/mp3/ogg/flac/aiff.
+    # .m4a uploads succeed here and land in Comfy's input dir, but some builds
+    # reject it at /prompt validation — prefer wav/mp3 for ref audio.
     ".m4a": "audio",
 }
 
