@@ -38,7 +38,7 @@ def test_project_delete_cascades_canvas(client):
     pid = client.post("/api/projects", json={"title": "C1", "idea": "x"}).json()["id"]
     r = client.post("/api/canvas", json={"project_id": pid, "title": "Bible"})
     assert r.status_code == 200
-    canvas_id = r.json()["id"]
+    canvas_id = r.json()["canvas"]["id"]
 
     client.delete(f"/api/projects/{pid}")
 
@@ -50,7 +50,7 @@ def test_session_delete_cascades_sandbox_canvas(client):
     sid = client.post("/api/agent/sessions", json={}).json()["id"]
     r = client.post("/api/canvas", json={"agent_session_id": sid})
     assert r.status_code == 200
-    canvas_id = r.json()["id"]
+    canvas_id = r.json()["canvas"]["id"]
 
     client.delete(f"/api/agent/sessions/{sid}")
 

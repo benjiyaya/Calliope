@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS canvas_node (
     input_values_json TEXT NOT NULL DEFAULT '{}',
     entity_type TEXT NULL,
     entity_id INTEGER NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
