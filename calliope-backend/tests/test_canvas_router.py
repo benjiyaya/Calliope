@@ -1,8 +1,6 @@
 """Canvas v2.1 Phase 1 — CRUD router, get-or-create scoping, entity auto-seed."""
 from __future__ import annotations
 
-import json as _json
-
 import calliope.config as config_module
 from calliope.db import get_db
 

@@ -1,8 +1,6 @@
 """Canvas v2.1 Phase 1 — canvas/canvas_node tables, scoping, and cascades."""
 from __future__ import annotations
 
-import sqlite3
-
 
 def _get_canvas(client, canvas_id: int):
     r = client.get(f"/api/canvas/{canvas_id}")
