@@ -9,7 +9,10 @@
 		canvasNodeId: number;
 		entityType: 'character' | 'location' | 'item' | 'scene';
 		title: string;
+		/** Poster image (env image / reference sheet) — shown while not playing. */
 		imagePath: string | null;
+		/** Clip path — when set the card becomes a playable video card. */
+		videoPath: string | null;
 		onOpen?: () => void;
 	}
 
@@ -30,23 +33,60 @@
 
 	let { data }: NodeProps<EntityNode> = $props();
 
-	const mediaSrc = $derived(assetUrl(data.imagePath));
+	const posterSrc = $derived(assetUrl(data.imagePath));
+	// '#t=0.1' media fragment: with preload="metadata" browsers paint nothing
+	// until playback, so the thumbnail sat black. The fragment seeks+paints
+	// the first frame without playing (same trick as ClipMonitor).
+	const videoSrc = $derived(data.videoPath ? assetUrl(data.videoPath) + '#t=0.1' : null);
+	let playing = $state(false);
+
+	function togglePlay() {
+		playing = !playing;
+	}
 </script>
 
 <div
 	class="entity-node"
+	class:playing
 	role="button"
 	tabindex="0"
-	onclick={() => data.onOpen?.()}
-	onkeydown={(e) => e.key === 'Enter' && data.onOpen?.()}
+	onclick={() => (videoSrc ? togglePlay() : data.onOpen?.())}
+	onkeydown={(e) => {
+		if (e.key !== 'Enter') return;
+		videoSrc ? togglePlay() : data.onOpen?.();
+	}}
 >
 	<header>
 		<Icon name={iconFor(data.entityType)} size={14} />
 		<span class="title" title={data.title}>{data.title}</span>
+		{#if videoSrc && !playing}
+			<span class="play-badge" aria-hidden="true">
+				<Icon name="play" size={10} />
+			</span>
+		{/if}
 	</header>
 	<div class="media">
-		{#if mediaSrc}
-			<SafeMedia src={mediaSrc} alt={data.title} kind="image" controls={false} />
+		{#if playing && videoSrc}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video
+				class="media-el"
+				src={videoSrc}
+				autoplay
+				controls
+				playsinline
+				onended={() => (playing = false)}
+			></video>
+		{:else if videoSrc}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video
+				class="media-el"
+				src={videoSrc}
+				muted
+				playsinline
+				preload="metadata"
+			></video>
+		{:else if posterSrc}
+			<SafeMedia class="media-el" src={posterSrc} alt={data.title} kind="image" controls={false} />
 		{:else}
 			<span class="placeholder">{data.entityType}</span>
 		{/if}
@@ -65,6 +105,9 @@
 	}
 	.entity-node:hover {
 		border-color: #3a3a44;
+	}
+	.entity-node.playing {
+		cursor: default;
 	}
 	/* Svelte Flow marks the selected node wrapper with .selected */
 	:global(.svelte-flow__node.selected) .entity-node {
@@ -90,6 +133,17 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.play-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		background: color-mix(in srgb, var(--accent) 22%, transparent);
+		color: var(--text-primary);
+		flex-shrink: 0;
+	}
 	.media {
 		height: 132px;
 		background: var(--bg-elevated);
@@ -97,8 +151,8 @@
 		align-items: center;
 		justify-content: center;
 	}
-	.media :global(img),
-	.media :global(video) {
+	.media :global(.media-el),
+	.media-el {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;

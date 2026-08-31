@@ -81,30 +81,34 @@
 		})),
 	);
 
-	function imagePathFor(
+	function mediaFor(
 		node: (typeof canvasNodes)[number],
 		characters: Character[],
 		locations: Location[],
 		items: Item[],
 		scenes: Scene[],
-	): string | null {
+	): { imagePath: string | null; videoPath: string | null } {
 		if (node.entity_type === 'character') {
 			const c = characters.find((x) => x.id === node.entity_id);
-			return c?.sheet_path ?? c?.portrait_path ?? null;
+			return { imagePath: c?.sheet_path ?? c?.portrait_path ?? null, videoPath: null };
 		}
 		if (node.entity_type === 'location') {
 			const l = locations.find((x) => x.id === node.entity_id);
-			return l?.reference_image_path ?? null;
+			return { imagePath: l?.reference_image_path ?? null, videoPath: null };
 		}
 		if (node.entity_type === 'item') {
 			const i = items.find((x) => x.id === node.entity_id);
-			return i?.reference_image_path ?? null;
+			return { imagePath: i?.reference_image_path ?? null, videoPath: null };
 		}
 		if (node.entity_type === 'scene') {
 			const s = scenes.find((x) => x.id === node.entity_id);
-			return s?.env_image_path ?? null;
+			// Project > Videos pattern: env image poster, clip fallback; only
+			// real video files count (guard mirrors QueueStage.previewPath).
+			const clip =
+				s?.video_path && /\.(mp4|webm)$/i.test(s.video_path) ? s.video_path : null;
+			return { imagePath: s?.env_image_path ?? null, videoPath: clip };
 		}
-		return null;
+		return { imagePath: null, videoPath: null };
 	}
 
 	const nodeTypes = { entity: EntityNode };
@@ -140,18 +144,22 @@
 		const locations = $assetsQuery.data?.locations ?? [];
 		const items = $assetsQuery.data?.items ?? [];
 		const scenes = $scenesQuery.data?.scenes ?? [];
-		nodes = graph.nodes.map((n) => ({
-			id: `cn-${n.id}`,
-			type: 'entity' as const,
-			position: { x: n.x, y: n.y },
-			data: {
-				canvasNodeId: n.id,
-				entityType: n.entity_type as 'character' | 'location' | 'item' | 'scene',
-				title: n.title ?? 'Untitled',
-				imagePath: imagePathFor(n, characters, locations, items, scenes),
-				onOpen: () => openEntity(n.entity_type!, n.entity_id!),
-			},
-		}));
+		nodes = graph.nodes.map((n) => {
+			const media = mediaFor(n, characters, locations, items, scenes);
+			return {
+				id: `cn-${n.id}`,
+				type: 'entity' as const,
+				position: { x: n.x, y: n.y },
+				data: {
+					canvasNodeId: n.id,
+					entityType: n.entity_type as 'character' | 'location' | 'item' | 'scene',
+					title: n.title ?? 'Untitled',
+					imagePath: media.imagePath,
+					videoPath: media.videoPath,
+					onOpen: () => openEntity(n.entity_type!, n.entity_id!),
+				},
+			};
+		});
 	});
 
 	async function persistNodePosition(node: Node) {
@@ -578,6 +586,53 @@
 		localStorage.setItem(CHAT_KEY, chatCollapsed ? '1' : '0');
 	}
 
+	// ---- draggable chat splitter ---------------------------------------------
+
+	const CHAT_W_KEY = 'calliope.canvas.chatWidth';
+	const CHAT_MIN_PX = 300;
+
+	// Stored in px; capped against the live window so a resized window can
+	// never restore an oversize panel (max 30% of window width).
+	let chatWidth = $state(420);
+	let dragging = $state(false);
+
+	function clampChatWidth(px: number): number {
+		const max = Math.max(CHAT_MIN_PX, Math.round(window.innerWidth * 0.3));
+		return Math.min(Math.max(px, CHAT_MIN_PX), max);
+	}
+
+	$effect(() => {
+		const raw = Number(localStorage.getItem(CHAT_W_KEY));
+		if (Number.isFinite(raw) && raw > 0) chatWidth = clampChatWidth(raw);
+		// Keep the panel within the cap when the window shrinks.
+		const onResize = () => (chatWidth = clampChatWidth(chatWidth));
+		window.addEventListener('resize', onResize);
+		return () => window.removeEventListener('resize', onResize);
+	});
+
+	function startDrag(e: MouseEvent) {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		dragging = true;
+		document.body.style.userSelect = 'none';
+		document.body.style.cursor = 'col-resize';
+		const startX = e.clientX;
+		const startWidth = chatWidth;
+		const onMove = (ev: MouseEvent) => {
+			chatWidth = clampChatWidth(startWidth + (startX - ev.clientX));
+		};
+		const onUp = () => {
+			dragging = false;
+			document.body.style.userSelect = '';
+			document.body.style.cursor = '';
+			localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+			document.removeEventListener('mousemove', onMove);
+			document.removeEventListener('mouseup', onUp);
+		};
+		document.addEventListener('mousemove', onMove);
+		document.addEventListener('mouseup', onUp);
+	}
+
 	// ---- title card ---------------------------------------------------------
 
 	let titleDraft = $state('');
@@ -696,7 +751,25 @@
 			</main>
 
 			{#if !chatCollapsed}
-				<aside class="chat-panel">
+				<button
+					type="button"
+					class="chat-splitter"
+					class:dragging
+					aria-label={`Resize chat panel (drag or arrow keys), currently ${Math.round(chatWidth)} pixels`}
+					onmousedown={startDrag}
+					onkeydown={(e) => {
+						if (e.key === 'ArrowLeft') {
+							e.preventDefault();
+							chatWidth = clampChatWidth(chatWidth + 24);
+							localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+						} else if (e.key === 'ArrowRight') {
+							e.preventDefault();
+							chatWidth = clampChatWidth(chatWidth - 24);
+							localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+						}
+					}}
+				></button>
+				<aside class="chat-panel" style:width="{chatWidth}px">
 					<header class="chat-head">
 						<div class="chat-title-block">
 							{#if activeSession}
@@ -844,13 +917,37 @@
 		color: var(--text-primary);
 	}
 	.chat-panel {
-		width: 420px;
 		flex-shrink: 0;
 		border-left: 1px solid var(--border);
 		background: var(--bg-surface);
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
+		min-width: 0;
+	}
+	.chat-splitter {
+		width: 7px;
+		flex-shrink: 0;
+		padding: 0;
+		border: none;
+		background: transparent;
+		cursor: col-resize;
+		margin-left: -3px;
+		margin-right: -3px;
+		z-index: 6;
+		position: relative;
+		transition: background 0.12s;
+	}
+	.chat-splitter:hover,
+	.chat-splitter.dragging,
+	.chat-splitter:focus-visible {
+		background: color-mix(in srgb, var(--accent) 45%, transparent);
+		outline: none;
+	}
+	.chat-splitter.dragging {
+		/* Svelte Flow's pane captures pointer events while dragging near the
+		   graph edge — suppress text selection app-wide during the drag. */
+		cursor: col-resize;
 	}
 	.chat-head {
 		display: flex;
