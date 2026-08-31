@@ -9,10 +9,21 @@
 		onNewSandbox: () => void;
 		onNewProjectChat: (projectId: number) => void;
 		onDelete: (id: number) => void;
+		/** Canvas rail mode: render a 48px icon rail instead of the full list. */
+		collapsed?: boolean;
+		onToggleCollapse?: () => void;
 	}
 
-	let { sessions, activeId, onSelect, onNewSandbox, onNewProjectChat, onDelete }: Props =
-		$props();
+	let {
+		sessions,
+		activeId,
+		onSelect,
+		onNewSandbox,
+		onNewProjectChat,
+		onDelete,
+		collapsed = false,
+		onToggleCollapse,
+	}: Props = $props();
 
 	const sandbox = $derived(sessions.filter((s) => s.project_id == null));
 	const grouped = $derived.by(() => {
@@ -25,115 +36,164 @@
 		}
 		return [...map.values()];
 	});
+
+	const allSessions = $derived([...sandbox, ...grouped.flatMap((g) => g.items)]);
 </script>
 
-<aside class="sidebar">
-	<button type="button" class="new-chat" onclick={onNewSandbox}>
-		<Icon name="plus" size={14} />
-		New sandbox chat
-	</button>
-
-	{#if sessions.length === 0}
-		<p class="muted">No sessions yet.</p>
-	{/if}
-
-	{#if sandbox.length > 0}
-		<div class="group">
-			<div class="group-head">
-				<span class="group-title">Sandbox</span>
-				<span class="count">{sandbox.length}</span>
-			</div>
-			{#each sandbox as s (s.id)}
+{#if collapsed}
+	<aside class="sidebar collapsed">
+		<button
+			type="button"
+			class="rail-btn"
+			onclick={() => onToggleCollapse?.()}
+			title="Expand sessions"
+			aria-label="Expand sessions"
+		>
+			<Icon name="drag" size={14} />
+		</button>
+		<button
+			type="button"
+			class="rail-btn"
+			onclick={onNewSandbox}
+			title="New sandbox chat"
+			aria-label="New sandbox chat"
+		>
+			<Icon name="plus" size={14} />
+		</button>
+		<div class="rail-dots">
+			{#each allSessions as s (s.id)}
 				<button
 					type="button"
-					class="item"
+					class="rail-dot"
 					class:active={s.id === activeId}
+					class:run={s.running || s.status === 'running'}
 					onclick={() => onSelect(s.id)}
-				>
-					<span class="dot" class:run={s.running || s.status === 'running'}></span>
-					<span class="title">{s.title}</span>
-					<span
-						class="del"
-						role="button"
-						tabindex="-1"
-						aria-label="Delete session"
-						onclick={(e) => {
-							e.stopPropagation();
-							onDelete(s.id);
-						}}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') {
-								e.stopPropagation();
-								onDelete(s.id);
-							}
-						}}
-					>
-						<Icon name="trash" size={12} />
-					</span>
-				</button>
+					title={s.title}
+					aria-label={`Open ${s.title}`}
+				></button>
 			{/each}
 		</div>
-	{/if}
+	</aside>
+{:else}
+	<aside class="sidebar">
+		{#if onToggleCollapse}
+			<button
+				type="button"
+				class="collapse-toggle"
+				onclick={() => onToggleCollapse?.()}
+				title="Collapse sessions"
+				aria-label="Collapse sessions"
+			>
+				<Icon name="drag" size={14} />
+			</button>
+		{/if}
+		<button type="button" class="new-chat" onclick={onNewSandbox}>
+			<Icon name="plus" size={14} />
+			New sandbox chat
+		</button>
 
-	{#each grouped as g (g.project?.id ?? 0)}
-		<div class="group">
-			<div class="group-head">
-				<span class="group-title" title={g.project?.title}>
-					{g.project?.title ?? `Project #${g.project?.id ?? '?'}`}
-				</span>
-				<span class="count">{g.items.length}</span>
-				<span
-					class="add-chat"
-					role="button"
-					tabindex="0"
-					aria-label="New chat for this project"
-					title="New chat for this project"
-					onclick={(e) => {
-						e.stopPropagation();
-						if (g.project) onNewProjectChat(g.project.id);
-					}}
-					onkeydown={(e) => {
-						if (e.key === 'Enter') {
+		{#if sessions.length === 0}
+			<p class="muted">No sessions yet.</p>
+		{/if}
+
+		{#if sandbox.length > 0}
+			<div class="group">
+				<div class="group-head">
+					<span class="group-title">Sandbox</span>
+					<span class="count">{sandbox.length}</span>
+				</div>
+				{#each sandbox as s (s.id)}
+					<button
+						type="button"
+						class="item"
+						class:active={s.id === activeId}
+						onclick={() => onSelect(s.id)}
+					>
+						<span class="dot" class:run={s.running || s.status === 'running'}></span>
+						<span class="title">{s.title}</span>
+						<span
+							class="del"
+							role="button"
+							tabindex="-1"
+							aria-label="Delete session"
+							onclick={(e) => {
+								e.stopPropagation();
+								onDelete(s.id);
+							}}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.stopPropagation();
+									onDelete(s.id);
+								}
+							}}
+						>
+							<Icon name="trash" size={12} />
+						</span>
+					</button>
+				{/each}
+			</div>
+		{/if}
+
+		{#each grouped as g (g.project?.id ?? 0)}
+			<div class="group">
+				<div class="group-head">
+					<span class="group-title" title={g.project?.title}>
+						{g.project?.title ?? `Project #${g.project?.id ?? '?'}`}
+					</span>
+					<span class="count">{g.items.length}</span>
+					<span
+						class="add-chat"
+						role="button"
+						tabindex="0"
+						aria-label="New chat for this project"
+						title="New chat for this project"
+						onclick={(e) => {
 							e.stopPropagation();
 							if (g.project) onNewProjectChat(g.project.id);
-						}
-					}}
-				>
-					<Icon name="plus" size={12} />
-				</span>
-			</div>
-			{#each g.items as s (s.id)}
-				<button
-					type="button"
-					class="item"
-					class:active={s.id === activeId}
-					onclick={() => onSelect(s.id)}
-				>
-					<span class="dot" class:run={s.running || s.status === 'running'}></span>
-					<span class="title">{s.title}</span>
-					<span
-						class="del"
-						role="button"
-						tabindex="-1"
-						aria-label="Delete session"
-						onclick={(e) => {
-							e.stopPropagation();
-							onDelete(s.id);
 						}}
 						onkeydown={(e) => {
 							if (e.key === 'Enter') {
 								e.stopPropagation();
-								onDelete(s.id);
+								if (g.project) onNewProjectChat(g.project.id);
 							}
 						}}
 					>
-						<Icon name="trash" size={12} />
+						<Icon name="plus" size={12} />
 					</span>
-				</button>
-			{/each}
-		</div>
-	{/each}
-</aside>
+				</div>
+				{#each g.items as s (s.id)}
+					<button
+						type="button"
+						class="item"
+						class:active={s.id === activeId}
+						onclick={() => onSelect(s.id)}
+					>
+						<span class="dot" class:run={s.running || s.status === 'running'}></span>
+						<span class="title">{s.title}</span>
+						<span
+							class="del"
+							role="button"
+							tabindex="-1"
+							aria-label="Delete session"
+							onclick={(e) => {
+								e.stopPropagation();
+								onDelete(s.id);
+							}}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.stopPropagation();
+									onDelete(s.id);
+								}
+							}}
+						>
+							<Icon name="trash" size={12} />
+						</span>
+					</button>
+				{/each}
+			</div>
+		{/each}
+	</aside>
+{/if}
 
 <style>
 	.sidebar {
@@ -147,6 +207,90 @@
 		padding: 12px 10px;
 		overflow-y: auto;
 		min-height: 0;
+	}
+	.sidebar.collapsed {
+		width: 48px;
+		padding: 10px 8px;
+		align-items: center;
+		gap: 8px;
+	}
+	.collapse-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 26px;
+		border: none;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		margin-bottom: 4px;
+	}
+	.collapse-toggle:hover {
+		color: var(--text-primary);
+		background: var(--bg-elevated);
+	}
+	.collapse-toggle:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+	.rail-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		border: 1px dashed var(--border);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+	.rail-btn:hover {
+		color: var(--text-primary);
+		border-color: var(--accent);
+	}
+	.rail-btn:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+	.rail-dots {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 10px;
+		padding-top: 6px;
+		overflow-y: auto;
+		min-height: 0;
+	}
+	.rail-dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		border: 1px solid var(--border);
+		background: var(--bg-elevated);
+		cursor: pointer;
+		padding: 0;
+	}
+	.rail-dot:hover {
+		border-color: var(--accent);
+	}
+	.rail-dot.active {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+	.rail-dot.run {
+		animation: rail-pulse 1.4s ease-in-out infinite;
+	}
+	@keyframes rail-pulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 var(--accent-glow);
+		}
+		50% {
+			box-shadow: 0 0 0 5px transparent;
+		}
 	}
 	.new-chat {
 		display: flex;
