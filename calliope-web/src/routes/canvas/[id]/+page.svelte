@@ -275,6 +275,12 @@
 		const pid = Number(paramSession);
 		if (paramSession != null && Number.isFinite(pid)) {
 			activeId = sessions.some((s) => s.id === pid) ? pid : null;
+			// Deep-link handoff (/agents?project=&task=) pre-fills the composer once.
+			const prefill = sessionStorage.getItem('calliope.canvas.composerPrefill');
+			if (prefill) {
+				sessionStorage.removeItem('calliope.canvas.composerPrefill');
+				setComposerDraft(prefill);
+			}
 			replaceUrlParam('session');
 			return;
 		}
