@@ -439,3 +439,71 @@ export const agentApi = {
 	cancel: (id: number) =>
 		api<{ ok: boolean }>(`/api/agent/sessions/${id}/cancel`, { method: 'POST' }),
 };
+
+export interface CanvasInfo {
+	id: number;
+	title: string;
+	project_id: number | null;
+	agent_session_id: number | null;
+	updated_at: string;
+}
+
+export interface CanvasNode {
+	id: number;
+	canvas_id: number;
+	type: 'entity' | 'image' | 'video' | 'text' | 'workflow';
+	title: string | null;
+	x: number;
+	y: number;
+	width: number | null;
+	height: number | null;
+	workflow_id: number | null;
+	artifact_path: string | null;
+	job_id: number | null;
+	status: string;
+	input_values_json: string;
+	entity_type: string | null;
+	entity_id: number | null;
+}
+
+export interface CanvasGraph {
+	canvas: CanvasInfo & {
+		project?: { id: number; title: string } | null;
+		viewport_json?: string | null;
+	};
+	nodes: CanvasNode[];
+}
+
+export const canvasApi = {
+	list: () => api<CanvasInfo[]>('/api/canvas'),
+	ensureForProject: (projectId: number, title?: string) =>
+		api<CanvasGraph>('/api/canvas', {
+			method: 'POST',
+			body: JSON.stringify({ project_id: projectId, ...(title ? { title } : {}) }),
+		}),
+	ensureForSession: (sessionId: number) =>
+		api<CanvasGraph>('/api/canvas', {
+			method: 'POST',
+			body: JSON.stringify({ agent_session_id: sessionId }),
+		}),
+	get: (id: number) => api<CanvasGraph>(`/api/canvas/${id}`),
+	patchCanvas: (id: number, payload: { title?: string; viewport_json?: string }) =>
+		api<CanvasInfo & { project?: { id: number; title: string } | null; viewport_json?: string | null }>(
+			`/api/canvas/${id}`,
+			{
+				method: 'PATCH',
+				body: JSON.stringify(payload),
+			},
+		),
+	patchNode: (
+		canvasId: number,
+		nodeId: number,
+		payload: { x?: number; y?: number; title?: string },
+	) =>
+		api<CanvasNode>(`/api/canvas/${canvasId}/nodes/${nodeId}`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload),
+		}),
+	deleteNode: (canvasId: number, nodeId: number) =>
+		api<{ ok: boolean }>(`/api/canvas/${canvasId}/nodes/${nodeId}`, { method: 'DELETE' }),
+};
