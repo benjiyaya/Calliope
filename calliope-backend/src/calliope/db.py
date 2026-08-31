@@ -150,6 +150,40 @@ CREATE TABLE IF NOT EXISTS agent_events (
     UNIQUE(session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
+
+CREATE TABLE IF NOT EXISTS canvas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    agent_session_id INTEGER REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'Untitled Canvas',
+    thumbnail_path TEXT,
+    viewport_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_canvas_project ON canvas(project_id);
+CREATE INDEX IF NOT EXISTS idx_canvas_session ON canvas(agent_session_id);
+
+CREATE TABLE IF NOT EXISTS canvas_node (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canvas_id INTEGER NOT NULL REFERENCES canvas(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK(type IN ('entity','image','video','text','workflow')),
+    title TEXT,
+    x REAL DEFAULT 0,
+    y REAL DEFAULT 0,
+    width REAL,
+    height REAL,
+    workflow_id INTEGER NULL,
+    artifact_path TEXT NULL,
+    job_id INTEGER NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
+    input_values_json TEXT NOT NULL DEFAULT '{}',
+    entity_type TEXT NULL,
+    entity_id INTEGER NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_canvas_node_canvas ON canvas_node(canvas_id);
 """
 
 
@@ -214,6 +248,7 @@ _PATH_COLUMNS = {
     "locations": ["reference_image_path"],
     "items": ["reference_image_path"],
     "scenes": ["env_image_path", "video_path"],
+    "canvas_node": ["artifact_path"],
 }
 
 
