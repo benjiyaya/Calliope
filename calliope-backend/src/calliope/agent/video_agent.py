@@ -67,9 +67,18 @@ def _h3_subjects(
     return subjects[:cap], paths[:cap]
 
 
-async def _h3_rewrite(scene: dict[str, Any], subjects: list[dict[str, Any]]) -> str:
-    """LLM rewrite into H3's six-section format, deterministic template on failure."""
-    client = LLMClient.for_role("video")
+async def _h3_rewrite(
+    scene: dict[str, Any],
+    subjects: list[dict[str, Any]],
+    *,
+    timeout: float = 120.0,
+) -> str:
+    """LLM rewrite into H3's six-section format, deterministic template on failure.
+
+    The timeout bounds the whole wait for a dead endpoint before the template
+    kicks in — the preview path passes a short value so the UI fails fast.
+    """
+    client = LLMClient.for_role("video", timeout=timeout)
     try:
         return await client.chat(
             build_minimax_h3_ref_messages(scene, subjects), temperature=0.4
@@ -249,7 +258,9 @@ async def preview_scene_prompt(
             "agent.thinking",
             {"message": f"H3 prompt rewrite · scene {scene.get('order_index')}", "project_id": project_id},
         )
-        prompt = await _h3_rewrite(scene, subjects)
+        # Preview is interactive — fail fast to the deterministic template
+        # instead of making the user wait out a dead endpoint.
+        prompt = await _h3_rewrite(scene, subjects, timeout=30.0)
     else:
         prompt = scene_video_prompt(scene, characters)
     return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}

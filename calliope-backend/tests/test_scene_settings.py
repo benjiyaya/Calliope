@@ -145,7 +145,7 @@ def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
     finally:
         conn.close()
 
-    async def fake_rewrite(scene_, subjects):
+    async def fake_rewrite(scene_, subjects, **kwargs):
         return "H3 REWRITE"
 
     monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
@@ -214,7 +214,7 @@ def test_preview_prompt_fresh_draft_shortcircuits_llm(client, monkeypatch):
 
     called = []
 
-    async def fake_rewrite(scene_, subjects):
+    async def fake_rewrite(scene_, subjects, **kwargs):
         called.append(1)
         return "SHOULD NOT BE USED"
 
@@ -224,6 +224,54 @@ def test_preview_prompt_fresh_draft_shortcircuits_llm(client, monkeypatch):
     assert result["prompt"] == "MY SAVED DRAFT"
     assert result["from_draft"] is True
     assert called == []  # LLM never invoked
+
+
+def test_preview_prompt_dead_llm_returns_deterministic_fallback(client, monkeypatch):
+    """A failing LLM rewrite falls back to minimax_h3_ref_fallback — never 500s.
+
+    This is the failure mode behind the Discord report: a dead LLM endpoint
+    must not leave the preview modal hanging or erroring out.
+    """
+    from calliope.agent import video_agent
+
+    pid = _mk_project(client, "Preview dead LLM")
+    scene = _add_scene(client, pid, 1, action="A lone rider crosses the salt flats.")
+
+    conn = get_db(settings.db_path)
+    try:
+        wf_id = _insert_h3_workflow(conn, "H3 dead")
+        conn.execute(
+            "UPDATE scenes SET workflow_id = ? WHERE id = ?", (wf_id, scene["id"])
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    class DeadClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def chat(self, messages, temperature=0.7, response_format=None):
+            raise RuntimeError("connection refused")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        video_agent,
+        "LLMClient",
+        type("LLMClientStub", (), {"for_role": staticmethod(lambda role, **kw: DeadClient())}),
+    )
+
+    result = asyncio_run(video_agent.preview_scene_prompt(pid, scene["id"]))
+    assert result["profile"] == "minimax_h3_ref"
+    assert result["from_draft"] is False
+    # Deterministic template content, not an exception and not empty
+    assert "salt flats" in result["prompt"]
+    assert result["prompt"].startswith("subject_definitions:")
+    # No jobs were enqueued by the preview
+    jobs = client.get(f"/api/jobs?project_id={pid}").json()
+    assert [j for j in jobs if j["kind"] == "video"] == []
 
 
 def test_enqueue_prompts_override(client, monkeypatch):

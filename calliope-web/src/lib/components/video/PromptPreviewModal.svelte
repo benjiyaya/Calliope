@@ -38,7 +38,10 @@
 	let basedOn = $state('');
 	let fromDraft = $state(false);
 	let stale = $state(false);
-	let loadedScene = $state<number | null>(null);
+	/** Scene id whose resolve already fired once — guards against store-transition re-runs. */
+	let attemptedFor = $state<number | null>(null);
+	/** Resolve failed — modal shows a client-side prose fallback instead of a dead end. */
+	let failed = $state(false);
 
 	const preview = createMutation({
 		mutationFn: async () => {
@@ -52,20 +55,40 @@
 			text = data.prompt;
 			basedOn = data.based_on;
 			fromDraft = data.from_draft;
+			failed = false;
 			stale = false;
 		},
 		onError: (err) => {
+			failed = true;
+			if (scene) {
+				// Never a dead end: populate the editor with raw scene text so the
+				// user can edit and Generate (confirm sends it via prompts override),
+				// or hit Regenerate to retry the rewrite.
+				text = proseFallback(scene);
+				basedOn = '';
+				fromDraft = false;
+			}
 			toast.error(err instanceof Error ? err.message : String(err));
 		},
 	});
 
-	// Resolve whenever the modal opens for a (new) scene.
+	// Resolve once per scene. `attemptedFor` is set before mutating so
+	// mutation-store transitions (pending → success/error) can't re-trigger
+	// this effect — the old `text` guard fired duplicate requests while the
+	// first was still pending.
 	$effect(() => {
 		if (!open || !scene) return;
-		if (loadedScene === scene.id && text) return;
-		loadedScene = scene.id;
+		if (attemptedFor === scene.id) return;
+		attemptedFor = scene.id;
 		$preview.mutate();
 	});
+
+	function proseFallback(s: Scene): string {
+		const heading = (s.heading || '').trim();
+		const action = (s.action || '').trim();
+		const dialog = (s.dialog || '').trim();
+		return [heading, action, dialog].filter(Boolean).join('\n\n');
+	}
 
 	// Stale check: a draft saved against different scene content should warn.
 	$effect(() => {
@@ -93,6 +116,7 @@
 	}
 
 	function regenerate() {
+		failed = false;
 		$preview.mutate();
 	}
 
@@ -136,7 +160,12 @@
 			aria-label="Prompt text sent to the workflow"
 		></textarea>
 
-		{#if fromDraft}
+		{#if failed}
+			<div class="stale-hint" role="status">
+				<Icon name="alert" size={14} />
+				<span>Rewrite unavailable — showing raw scene text. You can edit and Generate, or Retry.</span>
+			</div>
+		{:else if fromDraft}
 			<p class="hint">Loaded from your saved draft. Regenerate re-runs the rewrite.</p>
 		{:else if workflow?.prompt_profile === 'minimax_h3_ref'}
 			<p class="hint">MiniMax H3 six-section rewrite. Edit freely — this exact text goes to the (Input:prompt) node.</p>
