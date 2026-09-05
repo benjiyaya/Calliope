@@ -2,7 +2,10 @@
 
 Calliope is a local-first story-to-video studio. You type a story idea; Calliope drafts a storyline with beats, characters, and locations, writes a per-scene script, then generates a video clip per scene by driving your own ComfyUI install. When the clips are done, one click stitches them into a finished film with crossfades and matched loudness (ffmpeg). Everything runs on your machine: projects live in SQLite, media lives in folders, and no cloud service is involved beyond the LLM endpoint you point it at.
 
+<img width="2003" height="1093" alt="Screenshot 2026-09-06 050058" src="https://github.com/user-attachments/assets/27771fac-3ad2-47c3-9d4a-78cfa6f41f91" />
 
+
+<img width="1358" height="725" alt="Screenshot 2026-09-05 234659" src="https://github.com/user-attachments/assets/8319981e-6994-4492-bccf-1654b4579260" />
 
 <img width="1508" height="1131" alt="Screenshot 2026-08-23 192042" src="https://github.com/user-attachments/assets/61cb10fb-a8a2-4096-beff-e504a8f7c8df" />
 
