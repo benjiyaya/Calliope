@@ -73,9 +73,12 @@
 		formatClock: (sec: number) => string;
 		onSelect: (id: number) => void;
 		onStep: (dir: -1 | 1) => void;
-		onWorkflowChange: (id: number) => void;
-		onFormChange?: (values: Record<string, string | number>) => void;
-		onGenerate: () => void;
+	onWorkflowChange: (id: number) => void;
+	onFormChange?: (values: Record<string, string | number>) => void;
+	onGenerate: () => void;
+	/** Render-history versioning: apply an older job's output to the scene. */
+	onApplyToScene?: (job: Job, path: string) => void;
+	applying?: boolean;
 	}
 
 	let {
@@ -111,6 +114,8 @@
 		onWorkflowChange,
 		onFormChange,
 		onGenerate,
+		onApplyToScene,
+		applying = false,
 	}: Props = $props();
 
 	let clipSourceOpen = $state(false);
@@ -222,10 +227,13 @@
 				{job}
 				jobs={sceneJobs}
 				{workflow}
+				sceneVideoPath={selected.video_path}
 				onCopySettings={(values) => {
 					formValues = { ...formValues, ...values };
 					onFormChange?.({ ...formValues });
 				}}
+				onApplyToScene={(j, path) => onApplyToScene?.(j, path)}
+				applying={applying}
 			/>
 		{/if}
 			<OmniComposer

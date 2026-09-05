@@ -1,19 +1,35 @@
 <script lang="ts">
-	import type { WorkflowOption } from '$lib/agentComposer';
+	interface MenuItem {
+		id?: number;
+		name: string;
+		kind?: string;
+		description?: string | null;
+	}
 
 	interface Props {
 		open: boolean;
-		items: WorkflowOption[];
+		items: MenuItem[];
 		activeIndex: number;
 		/** Caret / `@` viewport box — menu opens above this (composer is bottom-docked). */
 		anchor: { top: number; bottom: number; left: number };
 		/** When set, the list is replaced with this explanation (one-workflow guardrail). */
 		lockReason?: string | null;
-		onSelect: (wf: WorkflowOption) => void;
+		/** Skill mode: rows show `/name` + a description subtitle, no kind chip. */
+		skillMode?: boolean;
+		onSelect: (item: any) => void;
 		onHover: (index: number) => void;
 	}
 
-	let { open, items, activeIndex, anchor, lockReason = null, onSelect, onHover }: Props = $props();
+	let {
+		open,
+		items,
+		activeIndex,
+		anchor,
+		lockReason = null,
+		skillMode = false,
+		onSelect,
+		onHover,
+	}: Props = $props();
 
 	let menuEl = $state<HTMLDivElement | null>(null);
 	let pos = $state({ top: 0, left: 0, maxHeight: 280 });
@@ -71,14 +87,14 @@
 			? 'visible'
 			: 'hidden'}"
 		role="listbox"
-		aria-label="Workflows"
+		aria-label={skillMode ? 'Skills' : 'Workflows'}
 	>
 		{#if lockReason}
 			<div class="empty">{lockReason}</div>
 		{:else if items.length === 0}
-			<div class="empty">No matching workflow</div>
+			<div class="empty">{skillMode ? 'No matching skill' : 'No matching workflow'}</div>
 		{:else}
-			{#each items as wf, i (wf.id)}
+			{#each items as item, i (item.id ?? item.name)}
 				<button
 					type="button"
 					class="item"
@@ -87,12 +103,19 @@
 					aria-selected={i === activeIndex}
 					onmousedown={(e) => {
 						e.preventDefault();
-						onSelect(wf);
+						onSelect(item);
 					}}
 					onmouseenter={() => onHover(i)}
 				>
-					<span class="name">{wf.name}</span>
-					<span class="kind">{wf.kind}</span>
+					<span class="text">
+						<span class="name">{skillMode ? `/${item.name}` : item.name}</span>
+						{#if skillMode && item.description}
+							<span class="desc">{item.description}</span>
+						{/if}
+					</span>
+				{#if !skillMode}
+					<span class="kind">{item.kind}</span>
+				{/if}
 				</button>
 			{/each}
 		{/if}
@@ -143,11 +166,24 @@
 	.item.active .name {
 		color: var(--accent);
 	}
+	.text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
 	.name {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-weight: 500;
+	}
+	.desc {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 11px;
+		color: var(--text-muted);
 	}
 	.kind {
 		flex-shrink: 0;

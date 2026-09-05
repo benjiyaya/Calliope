@@ -168,9 +168,31 @@ class AgentRunner:
         *,
         mentions: list[dict[str, Any]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        answer_to: int | None = None,
     ) -> dict[str, Any]:
         """Persist the user message and kick off the agent turn. Returns the
-        persisted user message dict. Raises RuntimeError when already running."""
+        persisted user message dict. Raises RuntimeError when already running.
+
+        `answer_to` marks the message as the answer to an ask_user question
+        card (the question's event seq); the structured approval is recorded
+        as a question/answered event before the turn starts."""
+        if answer_to is not None:
+            # Record the structured answer FIRST so the user/message echo is
+            # its immediate successor in the log (policy.latest_answer's
+            # adjacency rule) and guards see the approval for this turn.
+            from calliope.agent.harness.plugins.interaction import latest_open_question
+
+            open_q = latest_open_question(session_id)
+            if open_q is not None and open_q["seq"] == answer_to:
+                session_log.append_event(
+                    session_id,
+                    session_log.QUESTION_ANSWERED,
+                    {
+                        "question_seq": answer_to,
+                        "answer": user_message.strip()[:200],
+                        "scope": open_q.get("scope") or "info",
+                    },
+                )
         async with self._start_lock:
             if self.is_running(session_id):
                 raise RuntimeError("Session is already running a turn")
@@ -283,6 +305,12 @@ class AgentRunner:
             await task
         except (asyncio.CancelledError, Exception):
             pass
+        # The cancelled task's own finally-block publish races the reaper
+        # (the CancelledError re-raise can tear down before the sink/publish
+        # completes) — republish unconditionally so every subscribed canvas
+        # flips back to idle immediately, without a manual refresh.
+        self._set_status(session_id, "idle")
+        await self._publish_session(session_id)
         return True
 
     async def shutdown(self) -> None:

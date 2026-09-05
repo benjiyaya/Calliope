@@ -27,6 +27,10 @@ from calliope.events.bus import event_bus
 
 logger = logging.getLogger("calliope.harness.loop")
 
+
+class _AwaitingInput(Exception):
+    """Internal control flow: ask_user ended the turn awaiting the user."""
+
 # Legacy constant kept for compatibility; the live default comes from
 # settings.agent_max_steps (Settings → Queue tab) so users can raise it.
 MAX_ITERATIONS = 12
@@ -86,6 +90,15 @@ async def run_turn(
     # ── turn boundary ───────────────────────────────────────────
     turn_no = _next_turn_number(ctx.session_id)
     log_append(session_log.TURN_START, {"turn": turn_no})
+
+    # Repetition guard: identical (tool, args) calls within one turn. Read-like
+    # repeats execute normally (results may legitimately change); after
+    # REPEAT_EXECUTE_LIMIT the call is NOT re-executed — the cached real result
+    # is returned with an escalating instruction, so a stuck model gets its
+    # own data back plus a way out instead of burning the step budget.
+    repeat_cache: dict[str, dict[str, Any]] = {}
+    repeat_counts: dict[str, int] = {}
+    REPEAT_EXECUTE_LIMIT = 2
 
     client = _llm_for_role("main")
     final_text = ""
@@ -228,7 +241,46 @@ async def run_turn(
                         ),
                     }
                 else:
-                    result = await registry.execute(ctx, name, args)
+                    repeat_key = f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+                    repeat_counts[repeat_key] = repeat_counts.get(repeat_key, 0) + 1
+                    count = repeat_counts[repeat_key]
+                    if count > REPEAT_EXECUTE_LIMIT and repeat_key in repeat_cache:
+                        cached = repeat_cache[repeat_key]
+                        result = {
+                            **cached,
+                            "repeat_guard": {
+                                "calls_so_far": count,
+                                "limit": REPEAT_EXECUTE_LIMIT,
+                                "message": (
+                                    f"You have already called {name} with these exact "
+                                    f"{count} times this turn. This call was NOT executed "
+                                    "again — the result above is the real one from the last "
+                                    "execution. Do not repeat it again. If the goal is not "
+                                    "met, call a DIFFERENT tool, change the arguments "
+                                    "meaningfully, or end your turn with a summary/question "
+                                    "for the user."
+                                ),
+                            },
+                        }
+                    else:
+                        result = await registry.execute(ctx, name, args)
+                        if (
+                            isinstance(result, dict)
+                            and result.get("ok") is not False
+                        ):
+                            repeat_cache[repeat_key] = result
+                # ask_user ends the turn: the agent's question waits for the
+                # user's answer, so the loop must not burn steps polling.
+                if isinstance(result, dict) and result.get("awaiting_user_input"):
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps(result, ensure_ascii=False, default=str),
+                        }
+                    )
+                    turn_status = "awaiting_input"
+                    raise _AwaitingInput()
                 log_append(
                     session_log.TOOL_RESULT,
                     {
@@ -288,6 +340,10 @@ async def run_turn(
                 }
             )
             turn_status = "step_budget_exhausted"
+    except _AwaitingInput:
+        # ask_user answered the turn's control flow: the tool result was
+        # already appended above and the question event is in the log.
+        pass
     except asyncio.CancelledError:
         turn_status = "cancelled"
         raise

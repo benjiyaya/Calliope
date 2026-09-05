@@ -34,12 +34,76 @@ async def analyze_workflow(payload: WorkflowAnalyze) -> dict[str, Any]:
     }
 
 
+@router.post("/{workflow_id}/reanalyze")
+async def reanalyze_workflow(workflow_id: int) -> dict[str, Any]:
+    """Recompute input/output schemas from the stored workflow JSON.
+
+    Workflows imported before a parser upgrade keep stale (often empty)
+    schemas — this refreshes them without re-importing.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        data = row_to_dict(row)
+        workflow = json.loads(data["workflow_json"])
+        inputs = parse_dynamic_inputs(workflow)
+        outputs = parse_dynamic_outputs(workflow)
+        conn.execute(
+            "UPDATE workflows SET input_schema = ?, output_schema = ? WHERE id = ?",
+            (json.dumps(inputs), json.dumps(outputs), workflow_id),
+        )
+        conn.commit()
+        fresh = conn.execute(
+            "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
+        ).fetchone()
+        return _serialize_workflow(fresh)
+    finally:
+        conn.close()
+
+
 @router.get("")
 async def list_workflows() -> list[dict[str, Any]]:
     conn = get_db(settings.db_path)
     try:
         rows = conn.execute("SELECT * FROM workflows ORDER BY id DESC").fetchall()
         return [_serialize_workflow(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.post("/dedupe")
+async def dedupe_workflows() -> dict[str, Any]:
+    """Delete byte-identical duplicate workflows, keeping the lowest id.
+
+    Two rows are duplicates only when name, kind AND workflow_json all match —
+    same name with different JSON is a user's variant, never touched.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, name, kind, workflow_json FROM workflows ORDER BY id"
+        ).fetchall()
+        seen: dict[tuple[str, str, str], int] = {}
+        drop_ids: list[int] = []
+        for r in rows:
+            key = (r["name"], r["kind"], r["workflow_json"])
+            if key in seen:
+                drop_ids.append(r["id"])
+            else:
+                seen[key] = r["id"]
+        removed = 0
+        for wid in drop_ids:
+            cur = conn.execute("DELETE FROM workflows WHERE id = ?", (wid,))
+            removed += cur.rowcount
+        conn.commit()
+        return {
+            "ok": True,
+            "removed": removed,
+            "kept_ids": sorted(seen.values()),
+            "removed_ids": drop_ids,
+        }
     finally:
         conn.close()
 
@@ -51,6 +115,17 @@ async def create_workflow(payload: WorkflowCreate) -> dict[str, Any]:
     profile = payload.prompt_profile or detect_prompt_profile(payload.workflow_json)
     conn = get_db(settings.db_path)
     try:
+        # Byte-identical re-imports are the main way the library fills up with
+        # same-named clones (the "@" typeahead then shows 20 identical rows).
+        existing = conn.execute(
+            "SELECT id, name FROM workflows WHERE name = ? AND kind = ? AND workflow_json = ?",
+            (payload.name, payload.kind, json.dumps(payload.workflow_json)),
+        ).fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"An identical workflow already exists (id {existing['id']}, “{existing['name']}”).",
+            )
         cur = conn.execute(
             """
             INSERT INTO workflows (name, kind, workflow_json, input_schema,

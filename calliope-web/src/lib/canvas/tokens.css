@@ -5,4 +5,9 @@
 	--accent-hover: #6157c9;
 	--accent-glow: rgba(99, 102, 241, 0.3);
 	--edge: #7dd3fc;
+	/* Edge-chip surfaces (LinkEdge label) — fallbacks match the dark theme. */
+	--panel: #17171f;
+	--panel-border: #2a2a35;
+	--fg: #f4f4f5;
+	--fg-dim: #a1a1aa;
 }

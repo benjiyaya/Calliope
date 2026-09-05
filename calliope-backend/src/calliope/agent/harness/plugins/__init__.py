@@ -13,6 +13,10 @@ _PLUGIN_MODULES = (
     "calliope.agent.harness.plugins.story",
     "calliope.agent.harness.plugins.script",
     "calliope.agent.harness.plugins.render",
+    "calliope.agent.harness.plugins.canvas",
+    "calliope.agent.harness.plugins.interaction",
+    "calliope.agent.harness.plugins.memory",
+    "calliope.agent.harness.plugins.skills",
 )
 
 

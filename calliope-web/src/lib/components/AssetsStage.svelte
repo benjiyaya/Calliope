@@ -89,12 +89,12 @@
 		queryFn: workflows.list,
 	});
 
-	// Shared cache key with QueueStage — SSE events from the parent also invalidate it.
+	// Shared cache key with QueueStage — refreshed via SSE invalidation from
+	// the project page (job.* events), not polling.
 	const jobsQuery = createQuery(
 		toStore(() => ({
 			queryKey: ['jobs', projectId],
 			queryFn: () => jobsApi.list(projectId),
-			refetchInterval: 2500,
 		})),
 	);
 
@@ -796,18 +796,6 @@
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Upload your own image"
-									disabled={jstate === 'generating' || uploadingKey === charKey(char.id)}
-									onclick={() =>
-										openOwnImage({ kind: 'character', id: char.id, name: char.name })}
-								>
-									<Icon name="upload" size={14} /><span class="sr-only"
-										>Upload image for {char.name}</span
-									>
-								</Button>
-								<Button
-									variant="secondary"
-									size="sm"
 									title="Regenerate sheet"
 									disabled={busy || sheetWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateCharacter(char)}
@@ -999,18 +987,6 @@
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Upload your own image"
-									disabled={jstate === 'generating' || uploadingKey === locKey(loc.id)}
-									onclick={() =>
-										openOwnImage({ kind: 'location', id: loc.id, name: loc.name })}
-								>
-									<Icon name="upload" size={14} /><span class="sr-only"
-										>Upload image for {loc.name}</span
-									>
-								</Button>
-								<Button
-									variant="secondary"
-									size="sm"
 									title="Regenerate image"
 									disabled={busy || envWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateLocation(loc)}
@@ -1183,18 +1159,6 @@
 								>
 									<Icon name="zoom-in" size={14} /><span class="sr-only"
 										>View {item.name} full size</span
-									>
-								</Button>
-								<Button
-									variant="secondary"
-									size="sm"
-									title="Upload your own image"
-									disabled={jstate === 'generating' || uploadingKey === itemKey(item.id)}
-									onclick={() =>
-										openOwnImage({ kind: 'item', id: item.id, name: item.name })}
-								>
-									<Icon name="upload" size={14} /><span class="sr-only"
-										>Upload image for {item.name}</span
 									>
 								</Button>
 								<Button

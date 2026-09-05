@@ -81,13 +81,13 @@
 		toStore(() => ({
 			queryKey: ['jobs', projectId],
 			queryFn: () => jobsApi.list(projectId),
-			refetchInterval: 5000,
 		})),
 	);
+	// Refreshed via SSE invalidation from the project page (job.* events) and
+	// by the pause/resume buttons below — no polling.
 	const queueStatusQuery = createQuery({
 		queryKey: ['queue-status'],
 		queryFn: jobsApi.queueStatus,
-		refetchInterval: 5000,
 	});
 	const uploadsQuery = createQuery({
 		queryKey: ['playground-uploads'],
@@ -298,6 +298,22 @@
 		onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
 	});
 
+	// Render-history versioning: make an older job's output the scene's clip.
+	let applyingJob = $state(false);
+	async function applyJobToScene(j: Job, path: string) {
+		if (j.scene_id == null || applyingJob) return;
+		applyingJob = true;
+		try {
+			await projects.updateScene(projectId, j.scene_id, { video_path: path });
+			await client.invalidateQueries({ queryKey: ['scenes'] });
+			toast.success('Scene clip updated');
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : String(err));
+		} finally {
+			applyingJob = false;
+		}
+	}
+
 	// --- HITL review gate (issue #27) ---
 	let previewOpen = $state(false);
 
@@ -405,11 +421,14 @@
 		const job = jobForScene(scene.id);
 		// While a new job is queued/running, don't keep showing the previous clip
 		if (job && (job.status === 'pending' || job.status === 'running')) return null;
+		// scene.video_path is the source of truth — it reflects the clip the user
+		// applied ("Apply to Scene"), which may be an older render than the newest job.
+		if (scene.video_path && /\.(mp4|webm)$/i.test(scene.video_path)) return scene.video_path;
+		// Fallback: latest finished job (e.g. output not filed onto the scene yet).
 		if (job?.status === 'done') {
 			const fromJob = (job.output_paths ?? []).find((p) => /\.(mp4|webm)$/i.test(p));
 			if (fromJob) return fromJob;
 		}
-		if (scene.video_path && /\.(mp4|webm)$/i.test(scene.video_path)) return scene.video_path;
 		return null;
 	}
 
@@ -692,6 +711,8 @@
 			{thumbFor}
 			{formatClock}
 			chained={(scene) => Boolean(scene.chain_from_prev)}
+			onApplyToScene={(j, path) => applyJobToScene(j, path)}
+			applying={applyingJob}
 			generateDisabled={selBlocked}
 			generateDisabledReason={selBlocked
 				? 'This scene continues from the previous video — pick a workflow with a video input'

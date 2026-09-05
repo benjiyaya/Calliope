@@ -60,6 +60,7 @@ class ToolDefinition:
 class PreExecuteDecision:
     kind: str  # "allow" | "deny"
     error: str | None = None
+    reason_code: str | None = None  # stable machine token for UI/tests, e.g. guard_render_approval
 
 
 ALLOW = PreExecuteDecision(kind="allow")
@@ -69,8 +70,8 @@ def allow() -> PreExecuteDecision:
     return ALLOW
 
 
-def deny(reason: str) -> PreExecuteDecision:
-    return PreExecuteDecision(kind="deny", error=reason)
+def deny(reason: str, code: str | None = None) -> PreExecuteDecision:
+    return PreExecuteDecision(kind="deny", error=reason, reason_code=code)
 
 
 @dataclass
@@ -123,6 +124,7 @@ class ToolRegistry:
         # Hide render tools until the user asks — the model still "knows"
         # run_workflow from earlier turns, but a missing tool is harder to
         # call than one that only fails in pre-execute (HITL cards).
+        # Approval via a scoped question card counts the same as prose.
         if t.requires_approval:
             from calliope.agent.harness.policy import user_allows_render
 
@@ -176,7 +178,10 @@ class ToolRegistry:
                 outcome = await outcome
             decision = outcome
             if decision.kind == "deny":
-                return {"ok": False, "error": f"blocked: {decision.error}"}
+                denied: dict[str, Any] = {"ok": False, "error": f"blocked: {decision.error}"}
+                if decision.reason_code:
+                    denied["reason_code"] = decision.reason_code
+                return denied
         try:
             result = await t.executor(ctx, args)
         except Exception as exc:  # noqa: BLE001 — tool errors are loop-feedback, not crashes

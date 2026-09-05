@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from calliope.agent.harness.runner import runner
 from calliope.config import settings
@@ -40,10 +40,20 @@ class SessionPatch(BaseModel):
 
 
 class MessageMention(BaseModel):
-    type: Literal["workflow"] = "workflow"
-    id: int
+    type: Literal["workflow", "skill"] = "workflow"
+    id: int | None = None
     name: str = Field(default="", max_length=200)
     kind: Literal["image", "video"] = "image"
+    # skill mentions
+    description: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> "MessageMention":
+        if self.type == "workflow" and self.id is None:
+            raise ValueError("workflow mention requires id")
+        if self.type == "skill" and not self.name:
+            raise ValueError("skill mention requires name")
+        return self
 
 
 class MessageAttachment(BaseModel):
@@ -52,10 +62,19 @@ class MessageAttachment(BaseModel):
     kind: Literal["image", "video", "audio"] = "image"
 
 
+class MemoryCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=500)
+    scope: Literal["global", "project"] = "global"
+    project_id: int | None = None
+    kind: Literal["preference", "convention", "correction"] = "preference"
+    session_id: int | None = None
+
+
 class MessageCreate(BaseModel):
     content: str = ""
     mentions: list[MessageMention] = Field(default_factory=list, max_length=1)
     attachments: list[MessageAttachment] = Field(default_factory=list, max_length=8)
+    answer_to: int | None = None  # question/asked seq this message answers (card click)
 
     @field_validator("content")
     @classmethod
@@ -303,6 +322,7 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
             content,
             mentions=mentions or None,
             attachments=attachments or None,
+            answer_to=payload.answer_to,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -313,5 +333,137 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
 
 @router.post("/sessions/{session_id}/cancel")
 async def cancel_session(session_id: int) -> dict[str, Any]:
+    """Stop = stop everything this session started: the LLM turn AND the GPU
+    jobs it enqueued. Agent jobs stamp session_id into their payload, so the
+    queue can find and cancel them; the worker's poll loop sees the flipped
+    row and interrupts the running ComfyUI prompt."""
+    from calliope.queue.manager import queue_manager
+
     cancelled = await runner.cancel(session_id)
-    return {"ok": cancelled}
+    job_ids = queue_manager.cancel_by_session(session_id)
+    return {"ok": cancelled or bool(job_ids), "cancelled_jobs": job_ids}
+
+
+@router.get("/memories")
+async def list_memories_admin() -> list[dict[str, Any]]:
+    """All memories across scopes/projects for the Settings → Agent page."""
+    from calliope.db import get_db, row_to_dict
+
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.*, p.title AS project_title FROM agent_memory m
+            LEFT JOIN projects p ON p.id = m.project_id
+            ORDER BY m.scope, m.project_id, m.id DESC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = row_to_dict(r)
+        out.append(
+            {
+                "id": d["id"],
+                "scope": d["scope"],
+                "project_id": d["project_id"],
+                "project_title": d.get("project_title"),
+                "content": d["content"],
+                "kind": d["kind"],
+                "source": d["source"],
+                "use_count": d["use_count"],
+                "created_at": d["created_at"],
+            }
+        )
+    return out
+
+
+@router.post("/memories")
+async def add_memory(payload: MemoryCreate) -> dict[str, Any]:
+    """User-authored memory (source='user') from the Settings page."""
+    from calliope.agent.harness import log as session_log
+    from calliope.db import get_db
+
+    content = payload.content.strip()
+    if not content or len(content) > 500:
+        raise HTTPException(status_code=422, detail="content must be 1-500 chars")
+    if payload.scope not in ("global", "project"):
+        raise HTTPException(status_code=422, detail="scope must be global or project")
+    if payload.kind not in ("preference", "convention", "correction"):
+        raise HTTPException(status_code=422, detail="invalid kind")
+    conn = get_db(settings.db_path)
+    try:
+        if payload.scope == "project" and payload.project_id is not None:
+            if not conn.execute(
+                "SELECT id FROM projects WHERE id = ?", (payload.project_id,)
+            ).fetchone():
+                raise HTTPException(status_code=404, detail="Project not found")
+        cur = conn.execute(
+            "INSERT INTO agent_memory (scope, project_id, content, kind, source) "
+            "VALUES (?, ?, ?, ?, 'user')",
+            (payload.scope, payload.project_id, content, payload.kind),
+        )
+        conn.commit()
+        mem_id = int(cur.lastrowid)
+    finally:
+        conn.close()
+    if payload.session_id:
+        session_log.append_event(
+            payload.session_id,
+            session_log.MEMORY_SAVED,
+            {"memory_id": mem_id, "scope": payload.scope, "kind": payload.kind, "content": content},
+        )
+    return {"ok": True, "id": mem_id}
+
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: int) -> dict[str, Any]:
+    from calliope.db import get_db
+
+    conn = get_db(settings.db_path)
+    try:
+        cur = conn.execute("DELETE FROM agent_memory WHERE id = ?", (memory_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Memory not found")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@router.get("/skills")
+async def list_skills() -> list[dict[str, Any]]:
+    """Frontmatter-only skill list for the composer's `/` typeahead (same
+    view the agent's list_skills tool sees; no file bodies)."""
+    from calliope.agent.skills_store import list_skills as store_list_skills
+
+    return store_list_skills()
+
+
+@router.get("/skills/path")
+async def skills_path() -> dict[str, Any]:
+    """On-disk skills folder for the Settings → Skills page."""
+    from calliope.agent.skills_store import skills_root
+
+    return {"path": str(skills_root())}
+
+
+@router.get("/skills/{name}/files")
+async def skill_files(name: str) -> dict[str, Any]:
+    from calliope.agent.skills_store import skill_files as store_skill_files
+
+    files = store_skill_files(name)
+    if files is None:
+        raise HTTPException(status_code=404, detail=f"Unknown skill: {name}")
+    return {"skill": name, "files": files}
+
+
+@router.get("/skills/{name}/file")
+async def read_skill_file(name: str, path: str = Query(default="SKILL.md")) -> dict[str, Any]:
+    from calliope.agent.skills_store import read_skill_file as store_read
+
+    result = store_read(name, path)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error") or "Not found")
+    return result

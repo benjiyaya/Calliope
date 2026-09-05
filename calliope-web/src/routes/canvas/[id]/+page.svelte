@@ -10,6 +10,7 @@
 		MiniMap,
 		Background,
 		BackgroundVariant,
+		Panel,
 		type Node,
 		type Viewport,
 	} from '@xyflow/svelte';
@@ -20,10 +21,13 @@
 	import AgentComposer from '$lib/components/agent/AgentComposer.svelte';
 	import AgentSessionSidebar from '$lib/components/agent/AgentSessionSidebar.svelte';
 	import AgentPlanPanel from '$lib/components/agent/AgentPlanPanel.svelte';
+	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import EntityNode from '$lib/canvas/EntityNode.svelte';
+	import ArtifactNodeComp from '$lib/canvas/ArtifactNode.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import {
 		agentApi,
+		assetUrl,
 		canvasApi,
 		jobsApi,
 		playgroundApi,
@@ -39,7 +43,7 @@
 		type Location,
 		type Scene,
 	} from '$lib/api';
-	import type { AgentComposerPayload, WorkflowOption } from '$lib/agentComposer';
+	import type { AgentComposerPayload, SkillOption, WorkflowOption } from '$lib/agentComposer';
 	import { connectEvents } from '$lib/events';
 	import { toast } from '$lib/toast';
 
@@ -111,28 +115,47 @@
 		return { imagePath: null, videoPath: null };
 	}
 
-	const nodeTypes = { entity: EntityNode };
+	const nodeTypes = {
+		entity: EntityNode,
+		image: ArtifactNodeComp,
+		video: ArtifactNodeComp,
+	};
 
 	// $state.raw: Svelte Flow v1 treats node arrays as immutable — it mutates
 	// internally, so proxies must never reach it.
 	let nodes = $state.raw<Node[]>([]);
-	let edges = $state.raw<[]>([]);
 
-	function openEntity(entityType: string, entityId: number) {
-		if (projectId == null) return;
-		if (entityType === 'scene') {
-			goto(`/project/${projectId}?stage=video&scene=${entityId}`);
-		} else {
-			goto(`/project/${projectId}?stage=assets`);
-		}
+	// ---- media preview (lightbox) ------------------------------------------
+	// Card clicks open the large preview here; nothing navigates away.
+	let preview = $state<{ src: string; kind: 'image' | 'video'; caption: string } | null>(
+		null,
+	);
+
+	function openMediaPreview(kind: 'image' | 'video', path: string | null, caption: string) {
+		const src = assetUrl(path);
+		if (!src) return;
+		preview = { src, kind, caption };
 	}
+
+	// ---- graph sync ----------------------------------------------------------
 
 	let syncVersion = $state(0);
 	let loadedGraphAt = $state(0);
+	// While a drag is active the persisted-graph effect must NOT rebuild: any
+	// SSE-driven refetch (job.started, canvas.updated from another tab, …)
+	// would replace `nodes` with stale DB positions mid-drag and snap the
+	// dragged cards back. The rebuild is deferred until drag stop.
+	let dragInProgress = $state(false);
+	let rebuildPending = $state(false);
 	$effect(() => {
 		// Rebuild the Svelte Flow graph whenever the persisted graph or any
 		// media source changes; drag positions win until the next refetch.
 		void syncVersion;
+		if (dragInProgress) {
+			rebuildPending = true;
+			return;
+		}
+		rebuildPending = false;
 		const graph = $canvasQuery.data;
 		if (!graph) {
 			loadedGraphAt = 0;
@@ -144,22 +167,53 @@
 		const locations = $assetsQuery.data?.locations ?? [];
 		const items = $assetsQuery.data?.items ?? [];
 		const scenes = $scenesQuery.data?.scenes ?? [];
-		nodes = graph.nodes.map((n) => {
-			const media = mediaFor(n, characters, locations, items, scenes);
-			return {
-				id: `cn-${n.id}`,
-				type: 'entity' as const,
-				position: { x: n.x, y: n.y },
-				data: {
-					canvasNodeId: n.id,
-					entityType: n.entity_type as 'character' | 'location' | 'item' | 'scene',
-					title: n.title ?? 'Untitled',
-					imagePath: media.imagePath,
-					videoPath: media.videoPath,
-					onOpen: () => openEntity(n.entity_type!, n.entity_id!),
-				},
-			};
-		});
+		const jobs = $jobsQuery.data ?? [];
+		// An artifact node is "running" while its tracked job is queued/running.
+		const nodeRunning = new Map<number, boolean>();
+		for (const n of graph.nodes) {
+			const tracked = n.job_id != null ? jobs.find((j) => j.id === n.job_id) : undefined;
+			nodeRunning.set(
+				n.id,
+				tracked ? tracked.status === 'running' || tracked.status === 'pending' : false,
+			);
+		}
+		nodes = graph.nodes
+			.filter((n) => n.type !== 'workflow')
+			.map((n) => {
+				const media = mediaFor(n, characters, locations, items, scenes);
+				if (n.type === 'image' || n.type === 'video') {
+					return {
+						id: `cn-${n.id}`,
+						type: n.type,
+						position: { x: n.x, y: n.y },
+						data: {
+							canvasNodeId: n.id,
+							title: n.title ?? 'Artifact',
+							artifactPath: n.artifact_path,
+							kind: n.type,
+							status: nodeRunning.get(n.id) ? 'running' : n.status,
+							onOpenMedia: (kind: 'image' | 'video') =>
+								openMediaPreview(kind, n.artifact_path, n.title ?? 'Artifact'),
+						},
+					};
+				}
+				return {
+					id: `cn-${n.id}`,
+					type: 'entity' as const,
+					position: { x: n.x, y: n.y },
+					data: {
+						canvasNodeId: n.id,
+						entityType: n.entity_type as 'character' | 'location' | 'item' | 'scene',
+						title: n.title ?? 'Untitled',
+						imagePath: media.imagePath,
+						videoPath: media.videoPath,
+						onOpenMedia: (kind: 'image' | 'video') =>
+							kind === 'video'
+								? openMediaPreview('video', media.videoPath, n.title ?? 'Untitled')
+								: openMediaPreview('image', media.imagePath, n.title ?? 'Untitled'),
+					},
+				};
+			});
 	});
 
 	async function persistNodePosition(node: Node) {
@@ -175,38 +229,123 @@
 		}
 	}
 
+	/** Persist every dragged node. Group drags (shift/box-select + drag) carry
+	 * the full selection in `nodes` with targetNode=null; persisting only the
+	 * last node silently dropped the rest of the group's new positions. */
+	async function persistNodePositions(moved: Node[]) {
+		await Promise.allSettled(moved.map((n) => persistNodePosition(n)));
+	}
+
+	function onNodeDragStart() {
+		dragInProgress = true;
+	}
+
+	function onNodeDragStop(e: {
+		targetNode: Node | null;
+		nodes?: Node[];
+	}) {
+		dragInProgress = false;
+		// Group drags: targetNode is null, `nodes` is the whole selection.
+		// Single drags: nodes[0] is the dragged node. Persist EVERYTHING —
+		// persisting only the last node dropped the rest of a group's moves.
+		const moved = e.nodes?.length ? e.nodes : e.targetNode ? [e.targetNode] : [];
+		if (moved.length > 0) void persistNodePositions(moved);
+		// A refetch landed during the drag: rebuild now that positions are
+		// settled (and re-ordered by the just-saved values on the next fetch).
+		if (rebuildPending) {
+			void client.refetchQueries({ queryKey: ['canvas', canvasId] });
+			rebuildPending = false;
+		}
+	}
+
 	// ---- viewport persistence --------------------------------------------
+	// Zoom/pan must survive reload, session switches (the {#key} layout
+	// remounts this page on canvas id change), and navigation away/back.
+	// fitView would fight the restore on every mount, so it's gone: the
+	// bound viewport's mount-time value is the initial viewport, and oninit
+	// re-asserts it once Svelte Flow's pan/zoom exists.
 
 	let viewportTimeout: ReturnType<typeof setTimeout> | undefined;
-	let appliedStoredViewport = false;
+	let initialViewport = $state<Viewport | undefined>(undefined);
 	let viewport = $state<Viewport>({ x: 0, y: 0, zoom: 1 });
 
+	function validViewport(v: unknown): v is Viewport {
+		const p = v as Viewport | null;
+		return (
+			!!p &&
+			typeof p.x === 'number' &&
+			Number.isFinite(p.x) &&
+			typeof p.y === 'number' &&
+			Number.isFinite(p.y) &&
+			typeof p.zoom === 'number' &&
+			Number.isFinite(p.zoom) &&
+			p.zoom > 0
+		);
+	}
+
+	function viewportLocalStorageKey(id: number) {
+		return `calliope.canvas.viewport.${id}`;
+	}
+
+	function restoreViewportFromStorage(): Viewport | null {
+		if (typeof localStorage === 'undefined') return null;
+		try {
+			const raw = localStorage.getItem(viewportLocalStorageKey(canvasId));
+			return raw ? (JSON.parse(raw) as Viewport) : null;
+		} catch {
+			return null;
+		}
+	}
+
 	function scheduleViewportSave(v: Viewport) {
+		viewport = v;
 		clearTimeout(viewportTimeout);
 		viewportTimeout = setTimeout(() => {
+			const json = JSON.stringify(v);
+			// localStorage first (synchronous, survives navigation + reloads
+			// even if the request never lands), backend per canvas second.
+			try {
+				localStorage.setItem(viewportLocalStorageKey(canvasId), json);
+			} catch {
+				// storage full/blocked — backend save still applies
+			}
 			void canvasApi
-				.patchCanvas(canvasId, { viewport_json: JSON.stringify(v) })
+				.patchCanvas(canvasId, { viewport_json: json })
 				.catch(() => undefined);
 		}, 500);
 	}
 
-	$effect(() => {
-		const stored = canvas?.viewport_json;
-		if (appliedStoredViewport || !stored) return;
-		appliedStoredViewport = true;
-		try {
-			const parsed = JSON.parse(stored) as Viewport;
-			if (
-				typeof parsed?.x === 'number' &&
-				typeof parsed?.y === 'number' &&
-				typeof parsed?.zoom === 'number'
-			) {
-				viewport = parsed;
+	// Initial value must be set before Svelte Flow mounts: backend first
+	// (authoritative), localStorage mirror as fallback for canvases whose
+	// viewport was never saved (or fetched after mount).
+	// The `$state`-read warnings are intentional: this runs once at
+	// component init, before any subscription exists.
+	// svelte-ignore state_referenced_locally
+	if (initialViewport === undefined) {
+		let parsed: Viewport | null = null;
+		const storedJson = $canvasQuery.data?.canvas.viewport_json;
+		if (storedJson) {
+			try {
+				parsed = JSON.parse(storedJson) as Viewport;
+			} catch {
+				parsed = null;
 			}
-		} catch {
-			// corrupt viewport_json — fitView default stands
 		}
-	});
+		const local = restoreViewportFromStorage();
+		const chosen = validViewport(parsed) ? parsed : (local ?? undefined);
+		// svelte-ignore state_referenced_locally
+		initialViewport = chosen;
+		if (chosen) viewport = chosen;
+	}
+
+	let initAsserted = false;
+	function assertViewportOnInit() {
+		// Race guard: a fetch that lands after mount can re-bind a stale
+		// viewport — re-assert the chosen initial value exactly once.
+		if (initAsserted) return;
+		initAsserted = true;
+		if (initialViewport) viewport = initialViewport;
+	}
 
 	// ---- sessions + chat (mirrors agents/+page.svelte) --------------------
 
@@ -221,10 +360,12 @@
 	let composerNonce = $state(0);
 	let sessionScopeHandled = $state(false);
 
+	// Live updates arrive via SSE (agent.session.updated / agent.message);
+	// refreshes also fire at user trigger points (send, create, delete) and
+	// on events.resync after a stream reconnect. No polling.
 	const sessionsQuery = createQuery({
 		queryKey: ['agent-sessions'],
 		queryFn: () => agentApi.listSessions(),
-		refetchInterval: 5000,
 	});
 
 	const sessions = $derived($sessionsQuery.data ?? []);
@@ -238,7 +379,6 @@
 			queryKey: ['agent-session', activeId],
 			queryFn: () => agentApi.getSession(activeId!),
 			enabled: activeId != null,
-			refetchInterval: () => (running ? 1500 : false),
 		})),
 	);
 	const messages = $derived($sessionQuery.data?.messages ?? []);
@@ -249,12 +389,6 @@
 			queryKey: ['agent-project-jobs', projectId ?? 'sandbox'],
 			queryFn: () => (projectId != null ? jobsApi.list(projectId) : playgroundApi.jobs()),
 			enabled: activeId != null,
-			refetchInterval: (q: { state: { data?: Job[] } }) => {
-				const list = q.state.data ?? [];
-				return list.some((j) => j.status === 'pending' || j.status === 'running')
-					? 2500
-					: false;
-			},
 		})),
 	);
 	const jobs = $derived($jobsQuery.data ?? []);
@@ -274,6 +408,12 @@
 				is_enabled: w.is_enabled,
 			})),
 	);
+
+	const skillsQuery = createQuery({
+		queryKey: ['agent-skills'],
+		queryFn: agentApi.listSkills,
+	});
+	const skillOptions = $derived<SkillOption[]>($skillsQuery.data ?? []);
 
 	// Initial session: ?session= param → stored → scope-matching default.
 	$effect(() => {
@@ -403,6 +543,28 @@
 		}
 	}
 
+	async function unlinkActiveSession() {
+		if (!activeSession || canvas?.project_id == null || running) return;
+		const name = canvas.project?.title ?? 'this project';
+		if (
+			!confirm(
+				`Unlink this chat from "${name}"? The chat keeps its history and becomes a Sandbox chat — the project itself is untouched.`,
+			)
+		)
+			return;
+		const sid = activeSession.id;
+		try {
+			await agentApi.patchSession(sid, { unlink: true });
+			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
+			// Follow the chat to its sandbox canvas (created on demand).
+			const graph = await canvasApi.ensureForSession(sid);
+			goto(`/canvas/${graph.canvas.id}?session=${sid}`);
+			toast.success('Chat unlinked — moved to Sandbox');
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Unlink failed');
+		}
+	}
+
 	const sendMutation = createMutation({
 		mutationFn: (payload: AgentComposerPayload) => agentApi.postMessage(activeId!, payload),
 		onMutate: () => {
@@ -430,6 +592,11 @@
 		if (activeId == null) return;
 		try {
 			await agentApi.cancel(activeId);
+			// The cancel endpoint now settles the session (status idle +
+			// agent.session.updated), but don't rely on SSE timing: refetch
+			// so the composer leaves its running state immediately.
+			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
+			await client.invalidateQueries({ queryKey: ['agent-session', activeId] });
 			toast.info('Run cancelled');
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Cancel failed');
@@ -449,6 +616,13 @@
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Could not create session');
 		}
+	}
+
+	/** Question-card click: the option text is the reply, stamped with the
+	 * question seq so the backend records a structured approval. */
+	function handleQuestionAnswer(option: string, _scope: string, questionSeq: number) {
+		if (running || activeId == null) return;
+		handleSend({ content: option, mentions: [], attachments: [], answer_to: questionSeq });
 	}
 
 	function upsertSession(s: AgentSession) {
@@ -474,7 +648,17 @@
 
 	onMount(() => {
 		const stop = connectEvents((ev) => {
-			if (ev.type === 'canvas.updated') {
+			if (ev.type === 'events.resync') {
+				// SSE stream just reconnected: refill anything missed while down.
+				client.invalidateQueries({ queryKey: ['agent-sessions'] });
+				if (activeId != null) {
+					client.invalidateQueries({ queryKey: ['agent-session', activeId] });
+					client.invalidateQueries({ queryKey: ['agent-project-jobs'] });
+					client.invalidateQueries({ queryKey: ['playground-jobs'] });
+				}
+				client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+				return;
+			} else if (ev.type === 'canvas.updated') {
 				if ((ev.data?.canvas_id as number | undefined) === canvasId) {
 					client.invalidateQueries({ queryKey: ['canvas', canvasId] });
 				}
@@ -563,12 +747,107 @@
 				client.invalidateQueries({ queryKey: ['canvas', canvasId] });
 				client.invalidateQueries({ queryKey: ['canvas-assets'] });
 				client.invalidateQueries({ queryKey: ['canvas-scenes'] });
+				// Preview board: a finished job materializes as an artifact card
+				// (skipped when this page owns no session — the sandbox scratch
+				// is a shared project, so its job.completed events fan out to
+				// every open canvas and a mismatched project_id must not post).
+				if (ev.type === 'job.completed') {
+					void materializeJobArtifact(ev.data);
+				}
 			}
 		});
 		return stop;
 	});
 
+	// ---- artifacts from job events -------------------------------------------
+
+	async function materializeJobArtifact(data: Record<string, unknown> | undefined) {
+		const jobId = Number(data?.job_id ?? NaN);
+		if (!Number.isFinite(jobId)) return;
+		// Scope: project canvases take their own project's jobs; sandbox
+		// canvases take jobs the agent enqueued (source:"agent" stamped by
+		// the worker on the event — no race with the jobs poll). Other
+		// sandbox tabs' scratch jobs cannot cross-post.
+		const evPid = data?.project_id == null ? null : Number(data.project_id);
+		if (canvas?.project_id != null) {
+			if (evPid !== canvas.project_id) return;
+		} else {
+			if (!activeSession) return;
+			if (data?.source !== 'agent') return;
+		}
+		try {
+			const outputs = (data?.outputs as string[] | undefined) ?? [];
+			const outPath = outputs.find((p) => p && p.trim()) ?? null;
+			if (!outPath) return;
+			// Idempotent: the artifact card is keyed by job id, so repeated
+			// SSE deliveries or a refetch race can't duplicate cards.
+			const graph = await canvasApi.get(canvasId);
+			const existing = graph.nodes.find(
+				(n) => (n.type === 'image' || n.type === 'video') && n.job_id === jobId,
+			);
+			if (existing) {
+				if (!existing.artifact_path) {
+					await canvasApi.patchNode(canvasId, existing.id, {
+						artifact_path: outPath,
+						status: 'done',
+					});
+					await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+				} else if (
+					existing.title === `Job ${jobId} output` ||
+					/^Job \d+ output$/.test(existing.title ?? '')
+				) {
+					// Legacy generic title → upgrade to the prompt snippet so
+					// older cards stay comparable with newly created ones.
+					const prompt = String(data?.prompt ?? '').trim();
+					if (prompt) {
+						const label = `${prompt.slice(0, 48)}${prompt.length > 48 ? '…' : ''} · #${jobId}`;
+						await canvasApi.patchNode(canvasId, existing.id, { title: label });
+						await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+					}
+				}
+				return;
+			}
+			const isVideo = /\.(mp4|webm)$/i.test(outPath);
+			const kind = isVideo ? 'video' : 'image';
+			// Title carries the prompt snippet so users can visually compare
+			// multiple generations for the same scene/workflow and re-apply
+			// the one they prefer (job history stays on the canvas).
+			const prompt = String(data?.prompt ?? '').trim();
+			const label = prompt
+				? `${prompt.slice(0, 48)}${prompt.length > 48 ? '…' : ''} · #${jobId}`
+				: `Job ${jobId} output`;
+			// Backend picks the gallery slot when x/y are omitted — one layout
+			// rule shared with the agent's post_artifact_to_canvas tool.
+			await canvasApi.createNode(canvasId, {
+				type: kind,
+				title: label,
+				artifact_path: outPath,
+				job_id: jobId,
+				status: 'done',
+			});
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+		} catch {
+			// background refresh failure is non-fatal; polling also corrects status
+		}
+	}
+
 	// ---- collapsible panels ------------------------------------------------
+
+	let tidying = $state(false);
+
+	async function tidyCanvas() {
+		if (tidying) return;
+		tidying = true;
+		try {
+			const res = await canvasApi.tidy(canvasId);
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+			toast.success(`Tidied ${res.moved} cards into columns`);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Tidy failed');
+		} finally {
+			tidying = false;
+		}
+	}
 
 	let railCollapsed = $state(
 		typeof localStorage !== 'undefined' && localStorage.getItem(RAIL_KEY) === '1',
@@ -714,39 +993,81 @@
 							{canvas.title}
 						</button>
 					{/if}
-					{#if savedFlash}
-						<span class="saved">saved</span>
-					{/if}
-					{#if canvas.project}
-						<a class="project-chip" href="/project/{canvas.project.id}">
-							<Icon name="folder" size={12} />
-							{canvas.project.title}
-						</a>
-					{:else}
-						<span class="sandbox-chip">
-							<Icon name="sparkle" size={12} />
-							Sandbox
-						</span>
-					{/if}
+				{#if savedFlash}
+					<span class="saved">saved</span>
+				{/if}
+				{#if canvas.project}
+					<a class="project-chip" href="/project/{canvas.project.id}">
+						<Icon name="folder" size={12} />
+						{canvas.project.title}
+					</a>
+					<button
+						type="button"
+						class="unlink-btn"
+						onclick={unlinkActiveSession}
+						disabled={!activeSession || running}
+						title={running
+							? 'Wait for the run to finish'
+							: activeSession
+								? `Unlink this chat from ${canvas.project.title}`
+								: 'No chat on this canvas yet'}
+						aria-label={`Unlink this chat from ${canvas.project.title}`}
+					>
+						<Icon name="link-off" size={12} />
+						Unlink
+					</button>
+				{:else}
+					<span class="sandbox-chip">
+						<Icon name="sparkle" size={12} />
+						Sandbox
+					</span>
+				{/if}
 				</div>
 
 				<SvelteFlow
 					bind:nodes
-					bind:edges
 					bind:viewport
 					{nodeTypes}
-					fitView
 					colorMode="dark"
-					minZoom={0.1}
-					onnodedragstop={(e) => {
-						const target = e.targetNode ?? e.nodes[e.nodes.length - 1];
-						if (target) persistNodePosition(target);
-					}}
+					minZoom={0.05}
+					maxZoom={4}
+					{initialViewport}
+					// Never-saved canvas: fit all cards once nodes are measured.
+					// fitView only queues when it's set at store creation, so the
+					// prop is evaluated once here — later changes are ignored (the
+					// store keeps fitViewQueued latched from the first run).
+					fitView={initialViewport === undefined}
+					onnodedragstart={onNodeDragStart}
+					onnodedragstop={onNodeDragStop}
 					onmoveend={(_event, vp) => scheduleViewportSave(vp)}
+					oninit={assertViewportOnInit}
 				>
 					<Background variant={BackgroundVariant.Dots} gap={26} size={1} />
 					<Controls />
 					<MiniMap />
+					<Panel position="bottom-center">
+						<button
+							type="button"
+							class="tidy-btn"
+							disabled={tidying || nodes.length === 0}
+							onclick={tidyCanvas}
+							title="Re-arrange all cards into clean columns and grids"
+						>
+							<Icon name="drag" size={14} />
+							Tidy layout
+						</button>
+					</Panel>
+					{#if nodes.length === 0 && !$canvasQuery.isLoading}
+						<Panel position="top-center">
+							<div class="canvas-empty-hint">
+								<strong>Empty board</strong>
+								<span>
+									Ask the agent on the right to create characters, scenes, or to
+									generate an image or video — outputs land here as cards.
+								</span>
+							</div>
+						</Panel>
+					{/if}
 				</SvelteFlow>
 			</main>
 
@@ -798,19 +1119,21 @@
 						loading={activeId != null && $sessionQuery.isLoading}
 						suggestions={SUGGESTIONS}
 						onSuggestion={setComposerDraft}
+						onAnswer={handleQuestionAnswer}
 					/>
 					{#if running && plan && plan.tasks.length > 0}
 						<AgentPlanPanel {plan} />
 					{/if}
 					{#key activeId}
-						<AgentComposer
-							{running}
-							draft={composerDraft}
-							draftNonce={composerNonce}
-							workflows={enabledWorkflows}
-							onSend={handleSend}
-							onCancel={cancelRun}
-						/>
+					<AgentComposer
+						{running}
+						draft={composerDraft}
+						draftNonce={composerNonce}
+						workflows={enabledWorkflows}
+						skills={skillOptions}
+						onSend={handleSend}
+						onCancel={cancelRun}
+					/>
 					{/key}
 				</aside>
 			{:else}
@@ -825,6 +1148,16 @@
 				</button>
 			{/if}
 		</div>
+	{/if}
+
+	{#if preview}
+		<ImageLightbox
+			src={preview.src}
+			kind={preview.kind}
+			alt={preview.caption}
+			caption={preview.caption}
+			onClose={() => (preview = null)}
+		/>
 	{/if}
 </div>
 
@@ -851,6 +1184,45 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
 		margin: 24px;
+	}
+	.tidy-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		font-size: 12px;
+		font-weight: 600;
+		cursor: pointer;
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+	}
+	.tidy-btn:hover:not(:disabled) {
+		color: var(--text-primary);
+		border-color: var(--accent);
+	}
+	.tidy-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.canvas-empty-hint {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		max-width: 340px;
+		padding: 10px 14px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+		font-size: 12px;
+		color: var(--text-secondary);
+	}
+	.canvas-empty-hint strong {
+		color: var(--text-primary);
+		font-size: 12.5px;
 	}
 	.titlecard {
 		position: absolute;
@@ -915,6 +1287,30 @@
 	.project-chip:hover {
 		border-color: var(--accent);
 		color: var(--text-primary);
+	}
+	.unlink-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 11.5px;
+		color: var(--text-secondary);
+		padding: 3px 9px;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: transparent;
+		cursor: pointer;
+		white-space: nowrap;
+		transition:
+			border-color 0.15s,
+			color 0.15s;
+	}
+	.unlink-btn:hover:not(:disabled) {
+		border-color: #f87171;
+		color: #fca5a5;
+	}
+	.unlink-btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 	.chat-panel {
 		flex-shrink: 0;

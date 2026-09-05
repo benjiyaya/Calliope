@@ -1,11 +1,14 @@
 <script lang="ts">
 	import {
 		MAX_WORKFLOW_MENTIONS,
+		filterSkills,
 		filterWorkflows,
 		payloadIsEmpty,
 		type AgentAttachment,
 		type AgentComposerPayload,
 		type AttachmentKind,
+		type SkillMention,
+		type SkillOption,
 		type WorkflowMention,
 		type WorkflowOption,
 	} from '$lib/agentComposer';
@@ -15,26 +18,29 @@
 	import { toast } from '$lib/toast';
 	import WorkflowMentionMenu from './WorkflowMentionMenu.svelte';
 
-	interface Props {
-		running: boolean;
-		onSend: (payload: AgentComposerPayload) => void;
-		onCancel: () => void;
-		/** Text to pre-fill into the composer (deep-link handoff or a suggestion). */
-		draft?: string;
-		/** Bumps to re-apply `draft` (including the empty string) and refocus. */
-		draftNonce?: number;
-		/** Enabled ComfyUI workflows for the `@` typeahead. */
-		workflows?: WorkflowOption[];
-	}
+interface Props {
+	running: boolean;
+	onSend: (payload: AgentComposerPayload) => void;
+	onCancel: () => void;
+	/** Text to pre-fill into the composer (deep-link handoff or a suggestion). */
+	draft?: string;
+	/** Bumps to re-apply `draft` (including the empty string) and refocus. */
+	draftNonce?: number;
+	/** Enabled ComfyUI workflows for the `@` typeahead. */
+	workflows?: WorkflowOption[];
+	/** Available skills for the `/` typeahead. */
+	skills?: SkillOption[];
+}
 
-	let {
-		running,
-		onSend,
-		onCancel,
-		draft = '',
-		draftNonce = 0,
-		workflows = [],
-	}: Props = $props();
+let {
+	running,
+	onSend,
+	onCancel,
+	draft = '',
+	draftNonce = 0,
+	workflows = [],
+	skills = [],
+}: Props = $props();
 
 	const ATTACH_LIMIT = 8;
 	const ACCEPT = 'image/*,video/*,audio/*,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov,.mkv,.mp3,.wav,.flac,.ogg,.m4a';
@@ -52,8 +58,16 @@
 	let mentionAnchor = $state({ top: 0, bottom: 0, left: 0 });
 	let mentionLocked = $state(false);
 
+	// `/` slash command state (skill picker). Same mechanics as the `@`
+	// workflow menu — different trigger char and item list.
+	let slashOpen = $state(false);
+	let slashQuery = $state('');
+	let slashIndex = $state(0);
+	let slashAnchor = $state({ top: 0, bottom: 0, left: 0 });
+
 	const uploads = createUploadManager();
 	const mentionItems = $derived(filterWorkflows(workflows, mentionQuery));
+	const slashItems = $derived(filterSkills(skills, slashQuery));
 	const busy = $derived(running || uploadingNames.length > 0);
 	const sendable = $derived(!busy && (!editorEmpty || attachments.length > 0));
 
@@ -73,12 +87,13 @@
 	});
 
 	$effect(() => {
-		if (!mentionOpen) return;
+		if (!mentionOpen && !slashOpen) return;
 		function onDocDown(e: MouseEvent) {
 			const t = e.target as Node | null;
 			if (editorEl?.contains(t)) return;
 			if (t instanceof Element && t.closest('.mention-menu')) return;
 			mentionOpen = false;
+			slashOpen = false;
 		}
 		document.addEventListener('mousedown', onDocDown);
 		return () => document.removeEventListener('mousedown', onDocDown);
@@ -93,9 +108,12 @@
 			&& !editorEl.querySelector('.wf-chip');
 	}
 
-	function serialize(): { content: string; mentions: WorkflowMention[] } {
+	function serialize(): {
+		content: string;
+		mentions: (WorkflowMention | SkillMention)[];
+	} {
 		if (!editorEl) return { content: '', mentions: [] };
-		const mentions: WorkflowMention[] = [];
+		const mentions: (WorkflowMention | SkillMention)[] = [];
 		let content = '';
 		const walk = (node: Node) => {
 			if (node.nodeType === Node.TEXT_NODE) {
@@ -112,6 +130,15 @@
 				content += `@${name}`;
 				return;
 			}
+			if (node instanceof HTMLElement && node.classList.contains('skill-chip')) {
+				const name = node.dataset.skillName ?? node.textContent?.replace(/^\//, '') ?? '';
+				const description = node.dataset.skillDescription ?? '';
+				if (name) {
+					mentions.push({ type: 'skill', name, description });
+				}
+				content += `/${name}`;
+				return;
+			}
 			if (node instanceof HTMLElement && (node.tagName === 'BR' || node.tagName === 'DIV' || node.tagName === 'P')) {
 				if (node !== editorEl && content.length > 0 && !content.endsWith('\n')) content += '\n';
 			}
@@ -120,7 +147,7 @@
 		walk(editorEl);
 		return {
 			content: content.replace(/\u00a0/g, ' ').replace(/\n+$/, '').trim(),
-			mentions: mentions.slice(0, MAX_WORKFLOW_MENTIONS),
+			mentions: mentions.slice(0, MAX_WORKFLOW_MENTIONS + 4),
 		};
 	}
 
@@ -137,6 +164,7 @@
 		attachments = [];
 		mentionOpen = false;
 		mentionLocked = false;
+		slashOpen = false;
 		syncEmpty();
 		onSend(payload);
 	}
@@ -176,6 +204,32 @@
 				return;
 			}
 		}
+		if (slashOpen) {
+			if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				slashIndex = slashItems.length === 0 ? 0 : (slashIndex + 1) % slashItems.length;
+				return;
+			}
+			if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				slashIndex = slashItems.length === 0
+					? 0
+					: (slashIndex - 1 + slashItems.length) % slashItems.length;
+				return;
+			}
+			if (e.key === 'Enter' || e.key === 'Tab') {
+				e.preventDefault();
+				const skill = slashItems[slashIndex];
+				if (skill) insertSkill(skill);
+				else slashOpen = false;
+				return;
+			}
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				slashOpen = false;
+				return;
+			}
+		}
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
 			submit();
@@ -195,7 +249,16 @@
 
 	function onEditorInput() {
 		syncEmpty();
-		const info = readAtQuery(editorEl);
+		const slash = readTriggerQuery(editorEl, '/');
+		if (slash) {
+			slashQuery = slash.query;
+			slashOpen = true;
+			slashIndex = 0;
+			slashAnchor = caretAnchor();
+		} else {
+			slashOpen = false;
+		}
+		const info = readTriggerQuery(editorEl, '@', '.skill-chip');
 		if (!info) {
 			mentionOpen = false;
 			mentionLocked = false;
@@ -246,6 +309,40 @@
 		chip.dataset.workflowName = wf.name;
 		chip.dataset.workflowKind = wf.kind;
 		chip.textContent = `@${wf.name}`;
+		return chip;
+	}
+
+	function insertSkill(skill: SkillOption) {
+		if (!editorEl) return;
+		const info = readTriggerQuery(editorEl, '/');
+		if (info) {
+			const range = document.createRange();
+			range.setStart(info.fromNode, info.fromOffset);
+			range.setEnd(info.toNode, info.toOffset);
+			range.deleteContents();
+			const chip = makeSkillChip(skill);
+			range.insertNode(chip);
+			const space = document.createTextNode('\u00a0');
+			chip.after(space);
+			placeCaretAfter(space);
+		} else {
+			editorEl.appendChild(makeSkillChip(skill));
+			const space = document.createTextNode('\u00a0');
+			editorEl.appendChild(space);
+			placeCaretAfter(space);
+		}
+		slashOpen = false;
+		syncEmpty();
+		editorEl.focus();
+	}
+
+	function makeSkillChip(skill: SkillOption): HTMLSpanElement {
+		const chip = document.createElement('span');
+		chip.className = 'skill-chip';
+		chip.contentEditable = 'false';
+		chip.dataset.skillName = skill.name;
+		chip.dataset.skillDescription = skill.description;
+		chip.textContent = `/${skill.name}`;
 		return chip;
 	}
 
@@ -341,7 +438,17 @@
 		};
 	}
 
-	function readAtQuery(editor: HTMLElement | null): {
+	function readAtQuery(editor: HTMLElement | null) {
+		return readTriggerQuery(editor, '@');
+	}
+
+	/** Detect `char` + unbroken query right before the caret. `skipSelector`
+	 * excludes carets inside matching chips (e.g. inside an existing tag). */
+	function readTriggerQuery(
+		editor: HTMLElement | null,
+		char: string,
+		skipSelector?: string,
+	): {
 		query: string;
 		fromNode: Node;
 		fromOffset: number;
@@ -355,11 +462,13 @@
 		}
 		const node = sel.anchorNode;
 		if (node.nodeType !== Node.TEXT_NODE) return null;
-		if ((node.parentElement as HTMLElement | null)?.closest?.('.wf-chip')) return null;
+		if (skipSelector && (node.parentElement as HTMLElement | null)?.closest?.(skipSelector)) {
+			return null;
+		}
 		const offset = sel.anchorOffset;
 		const text = node.textContent ?? '';
 		const before = text.slice(0, offset);
-		const at = before.lastIndexOf('@');
+		const at = before.lastIndexOf(char);
 		if (at < 0) return null;
 		if (at > 0 && !/\s/.test(before[at - 1]!)) return null;
 		const query = before.slice(at + 1);
@@ -480,6 +589,17 @@
 	onHover={(i) => (mentionIndex = i)}
 />
 
+<WorkflowMentionMenu
+	open={slashOpen}
+	items={slashItems}
+	lockReason={null}
+	activeIndex={slashIndex}
+	anchor={slashAnchor}
+	onSelect={insertSkill}
+	onHover={(i) => (slashIndex = i)}
+	skillMode
+/>
+
 <style>
 	.composer {
 		display: flex;
@@ -591,6 +711,19 @@
 		background: color-mix(in srgb, var(--accent) 22%, var(--bg-elevated));
 		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 		color: var(--accent);
+		font-weight: 600;
+		font-size: 13px;
+		white-space: nowrap;
+		user-select: none;
+	}
+	.editor :global(.skill-chip) {
+		display: inline;
+		padding: 1px 7px;
+		margin: 0 1px;
+		border-radius: 999px;
+		background: color-mix(in srgb, #38bdf8 20%, var(--bg-elevated));
+		border: 1px solid color-mix(in srgb, #38bdf8 45%, transparent);
+		color: #7dd3fc;
 		font-weight: 600;
 		font-size: 13px;
 		white-space: nowrap;

@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { page } from '$app/stores';
-	import { beforeNavigate, goto } from '$app/navigation';
+	import { beforeNavigate, goto, afterNavigate } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import SettingsNav from '$lib/components/settings/SettingsNav.svelte';
 	import WorkflowsLibrary from '$lib/components/settings/WorkflowsLibrary.svelte';
+	import SkillsLibrary from '$lib/components/settings/SkillsLibrary.svelte';
+	import MemoryPanel from '$lib/components/settings/MemoryPanel.svelte';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -13,7 +14,16 @@
 	import { toast } from '$lib/toast';
 
 	const client = useQueryClient();
-	let tab = $derived(($page.url.searchParams.get('tab') || 'llm') as string);
+	// Tab is tracked imperatively via afterNavigate (below) rather than a
+	// `page`-derived value: query-only same-route navigation (?tab=llm →
+	// ?tab=skills) did not retrigger the derived in every bundle, leaving
+	// the previous tab's content on screen while the URL changed. An event
+	// handler fires deterministically on every completed navigation.
+	let tab = $state('llm');
+
+	afterNavigate((nav) => {
+		tab = (nav.to?.url.searchParams.get('tab') || 'llm') as string;
+	});
 
 	const settingsQuery = createQuery({
 		queryKey: ['settings'],
@@ -160,7 +170,7 @@
 
 	beforeNavigate((nav) => {
 		if (!isDirty || !nav.to) return;
-		if (nav.to.url.pathname === $page.url.pathname) return;
+		if (nav.to.url.pathname === nav.from?.url.pathname) return;
 		nav.cancel();
 		pendingUrl = `${nav.to.url.pathname}${nav.to.url.search}${nav.to.url.hash}`;
 		leaveOpen = true;
@@ -612,11 +622,12 @@
 								oninput={(e) => (draft.agent_hardening_prompt = e.currentTarget.value)}
 								placeholder="e.g. Never invent ids. Stay in this project. Confirm destructive changes."
 							></textarea>
-							<p class="field-hint">
-								Plain text, shown to the model verbatim. Line breaks are preserved.
-							</p>
-						</label>
-					</section>
+						<p class="field-hint">
+							Plain text, shown to the model verbatim. Line breaks are preserved.
+						</p>
+					</label>
+				</section>
+				<MemoryPanel />
 				{:else if tab === 'storage'}
 					<section class="panel">
 						<h1>Storage</h1>
@@ -649,9 +660,11 @@
 					</section>
 				{:else if tab === 'workflows'}
 					<WorkflowsLibrary />
+				{:else if tab === 'skills'}
+					<SkillsLibrary />
 				{/if}
 
-				{#if tab !== 'workflows'}
+				{#if tab !== 'workflows' && tab !== 'skills'}
 					<div class="save-bar">
 						<span class="save-state" class:dirty={isDirty}>
 							{#if isDirty}

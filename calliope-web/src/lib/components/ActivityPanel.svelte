@@ -130,12 +130,12 @@
 		return collapsed.slice(-60).reverse();
 	});
 
-	// Same query key as QueueStage — the cache (and its refetch) is shared.
+	// Same query key as QueueStage — refreshed by SSE invalidation from the
+	// project page (job.* events), not by polling.
 	const jobsQuery = createQuery(
 		toStore(() => ({
 			queryKey: ['jobs', projectId],
 			queryFn: () => jobsApi.list(projectId),
-			refetchInterval: 5000,
 		})),
 	);
 

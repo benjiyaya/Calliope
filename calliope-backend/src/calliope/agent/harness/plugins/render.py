@@ -18,10 +18,15 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="enqueue_asset_jobs",
             description=(
-                "Queue character/location reference image generation from the "
-                "saved image prompts. Call comfy_server_info first. "
-                "missing_only=true (default) skips entities that already have "
-                "images. Returns job ids — wait_for_jobs after."
+                "Queue character/location/item reference image generation from "
+                "the saved image prompts. Call comfy_server_info first. "
+                "SCOPE RULE (mechanical): pass explicit character_ids / "
+                "location_ids / item_ids for the entities the user named. An "
+                "unscoped call (no ids, no all_missing) that would touch more "
+                "than 3 entities is REFUSED — pass the ids, or all_missing=true "
+                "only when the user asked for ALL missing. missing_only=true "
+                "(default) skips entities that already have images. Returns job "
+                "ids — wait_for_jobs after."
             ),
             parameters={
                 "type": "object",
@@ -35,6 +40,18 @@ def register(registry: ToolRegistry) -> None:
                         "type": "array",
                         "items": {"type": "integer"},
                         "description": "Real location ids from get_workspace",
+                    },
+                    "item_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Real item ids from get_workspace",
+                    },
+                    "all_missing": {
+                        "type": "boolean",
+                        "description": (
+                            "Only when the user explicitly asked for ALL missing "
+                            "images (the Project page's Generate All Missing button)"
+                        ),
                     },
                     "missing_only": {"type": "boolean"},
                     "workflow_id": {
@@ -113,7 +130,15 @@ def register(registry: ToolRegistry) -> None:
                 "attachments are ordered local paths for (Input:image) / "
                 "(Input:character) slots. Aspect ratio in the user's prose "
                 "(e.g. 16:9) → 1920×1080 (1080p) or 1280×720 (720p); "
-                "9:16 swaps those; 1:1 → 1080×1080. Returns job ids — "
+                "9:16 swaps those; 1:1 → 1080×1080. "
+                "IMAGE for a linked project: when the user wants the result "
+                "filed into Project Assets (e.g. 'create an image for character "
+                "Kira'), pass character_id/location_id/item_id (from "
+                "get_workspace) or attach={target,name} — the finished image is "
+                "then saved onto that entity automatically. For MULTIPLE "
+                "characters pass character_ids=[104, 105] (plus "
+                "prompts_by_character for distinct prompts) — one call, one job "
+                "each. Returns job ids — "
                 "wait_for_jobs after."
             ),
             parameters={
@@ -151,6 +176,52 @@ def register(registry: ToolRegistry) -> None:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Ordered local asset paths for image/character slots",
+                    },
+                    "character_id": {
+                        "type": "integer",
+                        "description": (
+                            "IMAGE + linked project only: file the finished image as this "
+                            "character's sheet automatically on completion"
+                        ),
+                    },
+                    "character_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "Batch: one run per character id (e.g. [104, 105] for two sheets). "
+                            "Combine with prompts_by_character for per-character prompts"
+                        ),
+                    },
+                    "prompts_by_character": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": (
+                            'With character_ids: per-character prompts keyed by id — '
+                            '{"104": "prompt for Kael", "105": "prompt for Lila"}'
+                        ),
+                    },
+                    "location_id": {
+                        "type": "integer",
+                        "description": "IMAGE + linked project only: file the output as this location's reference",
+                    },
+                    "item_id": {
+                        "type": "integer",
+                        "description": "IMAGE + linked project only: file the output as this item's reference",
+                    },
+                    "attach": {
+                        "type": "object",
+                        "description": (
+                            "IMAGE + linked project only: name-based attach — "
+                            '{"target": "character_sheet"|"location"|"item", "name": "Kira"}. '
+                            "Prefer explicit ids when list_scenes/get_workspace gave them"
+                        ),
+                        "properties": {
+                            "target": {
+                                "type": "string",
+                                "enum": ["character_sheet", "location", "item"],
+                            },
+                            "name": {"type": "string"},
+                        },
                     },
                 },
                 "required": ["workflow_id"],
@@ -235,12 +306,15 @@ def register(registry: ToolRegistry) -> None:
             description=(
                 "Add a generated file to a project: image as character sheet / "
                 "environment / misc. item, or a video clip onto an existing "
-                "scene (target=scene). Works in sandbox — do not create_project "
-                "just to file a generate. Call list_projects first if the user "
-                "named a film. For images: character_id / location_id / item_id "
-                "or a name. For scene clips: scene_id from list_scenes (never "
-                "add_scene to 'fix' a missing clip). job_id should be the "
-                "run_workflow / Playground job that produced the file."
+                "scene (target=scene). For scene clips this is 'Apply to "
+                "Scene' — use it to roll a scene's clip back to (or forward "
+                "to) any finished render's job_id. Works in sandbox — do not "
+                "create_project just to file a generate. Call list_projects "
+                "first if the user named a film. For images: character_id / "
+                "location_id / item_id or a name. For scene clips: scene_id "
+                "from list_scenes (never add_scene to 'fix' a missing clip). "
+                "job_id should be the run_workflow / Playground job that "
+                "produced the file."
             ),
             parameters={
                 "type": "object",
@@ -315,14 +389,57 @@ def register(registry: ToolRegistry) -> None:
 
 async def t_enqueue_asset_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     from calliope.agent.asset_agent import enqueue_asset_jobs as _enqueue
+    from calliope.agent.harness import log as session_log
+    from calliope.agent.harness.policy import allows_bulk_enqueue
+
+    character_ids = _int_list(args.get("character_ids"))
+    location_ids = _int_list(args.get("location_ids"))
+    item_ids = _int_list(args.get("item_ids"))
+    all_missing = bool(args.get("all_missing", False))
+    missing_only = bool(args.get("missing_only", True))
+
+    # Mechanical scope: an unscoped call (no explicit ids, no all_missing)
+    # must NOT touch every entity. Count what it WOULD hit; if that exceeds
+    # the bulk limit, require explicit ids or an "all/remaining" word.
+    if not character_ids and not location_ids and not item_ids and not all_missing:
+        conn = _db()
+        try:
+            counts = conn.execute(
+                """
+                SELECT
+                  (SELECT COUNT(*) FROM characters WHERE project_id = ?
+                     AND (sheet_path IS NULL OR sheet_path = '')) AS c,
+                  (SELECT COUNT(*) FROM locations WHERE project_id = ?
+                     AND (reference_image_path IS NULL OR reference_image_path = '')) AS l,
+                  (SELECT COUNT(*) FROM items WHERE project_id = ?
+                     AND (reference_image_path IS NULL OR reference_image_path = '')) AS i
+                """,
+                (ctx.project_id, ctx.project_id, ctx.project_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        would_hit = (counts["c"] or 0) + (counts["l"] or 0) + (counts["i"] or 0)
+        latest = session_log.latest_user_message(ctx.session_id) or ""
+        if would_hit > 3 and not allows_bulk_enqueue(latest, would_hit):
+            return {
+                "ok": False,
+                "error": (
+                    f"Unscoped enqueue would touch {would_hit} entities. Pass explicit "
+                    "character_ids / location_ids / item_ids for the ones the user named, "
+                    "or all_missing=true only when they asked for ALL missing."
+                ),
+                "would_hit": would_hit,
+            }
 
     jobs = await _enqueue(
         ctx.project_id,
-        character_ids=args.get("character_ids"),
+        character_ids=character_ids or None,
         asset_target=args.get("asset_target", "sheet"),
-        location_ids=args.get("location_ids"),
-        missing_only=bool(args.get("missing_only", True)),
+        location_ids=location_ids or None,
+        item_ids=item_ids or None,
+        missing_only=missing_only,
         workflow_id=args.get("workflow_id"),
+        session_id=ctx.session_id,
     )
     return {"jobs": jobs, "count": len(jobs)}
 
@@ -411,6 +528,7 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             ctx.project_id,
             scene_ids=resolved,
             workflow_id=args.get("workflow_id"),
+            session_id=ctx.session_id,
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
@@ -453,8 +571,95 @@ def _queue_project_id(ctx: ToolContext) -> int:
         conn.close()
 
 
+def _resolve_attach_target(
+    ctx: ToolContext, args: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """Map run_workflow's optional attach args onto the worker's auto-file
+    payload keys (character_id / location_id / item_id + asset_target).
+
+    Accepts an explicit id (character_id / location_id / item_id) or a name
+    resolved against the linked project. Returns ({}, note) when the entity
+    is not found — the job still runs, it just isn't auto-filed.
+    """
+    has_ids = any(args.get(k) is not None for k in ("character_id", "location_id", "item_id"))
+    attach_arg = args.get("attach")
+    if not has_ids and not isinstance(attach_arg, dict):
+        return {}, None
+
+    project_id = ctx.project_id
+    character_id = args.get("character_id")
+    location_id = args.get("location_id")
+    item_id = args.get("item_id")
+    name = str((attach_arg or {}).get("name") or "").strip()
+    target = str((attach_arg or {}).get("target") or "").strip()
+    conn = _db()
+    try:
+        # Explicit ids win; verify they exist in the linked project.
+        if character_id is not None:
+            row = conn.execute(
+                "SELECT id, name FROM characters WHERE id = ? AND project_id = ?",
+                (int(character_id), project_id),
+            ).fetchone()
+            if not row:
+                return {}, f"character_id {character_id} not found in project {project_id} — output will NOT be auto-filed"
+            return {"character_id": int(row["id"]), "asset_target": "sheet"}, (
+                f"output will be filed as sheet for character {row['name']} (#{row['id']})"
+            )
+        if location_id is not None:
+            row = conn.execute(
+                "SELECT id, name FROM locations WHERE id = ? AND project_id = ?",
+                (int(location_id), project_id),
+            ).fetchone()
+            if not row:
+                return {}, f"location_id {location_id} not found in project {project_id} — output will NOT be auto-filed"
+            return {"location_id": int(row["id"])}, (
+                f"output will be filed as reference for location {row['name']} (#{row['id']})"
+            )
+        if item_id is not None:
+            row = conn.execute(
+                "SELECT id, name FROM items WHERE id = ? AND project_id = ?",
+                (int(item_id), project_id),
+            ).fetchone()
+            if not row:
+                return {}, f"item_id {item_id} not found in project {project_id} — output will NOT be auto-filed"
+            return {"item_id": int(row["id"])}, (
+                f"output will be filed as reference for item {row['name']} (#{row['id']})"
+            )
+        # Name-based resolution: attach {target, name}
+        table = {
+            "character_sheet": "characters",
+            "character": "characters",
+            "location": "locations",
+            "item": "items",
+        }.get(target)
+        if not table or not name:
+            return {}, None
+        row = _find_named(conn, table, project_id, name)
+        if not row:
+            return {}, f"no {target} named '{name}' in project {project_id} — output will NOT be auto-filed"
+        if table == "characters":
+            return {"character_id": int(row["id"]), "asset_target": "sheet"}, (
+                f"output will be filed as sheet for character {row['name']} (#{row['id']})"
+            )
+        key = "location_id" if table == "locations" else "item_id"
+        return {key: int(row["id"])}, (
+            f"output will be filed as reference for {target} {row['name']} (#{row['id']})"
+        )
+    except (TypeError, ValueError):
+        return {}, "attach ids must be integers"
+    finally:
+        conn.close()
+
+
 async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     """Enqueue one Calliope workflow (linked project, or Playground scratch)."""
+    # Batch form: character_ids=[104, 105] fans out into one run per id, so
+    # "generate sheets for Kael AND Lila" is a single tool call instead of a
+    # two-call plan the model historically fumbled into a stall loop.
+    ids = args.get("character_ids")
+    if isinstance(ids, list) and ids:
+        return await _run_workflow_batch(ctx, args, [int(i) for i in ids])
+
     from calliope.comfyui.parser import parse_dynamic_inputs
     from calliope.comfyui.roles import input_has_role
     from calliope.comfyui.smart_fill import smart_fill_inputs
@@ -494,6 +699,14 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
             scene_id = int(raw_scene)
         except (TypeError, ValueError):
             return {"ok": False, "error": "scene_id must be an integer from list_scenes"}
+
+    # Optional auto-attach: "create an image for character Kira" should file
+    # the finished output straight into Project Assets. Resolved against the
+    # LINKED project only — the Playground scratch never gains entities.
+    attach: dict[str, Any] = {}
+    attach_note: str | None = None
+    if kind == "image" and ctx.project_id is not None:
+        attach, attach_note = _resolve_attach_target(ctx=ctx, args=args)
 
     # Linked-film video must be a scene job. Orphans (scene_id NULL) finish in
     # the queue but never write scenes.video_path — the clip is preview-only.
@@ -574,7 +787,13 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         kind=kind,
         workflow_id=workflow_id,
         scene_id=None,
-        payload={"input_values": values, "source": "agent", "prompt": args.get("prompt")},
+        payload={
+            "input_values": values,
+            "source": "agent",
+            "session_id": ctx.session_id,
+            "prompt": args.get("prompt"),
+            **attach,
+        },
     )
     await event_bus.publish(
         "job.created",
@@ -592,6 +811,7 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         "workflow_name": wf_name,
         "sandbox": sandbox,
         "wired_to_scene": False,
+        **({"attach": attach_note} if attach_note else {}),
     }
 
 
@@ -611,6 +831,51 @@ def _first_job_output(job_id: int) -> tuple[str | None, str | None]:
     if not paths:
         return None, f"Job {job_id} has no output files yet (status={job.get('status')})"
     return paths[0], None
+
+
+async def _run_workflow_batch(
+    ctx: ToolContext, args: dict[str, Any], character_ids: list[int]
+) -> dict[str, Any]:
+    """Fan out one run_workflow per character id, aggregating job results.
+
+    A single call covers "sheets for Kael AND Lila": each job carries its
+    own character_id so the worker auto-files the output onto that entity.
+    Per-character prompts come from prompts_by_character={"104": "…"}; a
+    single `prompt` is shared by all; neither → each character's saved
+    Image prompt is used via enqueue-like behavior... (kept simple: shared
+    prompt or per-character map)."""
+    prompts_map = args.get("prompts_by_character")
+    prompts_map = prompts_map if isinstance(prompts_map, dict) else {}
+    shared_prompt = str(args.get("prompt") or "").strip()
+
+    results: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for cid in character_ids:
+        per_args = {k: v for k, v in args.items() if k not in ("character_ids", "prompts_by_character")}
+        per_args.pop("character_id", None)
+        per_args["character_id"] = cid
+        per_prompt = str(prompts_map.get(str(cid)) or prompts_map.get(cid) or "").strip()
+        if per_prompt:
+            per_args["prompt"] = per_prompt
+        elif shared_prompt:
+            per_args["prompt"] = shared_prompt
+        single = await t_run_workflow(ctx, per_args)
+        if single.get("ok") is False:
+            failures.append(f"character {cid}: {single.get('error')}")
+        else:
+            for j in single.get("jobs", []):
+                results.append(j)
+
+    out: dict[str, Any] = {
+        "ok": len(results) > 0,
+        "jobs": results,
+        "count": len(results),
+        "requested": len(character_ids),
+        "failed": failures,
+    }
+    if failures:
+        out["note"] = "Some characters failed — see failed[]. Retry individually for detail."
+    return out
 
 
 def _find_named(conn, table: str, project_id: int, name: str):
@@ -781,6 +1046,21 @@ async def t_attach_asset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
             (project_id,),
         )
         conn.commit()
+        if target == "scene":
+            # Same signal the playground attach path sends — lets an open
+            # Video page refetch scenes so the applied clip shows up live.
+            from calliope.events.bus import event_bus
+
+            await event_bus.publish(
+                "asset.ready",
+                {
+                    "path": path,
+                    "project_id": project_id,
+                    "target": "scene",
+                    "scene_id": entity.get("id") if entity else None,
+                    "source": "agent_attach",
+                },
+            )
     finally:
         conn.close()
 

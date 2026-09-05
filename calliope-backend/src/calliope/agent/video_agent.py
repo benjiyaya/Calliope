@@ -273,6 +273,7 @@ async def enqueue_video_jobs(
     workflow_id: int | None = None,
     input_values_override: dict[str, Any] | None = None,
     prompts: dict[int, str] | None = None,
+    session_id: int | None = None,
 ) -> list[dict[str, Any]]:
     await event_bus.publish(
         "agent.thinking", {"message": "Queuing video jobs…", "project_id": project_id}
@@ -405,6 +406,8 @@ async def enqueue_video_jobs(
                 if v not in (None, ""):
                     values[str(k)] = v
             payload: dict[str, Any] = {"input_values": values, "prompt": prompt}
+            if session_id is not None:
+                payload["session_id"] = session_id
             if scene.get("chain_from_prev"):
                 video_input = _video_input(inputs)
                 if not video_input:

@@ -79,12 +79,12 @@
 	});
 
 	// Same query keys as QueueStage/ActivityPanel — cache is shared.
+	// Refreshes are SSE-driven (job.* events + events.resync below), no polling.
 	const jobsQuery = createQuery(
 		toStore(() => ({
 			queryKey: ['jobs', projectId],
 			queryFn: () => jobsApi.list(projectId),
 			enabled,
-			refetchInterval: 5000,
 		})),
 	);
 
@@ -93,7 +93,6 @@
 			queryKey: ['queue-status'],
 			queryFn: jobsApi.queueStatus,
 			enabled,
-			refetchInterval: 5000,
 		})),
 	);
 
@@ -113,6 +112,15 @@
 	onMount(() => {
 		return connectEvents(
 			(ev) => {
+				if (ev.type === 'events.resync') {
+					// SSE reconnected: refill anything missed while the stream was down.
+					client.invalidateQueries({ queryKey: ['jobs'] });
+					client.invalidateQueries({ queryKey: ['queue-status'] });
+					client.invalidateQueries({ queryKey: ['assets'] });
+					client.invalidateQueries({ queryKey: ['story'] });
+					client.invalidateQueries({ queryKey: ['scenes'] });
+					return;
+				}
 				// Live per-job progress for ProgressBars (Activity log stays clean)
 				handleJobEvent(ev);
 				// Don't keep Comfy poll ticks in the Activity log
@@ -126,6 +134,7 @@
 					ev.type.startsWith('story.')
 				) {
 					client.invalidateQueries({ queryKey: ['jobs'] });
+					client.invalidateQueries({ queryKey: ['queue-status'] });
 					client.invalidateQueries({ queryKey: ['assets'] });
 					client.invalidateQueries({ queryKey: ['story'] });
 					client.invalidateQueries({ queryKey: ['scenes'] });

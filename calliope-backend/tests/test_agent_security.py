@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+from pathlib import Path
+
+import pytest
 
 from calliope.agent.harness import (
     _destructive_guard,
@@ -23,6 +27,30 @@ from calliope.agent.harness.registry import (
 )
 from calliope.config import settings
 from calliope.db import get_db
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _never_touch_real_db():
+    """Redirect data_dir for the WHOLE module.
+
+    _mk_session writes through settings.db_path directly, and several tests
+    here take no `client` fixture (whose temp dir would otherwise redirect
+    it) — without this, every such run leaked 'sec-test' sessions into the
+    developer's real calliope.db. The client fixture still overrides data_dir
+    per-test and restores it back to this temp dir on teardown.
+    """
+    prev = settings.data_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        settings.data_dir = Path(tmp)
+        settings.assets_dir = Path(tmp) / "assets"
+        asyncio.run(_migrate(settings.db_path))
+        yield
+
+
+async def _migrate(db_path):
+    from calliope.db import migrate_db
+
+    await migrate_db(db_path)
 
 
 def _mk_project(client, title: str) -> int:
@@ -310,7 +338,11 @@ def test_render_guard_negation_still_blocks(client):
 
 
 def test_render_guard_ignores_appendix_kind_image(client):
-    """Structured mentions/attachments must not auto-approve via the appendix."""
+    """The machine `[Calliope context]` appendix (kind=image) must NOT
+    auto-approve a render. Only explicit user acts grant permission: an
+    ask_user card, an @workflow tag, render verbs, or a terse confirmation.
+    (Mass-generation protection moved to the enqueue tools' mechanical scope
+    gate — see test_unscoped_enqueue_refused_when_many_missing.)"""
     registry, _ = build_harness()
     pid = _mk_project(client, "HITL Appendix")
     sid = _mk_session(pid)
@@ -318,8 +350,10 @@ def test_render_guard_ignores_appendix_kind_image(client):
         sid,
         session_log.USER_MESSAGE,
         {
-            "content": "create a Misc. Item only",
-            "mentions": [{"type": "workflow", "id": 1, "name": "krea", "kind": "image"}],
+            # Prose with NO render verbs and NO tag; the appendix carries
+            # kind=image but must be invisible to the permission check.
+            "content": "create a Misc. Item called Flame Tokens",
+            "mentions": [],
             "attachments": [{"path": "x.png", "name": "x.png", "kind": "image"}],
         },
     )
@@ -587,6 +621,56 @@ def test_attach_asset_sandbox_requires_project_id(client):
     )
     assert out.get("ok") is False
     assert "project_id" in out["error"]
+
+
+def test_attach_asset_scene_applies_clip_and_publishes(client):
+    """Agent 'Apply to Scene': attach_asset target=scene re-points the scene's
+    clip at a finished render and publishes asset.ready so open Video pages
+    refresh live."""
+    registry, _ = build_harness()
+    pid = _mk_project(client, "Clip Rollback")
+    scene = client.post(
+        f"/api/projects/{pid}/scenes",
+        json={"order_index": 1, "heading": "Gate"},
+    ).json()
+    path = _touch_asset("rollback-clip.mp4")
+
+    captured: list[tuple[str, dict]] = []
+    from calliope.events import bus as event_bus_module
+
+    original_publish = event_bus_module.event_bus.publish
+
+    async def _spy(event: str, data: dict) -> None:
+        captured.append((event, data))
+        await original_publish(event, data)
+
+    event_bus_module.event_bus.publish = _spy
+    try:
+        ctx = ToolContext(session_id=_mk_session(project_id=pid), project_id=pid)
+        out = asyncio.run(
+            registry.execute(
+                ctx,
+                "attach_asset",
+                {"path": path, "target": "scene", "scene_id": scene["id"]},
+            )
+        )
+    finally:
+        event_bus_module.event_bus.publish = original_publish
+
+    assert out.get("ok") is True
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT video_path FROM scenes WHERE id = ? AND project_id = ?",
+            (scene["id"], pid),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["video_path"] == path
+    assert any(
+        ev == "asset.ready" and d.get("target") == "scene" and d.get("path") == path
+        for ev, d in captured
+    )
 
 
 def _insert_video_workflow(conn) -> int:

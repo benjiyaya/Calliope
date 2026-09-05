@@ -31,16 +31,25 @@ from calliope.agent.harness.registry import (
 
 logger = logging.getLogger("calliope.harness")
 
+# Stable machine-readable refusal codes (consumed by the UI and tests — the
+# human guidance text stays in the deny message for the model).
+GUARD_RENDER_APPROVAL = "guard_render_approval"
+GUARD_DESTRUCTIVE_REPLACE = "guard_destructive_replace"
+
 # Re-exports for tests / older imports.
 _is_confirmation = is_confirmation
 _is_render_request = is_render_request
 
 
 def _user_confirmed_replacement(ctx: ToolContext) -> bool:
-    """True when the user's latest message explicitly asks for / confirms a
-    destructive replace (derived from the event log — no separate state)."""
+    """True when the user's latest input explicitly asks for / confirms a
+    destructive replace — a scoped question-card answer or prose (derived
+    from the event log — no separate state)."""
     from calliope.agent.harness import log as session_log
+    from calliope.agent.harness.policy import has_structured_approval
 
+    if has_structured_approval(ctx, "destructive_replace"):
+        return True
     return is_confirmation(session_log.latest_user_message(ctx.session_id) or "")
 
 
@@ -63,7 +72,8 @@ def _render_approval_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> P
         "Image/video generation is human-in-the-loop and needs explicit user approval. "
         "The user's latest message does not ask to render. Complete the requested text "
         "edits, then ASK whether they want images/videos generated — do not enqueue "
-        "until they confirm (e.g. 'yes, generate the images')."
+        "until they confirm (e.g. 'yes, generate the images').",
+        code=GUARD_RENDER_APPROVAL,
     )
 
 
@@ -128,7 +138,8 @@ def _destructive_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> PreEx
             "confirm before replacing; once they confirm (e.g. 'yes, replace'), "
             "call this tool again. For targeted changes use the granular tools "
             "instead (add/update/delete for beats, characters, locations, "
-            "items, scenes)."
+            "items, scenes).",
+            code=GUARD_DESTRUCTIVE_REPLACE,
         )
     return deny(
         counts + " replace=false would APPEND a second full set alongside the "
@@ -136,7 +147,8 @@ def _destructive_guard(ctx: ToolContext, t: ToolDefinition, args: dict) -> PreEx
         "the user to confirm before appending; once they confirm (e.g. 'yes, "
         "append'), call this tool again. For targeted changes use the granular "
         "tools instead (add/update/delete for beats, characters, locations, "
-        "items, scenes)."
+        "items, scenes).",
+        code=GUARD_DESTRUCTIVE_REPLACE,
     )
 
 
@@ -154,12 +166,25 @@ def build_harness() -> tuple[ToolRegistry, SystemPromptService]:
     registry = ToolRegistry()
     prompts = SystemPromptService()
     _load_plugins()
-    from calliope.agent.harness.plugins import workspace, story, script, render  # noqa: E402
+    from calliope.agent.harness.plugins import (  # noqa: E402
+        canvas,
+        interaction,
+        memory,
+        render,
+        script,
+        skills,
+        story,
+        workspace,
+    )
 
     workspace.register(registry)
     story.register(registry)
     script.register(registry)
     render.register(registry)
+    canvas.register(registry)
+    interaction.register(registry)
+    memory.register(registry)
+    skills.register(registry)
     registry.on_pre_execute(_destructive_guard)
     registry.on_pre_execute(_render_approval_guard)
     register_builtin_sections(prompts)

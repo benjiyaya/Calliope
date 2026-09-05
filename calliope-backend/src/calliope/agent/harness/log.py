@@ -35,6 +35,15 @@ TOOL_RESULT = "tool/result"
 PLAN_CREATED = "plan/created"
 TASK_START = "task/start"
 TASK_END = "task/end"
+# HITL question cards: the agent asks, the user answers by clicking an option
+# (or replying in prose). The card is derived state — a question with no
+# matching answer yet renders as actionable in the chat UI.
+QUESTION_ASKED = "question/asked"
+QUESTION_ANSWERED = "question/answered"
+# Memory lifecycle: writes are recorded, reads are not (render-time
+# use_count bumps are statistics, not session history).
+MEMORY_SAVED = "memory/saved"
+MEMORY_FORGOTTEN = "memory/forgotten"
 
 TOOL_RESULT_TRUNCATE = 4000
 # Appended wherever a tool result is cut for the LLM. Must TEACH the way out —
@@ -135,12 +144,11 @@ def read_events(session_id: int) -> list[SessionEvent]:
 def latest_user_message(session_id: int) -> str | None:
     """Most recent `user/message` content for a session (or None).
 
-    Used by policy hooks (e.g. the destructive-action guard) to decide whether
-    the user explicitly confirmed an action in their latest message.
-
     Returns the user's visible prose only — never the machine `[Calliope
     context]` appendix (which can contain `kind=image` and would otherwise
-    auto-approve HITL renders).
+    auto-approve HITL renders). The mentions payload (the `@workflow` tag
+    itself) is NOT part of content — policy reads it via
+    `latest_user_has_workflow_tag`.
     """
     conn = _db()
     try:
@@ -165,15 +173,57 @@ def latest_user_message(session_id: int) -> str | None:
         conn.close()
 
 
+def latest_user_has_workflow_tag(session_id: int) -> bool:
+    """True when the most recent user/message event carried a workflow
+    mention (the @ tag). The tag is a deliberate UI act — the user picked a
+    workflow from the picker — so it grants render permission for the turn,
+    regardless of whether the prose also contains render verbs.
+
+    Reads the mentions payload, never the prose: "create a Misc. Item
+    @SomeWorkflow" with no generate intent should not enqueue — but the
+    tag names the workflow, so the text-edits-only assumption is wrong.
+    Callers decide scope; this only answers 'did the user tag a workflow?'.
+    """
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT data_json FROM agent_events "
+            "WHERE session_id = ? AND type = ? ORDER BY seq DESC LIMIT 1",
+            (session_id, USER_MESSAGE),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            data = json.loads(row["data_json"])
+        except (json.JSONDecodeError, TypeError):
+            return False
+        mentions = data.get("mentions")
+        if not isinstance(mentions, list):
+            return False
+        return any(
+            isinstance(m, dict) and m.get("type") in (None, "workflow") for m in mentions
+        )
+    finally:
+        conn.close()
+
+
 def format_calliope_context(
     mentions: list[dict[str, Any]] | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> str:
     """Machine appendix projected onto LLM user content (ids, not just names)."""
     wf_lines: list[str] = []
+    skill_lines: list[str] = []
     att_lines: list[str] = []
     for m in mentions or []:
         if not isinstance(m, dict):
+            continue
+        if m.get("type") == "skill":
+            name = str(m.get("name") or "").strip()
+            if not name:
+                continue
+            desc = str(m.get("description") or "").replace("\n", " ")[:200]
+            skill_lines.append(f'skill="{name}"' + (f' — {desc}' if desc else ""))
             continue
         if m.get("type") not in (None, "workflow"):
             continue
@@ -194,7 +244,7 @@ def format_calliope_context(
         att_lines.append(f"attached: {path} ({kind})")
     # Guardrail: one Calliope workflow per turn so the model cannot fan out
     # run_workflow across several tagged ids.
-    lines = ([wf_lines[0]] if wf_lines else []) + att_lines
+    lines = ([wf_lines[0]] if wf_lines else []) + skill_lines + att_lines
     if not lines:
         return ""
     return "[Calliope context]\n" + "\n".join(lines)

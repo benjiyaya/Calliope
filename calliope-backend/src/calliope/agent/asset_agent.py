@@ -59,6 +59,7 @@ async def enqueue_asset_jobs(
     input_values_override: dict[str, Any] | None = None,
     asset_target: str = "sheet",
     prompt_override: str | None = None,
+    session_id: int | None = None,
 ) -> list[dict[str, Any]]:
     await event_bus.publish(
         "agent.thinking",
@@ -111,6 +112,7 @@ async def enqueue_asset_jobs(
                     "character_id": c["id"],
                     "asset_target": target,
                     "prompt": prompt,
+                    **({"session_id": session_id} if session_id is not None else {}),
                 },
             )
             jobs.append(job)
@@ -152,6 +154,7 @@ async def enqueue_asset_jobs(
                         "input_values": values,
                         "location_id": loc["id"],
                         "prompt": prompt,
+                        **({"session_id": session_id} if session_id is not None else {}),
                     },
                 )
                 jobs.append(job)
@@ -193,6 +196,7 @@ async def enqueue_asset_jobs(
                         "input_values": values,
                         "item_id": item["id"],
                         "prompt": prompt,
+                        **({"session_id": session_id} if session_id is not None else {}),
                     },
                 )
                 jobs.append(job)

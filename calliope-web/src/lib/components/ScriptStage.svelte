@@ -35,12 +35,12 @@
 		})),
 	);
 
-	// Shared cache key with QueueStage — clip job state shows up on scene cards too.
+	// Shared cache key with QueueStage — clip job state shows up on scene cards
+	// too. Refreshed via SSE invalidation from the project page, not polling.
 	const jobsQuery = createQuery(
 		toStore(() => ({
 			queryKey: ['jobs', projectId],
 			queryFn: () => jobsApi.list(projectId),
-			refetchInterval: 4000,
 		})),
 	);
 

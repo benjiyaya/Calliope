@@ -22,6 +22,12 @@ from calliope.queue.manager import queue_manager
 logger = logging.getLogger("calliope.worker")
 
 
+class _CancelledByUser(RuntimeError):
+    """The job row was flipped to 'cancelled' out-of-band (Stop button).
+    The row already carries the terminal state; the loop must not overwrite
+    it with mark_failed (which would bump retry_count and emit job.failed)."""
+
+
 class QueueWorker:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -64,6 +70,15 @@ class QueueWorker:
                     queue_manager.mark_done(job["id"], outputs)
                     if job["kind"] == "export":
                         self._mark_project_completed(job["project_id"])
+                    # Prompt snippet for canvas artifact labels: users
+                    # compare multiple generations of the same scene
+                    # side by side and pick one to re-apply. Parse the
+                    # stored payload here — _run_job's parsed copy is not
+                    # in this scope.
+                    try:
+                        job_payload = json.loads(job["payload_json"] or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        job_payload = {}
                     await event_bus.publish(
                         "job.completed",
                         {
@@ -71,6 +86,10 @@ class QueueWorker:
                             "kind": job["kind"],
                             "outputs": outputs,
                             "project_id": job["project_id"],
+                            "prompt": str(job_payload.get("prompt") or "")[:120],
+                            # Source stamp lets the UI attribute sandbox jobs
+                            # to their enqueuer without racing the jobs poll.
+                            "source": job_payload.get("source"),
                             "message": f"{self._job_label(job)} · {len(outputs)} file(s)",
                         },
                     )
@@ -85,6 +104,24 @@ class QueueWorker:
                                 "message": f"Saved {self._job_label(job)}",
                             },
                         )
+                except _CancelledByUser:
+                    # The row already carries status='cancelled' (Stop button
+                    # flipped it out-of-band). Do NOT mark_failed (that would
+                    # bump retry_count and overwrite the terminal state).
+                    # Emit job.failed with cancelled=True so the UI flips the
+                    # node card and the user sees the stop took effect.
+                    logger.info("Job %s cancelled by user", job["id"])
+                    await event_bus.publish(
+                        "job.failed",
+                        {
+                            "job_id": job["id"],
+                            "kind": job["kind"],
+                            "error": "cancelled by user",
+                            "cancelled": True,
+                            "project_id": job.get("project_id"),
+                            "message": f"{self._job_label(job)} cancelled",
+                        },
+                    )
                 except Exception as exc:
                     logger.exception("Job %s failed", job["id"])
                     queue_manager.mark_failed(job["id"], str(exc))
@@ -140,8 +177,10 @@ class QueueWorker:
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
 
-            history = await self._poll_history(client, prompt_id)
+            history = await self._poll_history(client, prompt_id, job["id"])
             if not history:
+                if queue_manager.is_cancelled(job["id"]):
+                    raise _CancelledByUser()
                 raise RuntimeError("Timed out waiting for ComfyUI history")
 
             status = history.get("status") or {}
@@ -256,7 +295,9 @@ class QueueWorker:
         await asyncio.sleep(0.3)
         return paths
 
-    async def _poll_history(self, client: ComfyUIClient, prompt_id: str) -> dict[str, Any] | None:
+    async def _poll_history(
+        self, client: ComfyUIClient, prompt_id: str, job_id: int | None = None
+    ) -> dict[str, Any] | None:
         interval = max(config.settings.queue_poll_interval_sec, 0.5)
         timeout = config.settings.queue_poll_timeout_sec
         # 0 (or negative) = keep polling until the job completes or is cancelled.
@@ -267,6 +308,12 @@ class QueueWorker:
         while attempts is None or n < attempts:
             n += 1
             if self._stop.is_set():
+                return None
+            # Stop button: the job row was flipped to 'cancelled' out-of-band.
+            # Interrupt the running ComfyUI prompt so the GPU stops NOW, then
+            # bail — the row already carries the terminal state.
+            if queue_manager.is_cancelled(job_id):
+                await client.interrupt()
                 return None
             history = await client.get_history(prompt_id)
             if history:

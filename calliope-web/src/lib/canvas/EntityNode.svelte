@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Node, NodeProps } from '@xyflow/svelte';
+	import { type Node, type NodeProps } from '@xyflow/svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import { assetUrl } from '$lib/api';
@@ -13,7 +13,8 @@
 		imagePath: string | null;
 		/** Clip path — when set the card becomes a playable video card. */
 		videoPath: string | null;
-		onOpen?: () => void;
+		/** Called on card click: opens the large media preview (no navigation). */
+		onOpenMedia?: (kind: 'image' | 'video') => void;
 	}
 
 	type EntityNode = Node<EntityNodeData, 'entity'>;
@@ -38,45 +39,43 @@
 	// until playback, so the thumbnail sat black. The fragment seeks+paints
 	// the first frame without playing (same trick as ClipMonitor).
 	const videoSrc = $derived(data.videoPath ? assetUrl(data.videoPath) + '#t=0.1' : null);
-	let playing = $state(false);
 
-	function togglePlay() {
-		playing = !playing;
+	function activate() {
+		// One rule for every card (artifact and entity alike): click opens the
+		// modal player/lightbox — video cards NEVER play in-card.
+		if (videoSrc) {
+			data.onOpenMedia?.('video');
+		} else if (posterSrc) {
+			data.onOpenMedia?.('image');
+		}
 	}
 </script>
 
 <div
 	class="entity-node"
-	class:playing
 	role="button"
 	tabindex="0"
-	onclick={() => (videoSrc ? togglePlay() : data.onOpen?.())}
+	onclick={activate}
 	onkeydown={(e) => {
-		if (e.key !== 'Enter') return;
-		videoSrc ? togglePlay() : data.onOpen?.();
+		if (e.key === 'Enter') activate();
 	}}
 >
 	<header>
 		<Icon name={iconFor(data.entityType)} size={14} />
 		<span class="title" title={data.title}>{data.title}</span>
-		{#if videoSrc && !playing}
+		{#if videoSrc}
 			<span class="play-badge" aria-hidden="true">
 				<Icon name="play" size={10} />
 			</span>
 		{/if}
 	</header>
 	<div class="media">
-		{#if playing && videoSrc}
-			<!-- svelte-ignore a11y_media_has_caption -->
-			<video
-				class="media-el"
-				src={videoSrc}
-				autoplay
-				controls
-				playsinline
-				onended={() => (playing = false)}
-			></video>
+		{#if videoSrc && posterSrc}
+			<!-- Idle video card: show the poster (cheap static file, never a
+				mounted <video>). Click opens the modal player. -->
+			<SafeMedia class="media-el" src={posterSrc} alt={data.title} kind="image" controls={false} />
 		{:else if videoSrc}
+			<!-- No poster available: #t=0.1 first-frame thumbnail. -->
 			<!-- svelte-ignore a11y_media_has_caption -->
 			<video
 				class="media-el"
@@ -91,23 +90,25 @@
 			<span class="placeholder">{data.entityType}</span>
 		{/if}
 	</div>
+	{#if videoSrc}
+		<span class="out-kind">video</span>
+	{:else if posterSrc}
+		<span class="out-kind">image</span>
+	{/if}
 </div>
 
 <style>
-	.entity-node {
-		width: 240px;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 14px;
-		overflow: hidden;
-		cursor: pointer;
-		transition: border-color 0.15s;
-	}
+.entity-node {
+	width: 240px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	overflow: visible;
+	cursor: pointer;
+	transition: border-color 0.15s;
+}
 	.entity-node:hover {
 		border-color: #3a3a44;
-	}
-	.entity-node.playing {
-		cursor: default;
 	}
 	/* Svelte Flow marks the selected node wrapper with .selected */
 	:global(.svelte-flow__node.selected) .entity-node {
@@ -150,6 +151,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		overflow: hidden;
+		border-radius: 0 0 14px 14px;
 	}
 	.media :global(.media-el),
 	.media-el {
@@ -163,5 +166,20 @@
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--text-muted);
+	}
+
+	.out-kind {
+		position: absolute;
+		right: 16px;
+		bottom: 10px;
+		font-size: 8.5px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: lowercase;
+		color: var(--text-muted);
+		pointer-events: none;
+		background: rgba(0, 0, 0, 0.55);
+		padding: 1px 5px;
+		border-radius: 999px;
 	}
 </style>

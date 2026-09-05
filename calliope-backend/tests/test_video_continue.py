@@ -246,8 +246,9 @@ def _scene_ids(pid: int) -> list[int]:
         conn.close()
 
 
-async def _fake_history(_client, _prompt_id):
-    """A successful ComfyUI history with one video output named out.mp4."""
+async def _fake_history(_client, _prompt_id, *_args):
+    """A successful ComfyUI history with one video output named out.mp4.
+    Extra positional args (job_id) are accepted for the cancel-check wiring."""
     return {
         "status": {"status_str": "success", "completed": True},
         "outputs": {

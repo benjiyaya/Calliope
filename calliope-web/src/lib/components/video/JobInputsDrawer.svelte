@@ -11,6 +11,8 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
+	import SafeMedia from '$lib/components/SafeMedia.svelte';
+	import { assetUrl } from '$lib/api';
 
 	interface Props {
 		open?: boolean;
@@ -21,6 +23,12 @@
 		workflow?: Workflow | null;
 		/** Load a job's input_values back into the video form. */
 		onCopySettings?: (values: Record<string, string | number>) => void;
+		/** The scene's current video_path — marks which render is live. */
+		sceneVideoPath?: string | null;
+		/** Make this job's output the scene's current clip. */
+		onApplyToScene?: (job: Job, path: string) => void;
+		/** True while the apply request is in flight. */
+		applying?: boolean;
 		onclose?: () => void;
 	}
 
@@ -30,6 +38,9 @@
 		jobs = [],
 		workflow = null,
 		onCopySettings,
+		sceneVideoPath = null,
+		onApplyToScene,
+		applying = false,
 		onclose,
 	}: Props = $props();
 
@@ -81,8 +92,26 @@
 			});
 	});
 
-	const refRows = $derived(valueRows.filter((r) => ['character', 'location', 'image', 'video', 'audio'].includes(r.role)));
-	const otherRows = $derived(valueRows.filter((r) => !['character', 'location', 'image', 'video', 'audio'].includes(r.role)));
+const refRows = $derived(valueRows.filter((r) => ['character', 'location', 'image', 'video', 'audio'].includes(r.role)));
+const otherRows = $derived(valueRows.filter((r) => !['character', 'location', 'image', 'video', 'audio'].includes(r.role)));
+
+/** First mp4/webm/mov output of the active job — the clip preview + apply source. */
+const outputVideo = $derived.by(() => {
+	const paths = (activeJob?.output_paths ?? []).filter(
+		(p) => !/\.(png|jpe?g|webp|gif|bmp)$/i.test(p),
+	);
+	return paths[0] ?? null;
+});
+
+const outputVideoUrl = $derived(assetUrl(outputVideo));
+
+/** This job's output is already the clip on the scene. */
+const isActiveClip = $derived(Boolean(outputVideo && outputVideo === sceneVideoPath));
+
+function applyToScene() {
+	if (!onApplyToScene || !activeJob || !outputVideo) return;
+	onApplyToScene(activeJob, outputVideo);
+}
 
 	function roleLabel(role: string): string {
 		switch (role) {
@@ -163,6 +192,25 @@
 					</button>
 				{/each}
 			</div>
+		{/if}
+
+		{#if outputVideoUrl}
+			<section class="block">
+				<div class="block-head">
+					<h3 class="block-title">Output</h3>
+					{#if onApplyToScene && activeJob.status === 'done'}
+						{#if isActiveClip}
+							<span class="applied-tag"><Icon name="check" size={14} /> Current clip</span>
+						{:else}
+							<Button size="sm" onclick={applyToScene} disabled={applying}>
+								<Icon name="film" size={14} /> {applying ? 'Applying…' : 'Apply to Scene'}
+							</Button>
+						{/if}
+					{/if}
+				</div>
+				<!-- svelte-ignore a11y_media_has_caption -->
+				<video class="output-video" src={outputVideoUrl} controls preload="metadata"></video>
+			</section>
 		{/if}
 
 		<div class="job-head">
@@ -314,6 +362,24 @@
 
 	.job-meta {
 		white-space: nowrap;
+	}
+
+	.output-video {
+		display: block;
+		width: 100%;
+		max-height: 320px;
+		background: #000;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+	}
+
+	.applied-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--success);
 	}
 
 	.block {

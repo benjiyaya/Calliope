@@ -246,6 +246,8 @@ export const workflows = {
 			method: 'POST',
 			body: JSON.stringify({ workflow_json }),
 		}),
+	reanalyze: (id: number) =>
+		api<Workflow>(`/api/workflows/${id}/reanalyze`, { method: 'POST' }),
 	create: (payload: {
 		name: string;
 		kind: 'image' | 'video';
@@ -438,6 +440,42 @@ export const agentApi = {
 	},
 	cancel: (id: number) =>
 		api<{ ok: boolean }>(`/api/agent/sessions/${id}/cancel`, { method: 'POST' }),
+	listSkills: () =>
+		api<{ name: string; description: string; version: string; tags: string[]; dir: string }[]>(
+			'/api/agent/skills',
+		),
+	listMemories: () =>
+		api<
+			{
+				id: number;
+				scope: 'global' | 'project';
+				project_id: number | null;
+				project_title: string | null;
+				content: string;
+				kind: string;
+				source: string;
+				use_count: number;
+				created_at: string;
+			}[]
+		>('/api/agent/memories'),
+	addMemory: (payload: {
+		content: string;
+		scope: 'global' | 'project';
+		project_id?: number | null;
+		kind?: string;
+	}) =>
+		api<{ ok: boolean; id: number }>('/api/agent/memories', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	deleteMemory: (id: number) =>
+		api<{ ok: boolean }>(`/api/agent/memories/${id}`, { method: 'DELETE' }),
+	skillsPath: () => api<{ path: string }>('/api/agent/skills/path'),
+	skillFiles: (name: string) => api<{ skill: string; files: string[] }>(`/api/agent/skills/${encodeURIComponent(name)}/files`),
+	readSkillFile: (name: string, path: string) =>
+		api<{ ok: boolean; content: string; truncated: boolean }>(
+			`/api/agent/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`,
+		),
 };
 
 export interface CanvasInfo {
@@ -466,12 +504,24 @@ export interface CanvasNode {
 	entity_id: number | null;
 }
 
+export interface CanvasEdge {
+	id: number;
+	canvas_id: number;
+	src_node_id: number;
+	dst_node_id: number;
+	kind: 'data' | 'link';
+	label: string | null;
+	dst_role: string | null;
+	dst_comfy_node_id: string | null;
+}
+
 export interface CanvasGraph {
 	canvas: CanvasInfo & {
 		project?: { id: number; title: string } | null;
 		viewport_json?: string | null;
 	};
 	nodes: CanvasNode[];
+	edges: CanvasEdge[];
 }
 
 export const canvasApi = {
@@ -498,12 +548,62 @@ export const canvasApi = {
 	patchNode: (
 		canvasId: number,
 		nodeId: number,
-		payload: { x?: number; y?: number; title?: string },
+		payload: {
+			x?: number;
+			y?: number;
+			title?: string;
+			input_values_json?: string;
+			status?: string;
+			job_id?: number;
+			artifact_path?: string;
+		},
 	) =>
 		api<CanvasNode>(`/api/canvas/${canvasId}/nodes/${nodeId}`, {
 			method: 'PATCH',
 			body: JSON.stringify(payload),
 		}),
+	createNode: (
+		canvasId: number,
+		payload: {
+			type: 'workflow' | 'image' | 'video';
+			title?: string;
+			x?: number;
+			y?: number;
+			workflow_id?: number;
+			artifact_path?: string;
+			job_id?: number;
+			status?: string;
+			input_values_json?: string;
+		},
+	) =>
+		api<CanvasNode>(`/api/canvas/${canvasId}/nodes`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
 	deleteNode: (canvasId: number, nodeId: number) =>
 		api<{ ok: boolean }>(`/api/canvas/${canvasId}/nodes/${nodeId}`, { method: 'DELETE' }),
+	tidy: (canvasId: number) =>
+		api<{ ok: boolean; moved: number }>(`/api/canvas/${canvasId}/tidy`, { method: 'POST' }),
+	createEdge: (
+		canvasId: number,
+		payload: {
+			src_node_id: number;
+			dst_node_id: number;
+			kind: 'data' | 'link';
+			label?: string;
+			dst_role?: string;
+			dst_comfy_node_id?: string;
+		},
+	) =>
+		api<CanvasEdge>(`/api/canvas/${canvasId}/edges`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	patchEdge: (canvasId: number, edgeId: number, payload: { label: string }) =>
+		api<CanvasEdge>(`/api/canvas/${canvasId}/edges/${edgeId}`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload),
+		}),
+	deleteEdge: (canvasId: number, edgeId: number) =>
+		api<{ ok: boolean }>(`/api/canvas/${canvasId}/edges/${edgeId}`, { method: 'DELETE' }),
 };

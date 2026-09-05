@@ -138,6 +138,44 @@ class QueueManager:
         finally:
             conn.close()
 
+    def cancel_by_session(self, session_id: int) -> list[int]:
+        """Cancel every pending/running job whose payload carries this
+        session_id (agent-enqueued jobs stamp it). Returns the cancelled ids."""
+        conn = get_db(config.settings.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, payload_json FROM jobs WHERE status IN ('pending', 'running')"
+            ).fetchall()
+            cancelled: list[int] = []
+            for r in rows:
+                try:
+                    payload = json.loads(r["payload_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if payload.get("session_id") == session_id:
+                    conn.execute(
+                        """
+                        UPDATE jobs SET status = 'failed', error = 'cancelled',
+                        completed_at = CURRENT_TIMESTAMP WHERE id = ?
+                        """,
+                        (r["id"],),
+                    )
+                    cancelled.append(r["id"])
+            conn.commit()
+            return cancelled
+        finally:
+            conn.close()
+
+    def is_cancelled(self, job_id: int) -> bool:
+        conn = get_db(config.settings.db_path)
+        try:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            return bool(row) and row["status"] not in ("pending", "running")
+        finally:
+            conn.close()
+
     def list_jobs(
         self, project_id: int | None = None, status: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:

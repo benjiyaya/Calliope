@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 
 	const items = [
 		{ id: 'llm', href: '/settings?tab=llm', label: 'LLM', blurb: 'Model endpoints' },
 		{ id: 'comfy', href: '/settings?tab=comfy', label: 'ComfyUI', blurb: 'Render farm' },
 		{ id: 'workflows', href: '/settings?tab=workflows', label: 'Workflows', blurb: 'Library' },
 		{ id: 'agent', href: '/settings?tab=agent', label: 'Agent', blurb: 'Hardening rules' },
+		{ id: 'skills', href: '/settings?tab=skills', label: 'Skills', blurb: 'Agent expertise' },
 		{ id: 'queue', href: '/settings?tab=queue', label: 'Queue', blurb: 'Concurrency' },
 		{ id: 'storage', href: '/settings?tab=storage', label: 'Storage', blurb: 'Paths' },
 	] as const;
@@ -17,7 +18,7 @@
 
 	let { dirty }: Props = $props();
 
-	let active = $derived($page.url.searchParams.get('tab') || 'llm');
+	let active = $derived(page.url.searchParams.get('tab') || 'llm');
 </script>
 
 <aside class="side">

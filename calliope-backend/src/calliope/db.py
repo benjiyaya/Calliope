@@ -185,6 +185,35 @@ CREATE TABLE IF NOT EXISTS canvas_node (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_canvas_node_canvas ON canvas_node(canvas_id);
+
+CREATE TABLE IF NOT EXISTS canvas_edge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canvas_id INTEGER NOT NULL REFERENCES canvas(id) ON DELETE CASCADE,
+    src_node_id INTEGER NOT NULL REFERENCES canvas_node(id) ON DELETE CASCADE,
+    dst_node_id INTEGER NOT NULL REFERENCES canvas_node(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('data','link')),
+    label TEXT,
+    dst_role TEXT,
+    dst_comfy_node_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_canvas_edge_canvas ON canvas_edge(canvas_id);
+CREATE INDEX IF NOT EXISTS idx_canvas_edge_src ON canvas_edge(src_node_id);
+CREATE INDEX IF NOT EXISTS idx_canvas_edge_dst ON canvas_edge(dst_node_id);
+
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL CHECK(scope IN ('global','project')),
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'preference' CHECK(kind IN ('preference','convention','correction')),
+    source TEXT NOT NULL DEFAULT 'agent' CHECK(source IN ('agent','user')),
+    use_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scope, project_id, content)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_scope ON agent_memory(scope, project_id);
 """
 
 
@@ -208,6 +237,30 @@ async def migrate_db(db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
     # Additive migrations for existing DBs
+    # Dedupe guard: ARTIFACT nodes keyed by (canvas_id, job_id). Without the
+    # unique index, the agent's post_artifact_to_canvas and the frontend
+    # auto-materializer race and the canvas ends up with twin cards for one
+    # job (observed live). Existing duplicate pairs are cleaned up first
+    # (keep the lowest id), then the index enforces it forever. Scoped to
+    # image/video types only — workflow nodes also carry job_id (they track
+    # the job they launched) and MUST be allowed to coexist with the artifact
+    # node for the same job.
+    conn.execute(
+        """
+        DELETE FROM canvas_node
+        WHERE type IN ('image', 'video') AND job_id IS NOT NULL AND deleted = 0
+          AND id NOT IN (
+            SELECT MIN(id) FROM canvas_node
+            WHERE type IN ('image', 'video') AND job_id IS NOT NULL AND deleted = 0
+            GROUP BY canvas_id, job_id
+          )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_canvas_node_job "
+        "ON canvas_node(canvas_id, job_id) "
+        "WHERE deleted = 0 AND type IN ('image', 'video')"
+    )
     cols = {r[1] for r in conn.execute("PRAGMA table_info(workflows)").fetchall()}
     if "input_schema" not in cols:
         conn.execute("ALTER TABLE workflows ADD COLUMN input_schema TEXT")
@@ -233,6 +286,19 @@ async def migrate_db(db_path: Path) -> None:
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "cover_path" not in project_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN cover_path TEXT")
+    # Legacy canvases carry generic titles ("Untitled Canvas" or an older
+    # iteration's "Project canvas"); name them after what they show
+    # (project, else session). New canvases derive at create time.
+    conn.execute(
+        """
+        UPDATE canvas SET title = COALESCE(
+            (SELECT p.title FROM projects p WHERE p.id = canvas.project_id),
+            (SELECT s.title FROM agent_sessions s WHERE s.id = canvas.agent_session_id),
+            'Canvas'
+        )
+        WHERE title IN ('Untitled Canvas', 'Project canvas')
+        """
+    )
     conn.commit()
     conn.close()
 

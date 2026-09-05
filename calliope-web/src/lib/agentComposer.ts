@@ -20,8 +20,10 @@ export interface AgentAttachment {
 
 export interface AgentComposerPayload {
 	content: string;
-	mentions: WorkflowMention[];
+	mentions: (WorkflowMention | SkillMention)[];
 	attachments: AgentAttachment[];
+	/** question/asked seq this message answers (question-card click). */
+	answer_to?: number;
 }
 
 export interface WorkflowOption {
@@ -30,6 +32,20 @@ export interface WorkflowOption {
 	kind: WorkflowKind;
 	description?: string | null;
 	is_enabled?: boolean;
+}
+
+export interface SkillOption {
+	name: string;
+	description: string;
+	tags: string[];
+}
+
+/** A `/skill` command inserted as a chip. Serialized into the message's
+ * mentions payload so the backend can project it into the LLM context. */
+export interface SkillMention {
+	type: 'skill';
+	name: string;
+	description: string;
 }
 
 export const MAX_WORKFLOW_MENTIONS = 1;
@@ -43,6 +59,18 @@ export function filterWorkflows(workflows: WorkflowOption[], query: string): Wor
 	const matched = q
 		? enabled.filter((w) => w.name.toLowerCase().includes(q))
 		: enabled;
+	return matched.slice(0, MENTION_LIMIT);
+}
+
+/** Case-insensitive filter of skills for the `/` typeahead (name + description). */
+export function filterSkills(skills: SkillOption[], query: string): SkillOption[] {
+	const q = query.trim().toLowerCase();
+	const matched = q
+		? skills.filter(
+				(s) =>
+					s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+			)
+		: skills;
 	return matched.slice(0, MENTION_LIMIT);
 }
 

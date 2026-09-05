@@ -25,6 +25,8 @@
 		loading?: boolean;
 		/** Called with a suggestion's prompt to pre-fill the composer. */
 		onSuggestion?: (prompt: string) => void;
+		/** Called with an option's label + scope when a question-card option is clicked. */
+		onAnswer?: (option: string, scope: string, questionSeq: number) => void;
 	}
 
 	let {
@@ -37,6 +39,7 @@
 		suggestions = [],
 		loading = false,
 		onSuggestion,
+		onAnswer,
 	}: Props = $props();
 
 	let listEl = $state<HTMLDivElement | null>(null);
@@ -114,6 +117,47 @@
 
 	function escapeRegExp(s: string): string {
 		return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	// ── ask_user question cards ──────────────────────────────────────────
+	// The card is DERIVED from the message stream: the persisted ask_user
+	// tool row carries {question_seq, options, scope}; it stays actionable
+	// until a later user message (the card answer or any prose reply).
+
+	interface OpenQuestion {
+		questionSeq: number;
+		options: string[];
+		scope: string;
+	}
+
+	const lastQuestion = $derived.by<OpenQuestion | null>(() => {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.role === 'user') return null;
+			if (m.role === 'tool' && m.tool_name === 'ask_user' && m.tool_result) {
+				const r = m.tool_result as {
+					ok?: boolean;
+					question_seq?: number;
+					options?: unknown;
+					scope?: string;
+				};
+				if (r.ok !== false && Array.isArray(r.options)) {
+					return {
+						questionSeq: r.question_seq ?? m.id,
+						options: r.options as string[],
+						scope: r.scope ?? 'info',
+					};
+				}
+				return null;
+			}
+		}
+		return null;
+	});
+
+	function answerLabel(scope: string): string {
+		if (scope === 'render') return 'Your click records approval to generate.';
+		if (scope === 'destructive_replace') return 'Your click records approval to replace content.';
+		return '';
 	}
 
 	function bubbleParts(
@@ -200,6 +244,24 @@
 					result={m.tool_result}
 					phase={toolPhase(m)}
 				/>
+				{#if m.tool_name === 'ask_user' && lastQuestion && m.id === messages.findLast((x) => x.role === 'tool' && x.tool_name === 'ask_user')?.id}
+					<div class="question-card">
+						{#each lastQuestion.options as opt (opt)}
+							<button
+								type="button"
+								class="question-option"
+								class:affirmative={opt.toLowerCase().startsWith('yes')}
+								disabled={running}
+								onclick={() => onAnswer?.(opt, lastQuestion.scope, lastQuestion.questionSeq)}
+							>
+								{opt}
+							</button>
+						{/each}
+						{#if answerLabel(lastQuestion.scope)}
+							<p class="question-scope">{answerLabel(lastQuestion.scope)}</p>
+						{/if}
+					</div>
+				{/if}
 				{#if m.tool_name && ENQUEUE_TOOLS.has(m.tool_name)}
 					{@const arts = artifactJobs(m)}
 					{#if arts.length > 0}
@@ -443,6 +505,46 @@
 		border: 1px solid var(--border);
 		border-left: 3px solid var(--agent, var(--accent));
 		color: var(--text-primary);
+	}
+	.question-card {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+		padding: 4px 2px 2px;
+	}
+	.question-option {
+		border: 1px solid color-mix(in srgb, var(--agent, var(--accent)) 45%, transparent);
+		background: var(--bg-elevated);
+		color: var(--text-primary);
+		border-radius: 999px;
+		padding: 6px 14px;
+		font-size: 13px;
+		font-weight: 600;
+		cursor: pointer;
+		transition:
+			background 120ms ease,
+			border-color 120ms ease,
+			transform 120ms ease;
+	}
+	.question-option:hover:enabled {
+		background: color-mix(in srgb, var(--agent, var(--accent)) 18%, var(--bg-elevated));
+		border-color: var(--agent, var(--accent));
+		transform: translateY(-1px);
+	}
+	.question-option:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.question-option.affirmative {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.question-scope {
+		width: 100%;
+		margin: 0;
+		font-size: 11px;
+		color: var(--text-muted);
 	}
 	.assistant-bubble.err {
 		border-color: rgba(239, 68, 68, 0.4);

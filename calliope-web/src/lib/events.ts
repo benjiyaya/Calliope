@@ -15,10 +15,14 @@ export type EventConnectionState = 'connecting' | 'open' | 'reconnecting';
 type Listener = (event: CalliopeEvent) => void;
 type StateListener = (state: EventConnectionState) => void;
 
-export function connectEvents(onEvent: Listener, onState?: StateListener): () => void {
+export function connectEvents(
+	onEvent: Listener,
+	onState?: StateListener,
+): (signal?: AbortSignal) => void {
 	let es: EventSource | null = null;
 	let closed = false;
 	let firstAttach = true;
+	let everOpened = false;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const attach = () => {
@@ -26,7 +30,16 @@ export function connectEvents(onEvent: Listener, onState?: StateListener): () =>
 		onState?.(firstAttach ? 'connecting' : 'reconnecting');
 		firstAttach = false;
 		es = new EventSource('/api/events');
-		es.onopen = () => onState?.('open');
+		es.onopen = () => {
+			onState?.('open');
+			// Reconnected after a drop: everything missed while the stream was
+			// down is gone forever (no replay), so ask the page to refetch.
+			// Listeners gate on `everOpened` so the very first open is a no-op.
+			if (everOpened) {
+				onEvent({ type: 'events.resync', data: {}, ts: new Date().toISOString() });
+			}
+			everOpened = true;
+		};
 		const handler = (e: MessageEvent) => {
 			try {
 				const parsed = JSON.parse(e.data) as CalliopeEvent;
@@ -52,6 +65,7 @@ export function connectEvents(onEvent: Listener, onState?: StateListener): () =>
 			'job.deleted',
 			'asset.ready',
 			'story.ready',
+			'canvas.updated',
 		].forEach((name) => es!.addEventListener(name, handler as EventListener));
 		es.onmessage = handler;
 		es.onerror = () => {

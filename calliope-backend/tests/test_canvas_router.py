@@ -44,6 +44,26 @@ def test_get_or_create_project_canvas(client):
     assert r2.json()["canvas"]["title"] == "Alpha Bible", "existing title preserved"
 
 
+def test_canvas_title_derived_when_omitted(client):
+    """No title given: project canvases take the project's, sandbox canvases
+    the session's (trimmed to 60 chars)."""
+    long = "S" * 200  # project titles cap at 200 — still beyond the 60-char trim
+    pid = client.post("/api/projects", json={"title": long, "idea": "x"}).json()["id"]
+    g1 = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]
+    assert g1["title"] == long[:60], "project title trimmed to 60 chars"
+
+    sid = client.post("/api/agent/sessions", json={"title": "Neon Chase chat"}).json()["id"]
+    g2 = client.post("/api/canvas", json={"agent_session_id": sid}).json()["canvas"]
+    assert g2["title"] == "Neon Chase chat", "sandbox canvas named after the session"
+
+    # Explicit title still wins.
+    pid2 = client.post("/api/projects", json={"title": "Named", "idea": "x"}).json()["id"]
+    g3 = client.post(
+        "/api/canvas", json={"project_id": pid2, "title": "Custom"}
+    ).json()["canvas"]
+    assert g3["title"] == "Custom"
+
+
 def test_sandbox_canvas_requires_session_and_scopes(client):
     sid = client.post("/api/agent/sessions", json={}).json()["id"]
     r = client.post("/api/canvas", json={"agent_session_id": sid})
@@ -187,3 +207,171 @@ def test_canvas_updated_events_published(client, monkeypatch):
     assert r.status_code == 200
     updates = [d for (t, d) in events if t == "canvas.updated"]
     assert updates and updates[-1]["canvas_id"] == r.json()["canvas"]["id"]
+
+
+# ---- simplified preview-board layout + artifact tool ------------------------
+
+
+def test_seed_layout_groups_in_gallery_columns(client):
+    """Preview-board columns: chars | locs | items | artifacts | scenes."""
+    pid = client.post("/api/projects", json={"title": "Layout", "idea": "x"}).json()["id"]
+    _seed_story_entities(client, pid)
+    graph = client.post("/api/canvas", json={"project_id": pid}).json()
+    nodes = graph["nodes"]
+    chars = [n for n in nodes if n["entity_type"] == "character"]
+    locs = [n for n in nodes if n["entity_type"] == "location"]
+    items = [n for n in nodes if n["entity_type"] == "item"]
+    scenes = [n for n in nodes if n["entity_type"] == "scene"]
+    assert all(n["x"] < m["x"] for n in chars for m in locs)
+    assert all(n["x"] < m["x"] for n in locs for m in items)
+    assert all(n["x"] < m["x"] for n in items for m in scenes)
+    # artifact column sits between items and scenes
+    artifact_x = 1000
+    assert all(n["x"] < artifact_x < m["x"] for n in items for m in scenes)
+
+
+def test_artifact_slot_fills_grid(client):
+    from calliope.routers.canvas import (
+        ARTIFACT_COL_WIDTH,
+        ARTIFACT_GRID_X,
+        next_artifact_slot,
+    )
+
+    pid = client.post("/api/projects", json={"title": "Stack", "idea": "x"}).json()["id"]
+    cid = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+
+    conn = get_db(config_module.settings.db_path)
+    try:
+        x, y = next_artifact_slot(conn, cid)
+        assert x == ARTIFACT_GRID_X
+        assert y == 80
+        conn.execute(
+            """
+            INSERT INTO canvas_node
+                (canvas_id, type, title, x, y, artifact_path, status, created_at, updated_at)
+            VALUES (?, 'image', 'first', ?, ?, 'p.png', 'done', '2026-01-01', '2026-01-01')
+            """,
+            (cid, ARTIFACT_GRID_X, 80),
+        )
+        x2, y2 = next_artifact_slot(conn, cid)
+    finally:
+        conn.close()
+    # Grid is row-major: the second card sits to the RIGHT in the same row
+    assert x2 == ARTIFACT_GRID_X + ARTIFACT_COL_WIDTH
+    assert y2 == 80
+
+
+def test_create_node_auto_layout_when_xy_omitted(client):
+    """POST nodes without x/y: backend resolves the artifact gallery slot."""
+    pid = client.post("/api/projects", json={"title": "AutoXY", "idea": "x"}).json()["id"]
+    cid = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+
+    first = client.post(
+        f"/api/canvas/{cid}/nodes",
+        json={"type": "image", "title": "a", "artifact_path": "a.png"},
+    ).json()
+    second = client.post(
+        f"/api/canvas/{cid}/nodes",
+        json={"type": "video", "title": "b", "artifact_path": "b.mp4"},
+    ).json()
+    from calliope.routers.canvas import ARTIFACT_COL_WIDTH, ARTIFACT_GRID_X
+
+    assert first["x"] == ARTIFACT_GRID_X
+    # Row-major grid: the second card sits to the right in the same row
+    assert second["x"] == first["x"] + ARTIFACT_COL_WIDTH
+    assert second["y"] == first["y"]
+
+
+def test_post_artifact_to_canvas_from_job(client, monkeypatch):
+    """post_artifact_to_canvas resolves a finished job's output into a card."""
+    import asyncio
+
+    from calliope.agent.harness.plugins.canvas import t_post_artifact
+    from calliope.agent.harness.registry import ToolContext
+
+    pid = client.post("/api/projects", json={"title": "Post", "idea": "x"}).json()["id"]
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    cid = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+
+    conn = get_db(config_module.settings.db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO jobs (id, project_id, kind, status, output_paths_json)
+            VALUES (9001, ?, 'image', 'done', ?)
+            """,
+            (pid, '["C:/assets/out_0001_.png"]'),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def fake_publish(event_type: str, data: dict) -> None:
+        pass
+
+    import calliope.events.bus as bus_mod
+
+    monkeypatch.setattr(bus_mod.event_bus, "publish", fake_publish)
+
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    result = asyncio.run(t_post_artifact(ctx, {"job_id": 9001}))
+    assert result["ok"] is True, result
+    assert result["type"] == "image"
+    assert result["artifact_path"] == "C:/assets/out_0001_.png"
+
+    graph = client.get(f"/api/canvas/{cid}").json()
+    cards = [n for n in graph["nodes"] if n["type"] == "image"]
+    assert len(cards) == 1
+    assert cards[0]["job_id"] == 9001
+    assert cards[0]["artifact_path"] == "C:/assets/out_0001_.png"
+    from calliope.routers.canvas import ARTIFACT_GRID_X
+
+    assert cards[0]["x"] == ARTIFACT_GRID_X, "card lands in the artifact grid"
+
+
+def test_post_artifact_video_kind_from_asset_path(client, monkeypatch):
+    """asset_path extension decides image vs video; no disk check needed."""
+    import asyncio
+
+    from calliope.agent.harness.plugins.canvas import t_post_artifact
+    from calliope.agent.harness.registry import ToolContext
+
+    pid = client.post("/api/projects", json={"title": "PostV", "idea": "x"}).json()["id"]
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    cid = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+
+    async def fake_publish(event_type: str, data: dict) -> None:
+        pass
+
+    import calliope.events.bus as bus_mod
+
+    monkeypatch.setattr(bus_mod.event_bus, "publish", fake_publish)
+
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    result = asyncio.run(
+        t_post_artifact(ctx, {"asset_path": "C:/clips/scene_3.mp4", "title": "Scene 3"})
+    )
+    assert result["ok"] is True, result
+    assert result["type"] == "video"
+
+    graph = client.get(f"/api/canvas/{cid}").json()
+    cards = [n for n in graph["nodes"] if n["type"] == "video"]
+    assert len(cards) == 1
+    assert cards[0]["title"] == "Scene 3"
+
+
+def test_post_artifact_requires_job_or_asset(client):
+    import asyncio
+
+    from calliope.agent.harness.plugins.canvas import t_post_artifact
+    from calliope.agent.harness.registry import ToolContext
+
+    pid = client.post("/api/projects", json={"title": "PostN", "idea": "x"}).json()["id"]
+    sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
+    # Session needs a canvas for the scope check to pass before arg validation.
+    client.post("/api/canvas", json={"project_id": pid})
+
+    ctx = ToolContext(session_id=sid, project_id=pid)
+    result = asyncio.run(t_post_artifact(ctx, {}))
+    assert result["ok"] is False
+    assert "job_id" in result["error"]

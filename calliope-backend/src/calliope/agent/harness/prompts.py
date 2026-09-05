@@ -83,14 +83,25 @@ def _mode_text(ctx: ToolContext) -> str:
         return (
             "SESSION MODE: SANDBOX — no project is linked yet.\n"
             "- You can brainstorm and discuss ideas freely.\n"
-            "- Tagged @workflow + the user asked to generate/render: call "
-            "run_workflow (Playground scratch). Do NOT create_project or "
-            "link_project just for an image. If they only tagged a workflow "
-            "while drafting text, do NOT call run_workflow — offer and wait.\n"
-            "- To file a generated image onto an existing film: list_projects, "
-            "then attach_asset with that project_id + job_id (or path) and a "
-            "target (character_sheet / location / item). Do not create_project "
-            "just to store the picture.\n"
+            "- GENERATING IN SANDBOX (either path):\n"
+            "  • Tagged @workflow + the user asked to generate: call "
+            "run_workflow with that workflow_id (Playground scratch).\n"
+            "  • NO tag + the user asks for an image/video: list_workflows, "
+            "pick the enabled workflow that best matches the request (when "
+            "ambiguous or none is obvious, ask_user which to use), then "
+            "run_workflow with the user's prompt. You do NOT need a tag to "
+            "generate — the tag is just a shortcut that names the workflow "
+            "for you.\n"
+            "- AFTER a generation completes: the result auto-appears on this "
+            "session's sandbox canvas; you can also post_artifact_to_canvas("
+            "job_id) to re-post or title it. This is the default finishing "
+            "move — the user is watching that board.\n"
+            "- The sandbox canvas is a real canvas: image/video cards land "
+            "there and stay for comparison. It is NOT project-only.\n"
+            "- Only file a generated image onto an existing film when the "
+            "user EXPLICITLY names one (list_projects, then attach_asset). "
+            "Never attach to a project just to make an image 'visible' — "
+            "the sandbox canvas already shows it.\n"
             "- When the user wants a NEW film (story/script/assets): call "
             "create_project with a clear title + idea. That links the session.\n"
             "- To work on an EXISTING project: list_projects then link_project. "
@@ -115,7 +126,12 @@ def _mode_text(ctx: ToolContext) -> str:
         "the clips they named. Never dump every scene_id. Never omit the "
         "list (that is not 'all'). all_scenes=true only if they said all/"
         "every clip. Orphan video jobs (wired_to_scene=false) use "
-        "attach_asset target=scene + scene_id."
+        "attach_asset target=scene + scene_id.\n"
+        "- Clip versioning ('apply render 430 to scene 2', 'use the older "
+        "take'): attach_asset target=scene with that job_id + scene_id — "
+        "the same Apply-to-Scene the Video page's render history offers. "
+        "Each re-render of a scene keeps its old job outputs; list_jobs "
+        "shows them."
     )
 
 
@@ -246,20 +262,40 @@ async def _tool_discipline_section(ctx: ToolContext) -> str | None:
         "runs after the user explicitly asks for it.\n"
         "7. FINISH: when the request is complete, reply with a concise "
         "plain-text summary (what was created/changed, job ids enqueued, any "
-        "failures) with NO tool call."
+        "failures) with NO tool call.\n"
+        "8. MEMORY: save_memory records a DURABLE preference or convention "
+        "for future sessions — call it the moment the user states one "
+        "('I always want…', 'never do…', 'prefer terse', 'this project uses "
+        "X style') or corrects you in a way that will recur. One atomic "
+        "sentence. Do NOT save one-off task details or ids. Before saving, "
+        "list_memories; if a memory now contradicts an older one, "
+        "forget_memory the stale one first. Saved memories are injected into "
+        "your system prompt each turn — follow them."
     )
 
 
 async def _mentions_section(ctx: ToolContext) -> str | None:
+    if ctx.project_id is None:
+        return (
+            "Tagged workflows: a [Calliope context] appendix with workflow_id= "
+            "names the workflow the user picked — prefer it for run_workflow. "
+            "With NO tag you may still generate in sandbox: list_workflows, "
+            "choose the best enabled match (ask_user when ambiguous), then "
+            "run_workflow. A tag is a shortcut, not a permission: render "
+            "approval comes only from the user's own words asking to "
+            "generate, or a question-card approval. One tagged workflow per "
+            "message (first id wins). Sandbox: do not create_project just to "
+            "generate. Video file attachments are context only (the worker "
+            "uploads image + audio refs)."
+        )
     return (
         "Tagged workflows: a [Calliope context] appendix with workflow_id= "
         "names the Calliope graph. It is NOT render permission and there is "
         "no MCP run_workflow. Only call Calliope run_workflow when the user's "
         "own words ask to generate (or they confirm an offer). Then use that "
         "id plus prompt / aspect / attachments — do not list_workflows guess. "
-        "One tagged workflow per message (first id wins). Sandbox: do not "
-        "create_project just to generate. Video file attachments are context "
-        "only (the worker uploads image + audio refs)."
+        "One tagged workflow per message (first id wins). Video file "
+        "attachments are context only (the worker uploads image + audio refs)."
     )
 
 
@@ -281,6 +317,16 @@ def register_builtin_sections(service: SystemPromptService) -> None:
     service.register("persona", 10, _persona_section)
     service.register("mode", 20, _mode_section)
     service.register("workspace", 30, _workspace_digest_section)
+    # Memory recall (order 35): usage-ranked preferences from harness.plugins.memory.
+    # Imported lazily so composing prompts alone never composes the registry.
+    from calliope.agent.harness.plugins.memory import _memory_section
+
+    service.register("memory", 35, _memory_section)
+    # Skill discovery (order 37): names + descriptions only; bodies load via
+    # the read_skill tool when relevant.
+    from calliope.agent.harness.plugins.skills import _skills_section
+
+    service.register("skills", 37, _skills_section)
     service.register("mentions", 36, _mentions_section)
     service.register("discipline", 40, _tool_discipline_section)
     service.register("hardening", 50, _hardening_section)
