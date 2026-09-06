@@ -155,6 +155,129 @@ def build_story_messages(
     ]
 
 
+def story_brief_chunk_prompt(
+    title: str | None,
+    idea: str | None,
+    genre: str | None,
+    tone: str | None,
+    target_duration: str | None,
+    *,
+    total_beats: int,
+    chunk_beats: int,
+) -> str:
+    """First story call: the full brief (title/logline/cast/locations/items)
+    PLUS the first `chunk_beats` beats. Later beats come from
+    `story_beats_chunk_prompt`. Keeps the arc plan for `total_beats` so the
+    cast and first beats are set up to scale across the whole story."""
+    secs = estimate_target_seconds(target_duration)
+    return f"""Create a story brief for an AI-generated video, then write its FIRST beats.
+
+total_beat_count: {total_beats}
+THIS CHUNK: exactly {chunk_beats} beats, order_index 1 through {chunk_beats}.
+estimated_runtime_seconds: {secs}
+target_duration_text: {target_duration or "short (~30 seconds)"}
+
+Title: {title or "Untitled"}
+Idea: {idea or "No idea provided."}
+Genre: {genre or "Not specified"}
+Tone: {tone or "cinematic, atmospheric"}
+
+=== HARD CONSTRAINTS (non-negotiable) ===
+1. The JSON field "beats" MUST contain EXACTLY {chunk_beats} objects (the rest are
+   written in later calls — do NOT try to finish the story here).
+2. order_index must run 1, 2, 3, ... {chunk_beats} with no gaps.
+3. These are the OPENING beats of a {total_beats}-beat arc — set up the world and
+   characters; do NOT resolve the story or jump to the climax.
+4. For ~{secs}s (~{secs // 60} min), beats are fine-grained plot steps (~12 seconds
+   of story weight each).
+5. Introduce the recurring characters, locations, and items the whole story needs.
+
+=== OUTPUT SCHEMA (JSON only) ===
+{{
+  "title": "a compelling story title",
+  "logline": "one sentence hook",
+  "beats": [
+    {{"order_index": 1, "title": "Beat title", "description": "what happens visually / dramatically"}}
+  ],
+  "characters": [
+    {{
+      "name": "Name",
+      "role": "protagonist|antagonist|supporting",
+      "age": "approximate age",
+      "appearance": "concise visual description for image generation",
+      "personality": "concise personality traits"
+    }}
+  ],
+  "locations": [
+    {{"name": "Location name", "description": "concise visual description for image generation"}}
+  ],
+  "items": [
+    {{"name": "Item name", "description": "concise visual description for image generation"}}
+  ]
+}}
+
+Keep descriptions visual and concrete. Characters, locations and items should be reusable across scenes.
+FINAL CHECK before responding: beats.length == {chunk_beats}. If not, fix it."""
+
+
+def story_beats_chunk_prompt(
+    *,
+    title: str,
+    logline: str | None,
+    genre: str | None,
+    tone: str | None,
+    total_beats: int,
+    chunk_start: int,
+    chunk_beats: int,
+    previous_beats: list[dict[str, Any]],
+    cast_summary: str,
+) -> str:
+    """Continuation call: ONLY beats {chunk_start}..{chunk_start+chunk_beats-1},
+    given the established brief and the beats already written."""
+    last = chunk_start + chunk_beats - 1
+    prior_lines = "\n".join(
+        f"  {b.get('order_index')}. {b.get('title')}: {b.get('description')}"
+        for b in previous_beats[-6:]
+    )
+    arc_note = (
+        "These are the FINAL beats — bring the story to its climax and resolution."
+        if last >= total_beats
+        else "These are MIDDLE beats — keep escalating; do NOT resolve the story yet."
+    )
+    return f"""Continue the story beat list. Write beats {chunk_start} to {last} of a {total_beats}-beat arc.
+
+Title: {title}
+Logline: {logline or ''}
+Genre: {genre or 'Not specified'}
+Tone: {tone or 'cinematic, atmospheric'}
+total_beat_count: {total_beats}
+THIS CHUNK: exactly {chunk_beats} beats, order_index {chunk_start} through {last}.
+{arc_note}
+
+Established cast/locations:
+{cast_summary or '(none)'}
+
+Beats already written (CONTINUE from here — same characters, escalating, no reset):
+{prior_lines or '(this is the first chunk)'}
+
+=== HARD CONSTRAINTS (non-negotiable) ===
+1. The JSON field "beats" MUST contain EXACTLY {chunk_beats} objects.
+2. order_index must run {chunk_start}, {chunk_start + 1}, ... {last} with no gaps.
+3. Do NOT repeat or contradict the beats already written; advance the plot.
+4. Fine-grained concrete incidents (~12 seconds of story weight each), visual and
+   cinematic. Reuse the established characters and locations.
+
+Respond ONLY with JSON:
+{{
+  "beats": [
+    {{"order_index": {chunk_start}, "title": "Beat title", "description": "what happens visually / dramatically"}}
+  ]
+}}
+
+FINAL CHECK before responding: beats.length == {chunk_beats}, order_index runs
+{chunk_start}..{last}. If not, fix it."""
+
+
 def build_script_messages(
     *,
     title: str,
@@ -251,6 +374,129 @@ Use only the provided character_ids and location_ids.
 FINAL CHECK before responding: scenes.length == {scene_n}, and every action is a flowing prose
 paragraph of 4–6 sentences (~80–130 words) covering ONE shot, with a character anchor at each
 character's first mention (no bullets, no labels, no invented appearances). If not, fix it."""
+    return [
+        {"role": "system", "content": SCRIPT_GENERATION_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+def build_script_chunk_messages(
+    *,
+    title: str,
+    idea: str | None,
+    beats: list[dict[str, Any]],
+    characters: list[dict[str, Any]],
+    locations: list[dict[str, Any]],
+    target_duration: str | None,
+    scene_count: int,
+    chunk_start: int,
+    chunk_scenes: int,
+    previous_tail: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Prompt for ONE chunk of a longer script (scenes `chunk_start`..
+    `chunk_start + chunk_scenes - 1`), so a 20+ scene board is written in
+    several modest LLM calls instead of one giant one that can time out.
+
+    `previous_tail` (the last couple of already-written scenes) keeps
+    continuity — heading style, location, who's on screen — without resending
+    the whole script."""
+    secs = estimate_target_seconds(target_duration)
+    per_scene = max(4, round(secs / max(1, scene_count)))
+    char_lines = "\n".join(
+        f"- id={c['id']} {c['name']} ({c.get('role') or ''}): {c.get('appearance') or ''}"
+        for c in characters
+    )
+    loc_lines = "\n".join(
+        f"- id={l['id']} {l['name']}: {l.get('description') or ''}" for l in locations
+    )
+    beat_lines = "\n".join(
+        f"- {b.get('order_index')}. {b.get('title')}: {b.get('description')}" for b in beats
+    )
+    last = chunk_start + chunk_scenes - 1
+    tail_block = ""
+    if previous_tail:
+        lines = [
+            f"  {s.get('order_index')}. {s.get('heading')} — "
+            f"{(s.get('action') or '')[:180]}"
+            for s in previous_tail
+        ]
+        tail_block = (
+            "\n\nScenes already written (CONTINUE from here — keep the same "
+            "characters, locations, and tone):\n" + "\n".join(lines)
+        )
+    user = f"""Write scenes {chunk_start} to {last} of a {scene_count}-scene script for this project.
+
+Title: {title}
+Idea: {idea or ''}
+Target duration: {target_duration or 'short (~30-60 seconds)'}
+required_scene_count: {scene_count}
+THIS CHUNK: exactly {chunk_scenes} scenes, order_index {chunk_start} through {last}.
+Full script is {scene_count} scenes; other chunks are written separately — do NOT write
+scenes outside {chunk_start}..{last}.
+
+Story beats:
+{beat_lines or '(none)'}
+
+Characters:
+{char_lines or '(none)'}
+
+Locations:
+{loc_lines or '(none)'}{tail_block}
+
+=== HARD CONSTRAINTS (non-negotiable) ===
+1. The JSON field "scenes" MUST contain EXACTLY {chunk_scenes} objects.
+2. order_index must run {chunk_start}, {chunk_start + 1}, ... {last} with no gaps.
+3. Each scene ~{per_scene} seconds (5–10s typical) — these are AI video clips.
+4. Advance the beat arc across the whole {scene_count}-scene story; this chunk covers
+   the part that falls at scenes {chunk_start}–{last}.
+5. If earlier scenes are listed above, continue them naturally — same characters,
+   consistent location, no abrupt reset{'' if previous_tail else ' (this is the first chunk)'}.
+
+=== ACTION DETAIL (this text IS the video prompt — users copy it straight into the generator) ===
+Each scene's "action" is fed verbatim to an AI video generator. Write 4–6 vivid present-tense
+sentences (~80–130 words) per scene as ONE flowing natural-English paragraph — no bullet points,
+no labeled fragments (do NOT write "Shot:", "Lighting:", etc.), no line breaks. Rules:
+1. ONE SHOT PER SCENE. A clip is only {per_scene} seconds — describe a single continuous
+   camera setup with at most one simple action beat (one entrance, one gesture, one reveal).
+2. SHOT & MOTION. Name the framing and camera move (wide establishing, slow push-in, handheld
+   tracking, low angle, rack focus) AND what visibly moves in frame — video models need motion:
+   gestures, turning heads, hair and fabric, drifting dust, sweeping flashlight beams, an
+   expression shifting. A static description produces a static clip.
+3. CHARACTER ANCHORS. The first time each character appears in a scene, attach a 3–8 word
+   visual anchor taken from their description above (hair, outfit, one distinguishing
+   feature), e.g. "MIA, a teenage girl with a chestnut ponytail and yellow rain jacket,".
+   Later mentions in the same scene use the plain name. Never invent new appearance details —
+   reuse these anchors so every clip matches the same face and wardrobe.
+4. ENVIRONMENT & CONTINUITY. Concrete set details, props, weather, time-of-day — consistent
+   with the location description and with earlier scenes set in the same location.
+5. LIGHTING & MOOD. Named light sources, color palette, emotional tone of the moment.
+Describe only what is VISIBLE (no inner thoughts; no sounds or music — dialogue covers audio).
+Vary shot types across scenes.
+
+=== DIALOGUE ===
+Keep lines short and natural. When delivery matters for performance, add a brief cue in
+parentheses after the speaker name, e.g. "MIA (whispering): line".
+
+Respond ONLY with JSON:
+{{
+  "scenes": [
+    {{
+      "order_index": {chunk_start},
+      "heading": "INT. LOCATION - TIME",
+      "action": "Wide establishing shot, slow push-in through the cracked main doorway. MIA, a teenage girl with a chestnut ponytail and yellow rain jacket, steps into the dusty main hall, lantern held high, its warm glow catching drifting dust motes around her cautious, widening eyes.",
+      "dialog": "MIA (whispering): line",
+      "duration_sec": 5,
+      "character_ids": [1],
+      "location_id": 1
+    }}
+  ]
+}}
+
+Use only the provided character_ids and location_ids.
+FINAL CHECK before responding: scenes.length == {chunk_scenes}, order_index runs
+{chunk_start}..{last}, and every action is a flowing prose paragraph of 4–6 sentences
+(~80–130 words) covering ONE shot with a character anchor at each character's first
+mention (no bullets, no labels, no invented appearances). If not, fix it."""
     return [
         {"role": "system", "content": SCRIPT_GENERATION_SYSTEM},
         {"role": "user", "content": user},

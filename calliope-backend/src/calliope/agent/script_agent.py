@@ -4,10 +4,111 @@ from __future__ import annotations
 from typing import Any
 
 from calliope.agent.llm import generate_structured
-from calliope.agent.prompts import build_script_messages, recommend_scene_count
+from calliope.agent.prompts import build_script_chunk_messages, recommend_scene_count
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
+
+# Scenes per LLM call. A single 20-scene request means a multi-thousand-token
+# JSON answer that small/local models take minutes to stream (or truncate and
+# force a full-script retry) — the "Regenerate Script hangs" bug. Chunks keep
+# each call modest and let us publish progress between them.
+SCRIPT_CHUNK = 4
+
+
+async def _request_chunk(
+    *,
+    p: dict[str, Any],
+    beats: list[dict[str, Any]],
+    characters: list[dict[str, Any]],
+    locations: list[dict[str, Any]],
+    required_scenes: int,
+    chunk_start: int,
+    chunk_scenes: int,
+    previous_tail: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    messages = build_script_chunk_messages(
+        title=p["title"],
+        idea=p.get("idea"),
+        beats=beats,
+        characters=characters,
+        locations=locations,
+        target_duration=p.get("target_duration"),
+        scene_count=required_scenes,
+        chunk_start=chunk_start,
+        chunk_scenes=chunk_scenes,
+        previous_tail=previous_tail,
+    )
+    result = await generate_structured(messages, temperature=0.7)
+    scenes = result.get("scenes") or []
+    if len(scenes) < chunk_scenes:
+        # Retry only this chunk — the old code retried the ENTIRE script.
+        retry_messages = [
+            messages[0],
+            {
+                "role": "user",
+                "content": messages[1]["content"]
+                + (
+                    f"\n\nPREVIOUS ATTEMPT FAILED: it only had {len(scenes)} scenes. "
+                    f"You MUST return exactly {chunk_scenes} scenes this time."
+                ),
+            },
+        ]
+        result = await generate_structured(retry_messages, temperature=0.5)
+        scenes = result.get("scenes") or []
+    return scenes[:chunk_scenes]
+
+
+async def _generate_scenes_chunked(
+    *,
+    project_id: int,
+    p: dict[str, Any],
+    beats: list[dict[str, Any]],
+    characters: list[dict[str, Any]],
+    locations: list[dict[str, Any]],
+    required_scenes: int,
+) -> list[dict[str, Any]]:
+    plan: list[tuple[int, int]] = []
+    start = 1
+    while start <= required_scenes:
+        n = min(SCRIPT_CHUNK, required_scenes - start + 1)
+        plan.append((start, n))
+        start += n
+
+    collected: list[dict[str, Any]] = []
+    total = len(plan)
+    for idx, (chunk_start, chunk_scenes) in enumerate(plan, start=1):
+        if total > 1:
+            await event_bus.publish(
+                "agent.thinking",
+                {
+                    "message": f"Writing scenes {chunk_start}–{chunk_start + chunk_scenes - 1} "
+                    f"(chunk {idx}/{total})…",
+                    "project_id": project_id,
+                },
+            )
+        scenes = await _request_chunk(
+            p=p,
+            beats=beats,
+            characters=characters,
+            locations=locations,
+            required_scenes=required_scenes,
+            chunk_start=chunk_start,
+            chunk_scenes=chunk_scenes,
+            previous_tail=collected[-2:],
+        )
+        # Models sometimes restart order_index per chunk; renumber by offset
+        # so the persisted board is always 1..N in write order.
+        for offset, scene in enumerate(scenes):
+            scene["order_index"] = chunk_start + offset
+        collected.extend(scenes)
+
+    if len(collected) < required_scenes:
+        raise ValueError(
+            f"Script returned {len(collected)} scenes but {required_scenes} were required. "
+            "Add scenes again and retry, or raise target duration."
+        )
+    return collected[:required_scenes]
 
 
 def _persist_scenes(
@@ -113,47 +214,19 @@ async def generate_script(
             },
         )
 
-        messages = build_script_messages(
-            title=p["title"],
-            idea=p.get("idea"),
+        # Chunked generation: one LLM call per SCRIPT_CHUNK scenes. A single
+        # 20+ scene request means a multi-thousand-token JSON answer that
+        # small/local models take minutes to stream (or fail outright and
+        # trigger a full-script retry) — the "Regenerate Script hangs" bug.
+        # Small boards (one chunk) keep the exact single-call behavior.
+        scenes_out = await _generate_scenes_chunked(
+            project_id=project_id,
+            p=p,
             beats=beats,
             characters=characters,
             locations=locations,
-            target_duration=p.get("target_duration"),
-            scene_count=required_scenes,
+            required_scenes=required_scenes,
         )
-        result = await generate_structured(messages, temperature=0.7)
-        scenes_out = result.get("scenes") or []
-
-        if len(scenes_out) < required_scenes:
-            await event_bus.publish(
-                "agent.thinking",
-                {
-                    "message": (
-                        f"Model returned {len(scenes_out)} scenes; "
-                        f"required {required_scenes}. Retrying…"
-                    ),
-                    "project_id": project_id,
-                },
-            )
-            retry_messages = [
-                messages[0],
-                {
-                    "role": "user",
-                    "content": messages[1]["content"]
-                    + (
-                        f"\n\nPREVIOUS ATTEMPT FAILED: it only had {len(scenes_out)} scenes. "
-                        f"You MUST return exactly {required_scenes} scenes this time."
-                    ),
-                },
-            ]
-            result = await generate_structured(retry_messages, temperature=0.5)
-            scenes_out = result.get("scenes") or []
-            if len(scenes_out) < required_scenes:
-                raise ValueError(
-                    f"Script returned {len(scenes_out)} scenes but {required_scenes} were required. "
-                    "Add scenes again and retry, or raise target duration."
-                )
 
         if replace:
             scene_ids = [
@@ -180,6 +253,6 @@ async def generate_script(
                 "project_id": project_id,
             },
         )
-        return {"ok": True, "scenes": created, "generated": result}
+        return {"ok": True, "scenes": created, "generated": {"scenes": scenes_out}}
     finally:
         conn.close()

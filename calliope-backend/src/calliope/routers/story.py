@@ -7,13 +7,22 @@ from fastapi import APIRouter, HTTPException
 
 from calliope.agent.llm import generate_structured
 from calliope.agent.prompts import (
+    STORY_GENERATION_SYSTEM,
     build_story_messages,
     character_sheet_prompt,
     item_reference_prompt,
     location_reference_prompt,
     recommend_beat_count,
+    story_beats_chunk_prompt,
+    story_brief_chunk_prompt,
     story_generation_user_prompt,
 )
+
+# Beats per LLM call for long stories. One 50-beat request is a huge JSON
+# answer small/local models take minutes to stream (and often under-deliver,
+# triggering a full retry) — same failure mode the script path had. Small
+# boards stay one call.
+STORY_CHUNK = 12
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
@@ -47,24 +56,44 @@ def _require_project(conn, project_id: int) -> dict[str, Any]:
     return row_to_dict(row)
 
 
-@router.post("/{project_id}/generate-story")
-async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any]:
-    conn = get_db(settings.db_path)
-    try:
-        project = _require_project(conn, project_id)
-
-        required_beats = recommend_beat_count(project.get("target_duration"))
-        await event_bus.publish(
-            "agent.thinking",
-            {
-                "project_id": project_id,
-                "message": (
-                    f"Drafting storyline for \"{project['title']}\" "
-                    f"(target {project.get('target_duration') or '?'} -> {required_beats} beats)..."
-                ),
-            },
+async def _request_beats_chunk(
+    system: str,
+    user: str,
+    *,
+    want: int,
+    temperature: float = 0.7,
+) -> list[dict[str, Any]]:
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    result = await generate_structured(messages, temperature=temperature)
+    beats = result.get("beats") or []
+    if len(beats) < want:
+        # Retry only this chunk — never the whole story.
+        retry = await generate_structured(
+            [
+                messages[0],
+                {
+                    "role": "user",
+                    "content": user
+                    + (
+                        f"\n\nPREVIOUS ATTEMPT FAILED: it only had {len(beats)} beats. "
+                        f"You MUST return exactly {want} beats this time."
+                    ),
+                },
+            ],
+            temperature=0.4,
         )
+        beats = retry.get("beats") or []
+    return beats
 
+
+async def _draft_story_chunked(
+    project_id: int, project: dict[str, Any], required_beats: int
+) -> dict[str, Any]:
+    """Beat list in chunks of STORY_CHUNK (brief + first beats in call 1,
+    continuations after). Boards that fit one chunk behave exactly like the
+    old single call, including the corrective retry."""
+    system = STORY_GENERATION_SYSTEM
+    if required_beats <= STORY_CHUNK:
         messages = build_story_messages(
             title=project["title"],
             idea=project["idea"],
@@ -74,8 +103,6 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
         )
         result = await generate_structured(messages, temperature=0.7)
         beats_out = result.get("beats") or []
-
-        # Models often under-deliver on long runtimes — one corrective retry.
         if len(beats_out) < required_beats:
             await event_bus.publish(
                 "agent.thinking",
@@ -106,15 +133,120 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
             ]
             result = await generate_structured(repair, temperature=0.4)
             beats_out = result.get("beats") or []
-            if len(beats_out) < required_beats:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        f"Story draft returned {len(beats_out)} beats but target "
-                        f"'{project.get('target_duration')}' requires {required_beats}. "
-                        "Try Draft Storyline again, or check the LLM follows JSON instructions."
-                    ),
-                )
+        result = {**result, "beats": beats_out}
+        return result
+
+    # 1) Brief + first chunk
+    first_n = min(STORY_CHUNK, required_beats)
+    brief_user = story_brief_chunk_prompt(
+        project["title"],
+        project["idea"],
+        project["genre"],
+        project["tone"],
+        project["target_duration"],
+        total_beats=required_beats,
+        chunk_beats=first_n,
+    )
+    brief_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": brief_user},
+    ]
+    brief = await generate_structured(brief_messages, temperature=0.7)
+    beats_out = brief.get("beats") or []
+    if len(beats_out) < first_n:
+        # _request_beats_chunk retries the short chunk once at low temp.
+        beats_out = await _request_beats_chunk(system, brief_user, want=first_n)
+    title = brief.get("title") or project["title"]
+    logline = brief.get("logline")
+    cast_summary = "\n".join(
+        [
+            *(
+                f"- {c.get('name')} ({c.get('role') or ''}): {c.get('appearance') or ''}"
+                for c in brief.get("characters") or []
+            ),
+            *(
+                f"- location {l.get('name')}: {l.get('description') or ''}"
+                for l in brief.get("locations") or []
+            ),
+            *(
+                f"- item {i.get('name')}: {i.get('description') or ''}"
+                for i in brief.get("items") or []
+            ),
+        ]
+    )
+
+    # 2) Continuation chunks
+    written = [dict(b) for b in beats_out[:first_n]]
+    for offset, b in enumerate(written):
+        b["order_index"] = offset + 1
+    start = len(written) + 1
+    total_calls = (required_beats + STORY_CHUNK - 1) // STORY_CHUNK
+    call_no = 2
+    while start <= required_beats:
+        want = min(STORY_CHUNK, required_beats - start + 1)
+        await event_bus.publish(
+            "agent.thinking",
+            {
+                "project_id": project_id,
+                "message": f"Writing beats {start}–{start + want - 1} "
+                f"(chunk {call_no}/{total_calls})...",
+            },
+        )
+        user = story_beats_chunk_prompt(
+            title=title,
+            logline=logline,
+            genre=project["genre"],
+            tone=project["tone"],
+            total_beats=required_beats,
+            chunk_start=start,
+            chunk_beats=want,
+            previous_beats=written,
+            cast_summary=cast_summary,
+        )
+        chunk = await _request_beats_chunk(system, user, want=want)
+        if not chunk:
+            break
+        accepted = chunk[:want]
+        for offset, b in enumerate(accepted):
+            b["order_index"] = start + offset
+            written.append(b)
+        # Advance by what was actually accepted, so a short chunk never
+        # leaves a hole in the 1..N order_index sequence.
+        start += len(accepted)
+        call_no += 1
+
+    return {**brief, "title": title, "logline": logline, "beats": written}
+
+
+@router.post("/{project_id}/generate-story")
+async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any]:
+    conn = get_db(settings.db_path)
+    try:
+        project = _require_project(conn, project_id)
+
+        required_beats = recommend_beat_count(project.get("target_duration"))
+        await event_bus.publish(
+            "agent.thinking",
+            {
+                "project_id": project_id,
+                "message": (
+                    f"Drafting storyline for \"{project['title']}\" "
+                    f"(target {project.get('target_duration') or '?'} -> {required_beats} beats)..."
+                ),
+            },
+        )
+
+        result = await _draft_story_chunked(project_id, project, required_beats)
+        beats_out = result.get("beats") or []
+        if len(beats_out) < required_beats:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Story draft returned {len(beats_out)} beats but target "
+                    f"'{project.get('target_duration')}' requires {required_beats}. "
+                    "Try Draft Storyline again, or check the LLM follows JSON instructions."
+                ),
+            )
 
         title = result.get("title") or project["title"]
         logline = result.get("logline")
