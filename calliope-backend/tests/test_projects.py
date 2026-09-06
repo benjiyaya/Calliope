@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import tempfile
 from pathlib import Path
 
@@ -41,6 +42,15 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_health_version_matches_package_metadata(client):
+    from calliope.main import __version__
+
+    assert client.get("/api/health").json()["version"] == __version__
+    # A literal here would recreate the bug this guards against: the string must
+    # come from the installed package metadata (pyproject's version), not main.py.
+    assert __version__ == importlib.metadata.version("calliope")
 
 
 def test_create_and_list_project(client):
