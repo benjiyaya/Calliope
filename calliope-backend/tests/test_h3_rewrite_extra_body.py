@@ -51,7 +51,9 @@ async def test_no_extra_body_sends_nothing_extra(monkeypatch):
 
 
 def test_setting_roundtrip(client):
-    assert client.get("/api/settings").json()["h3_rewrite_extra_body"] == {}
+    # The fixture serves the live settings object, so the starting value is
+    # whatever the operator has set — restore it at the end.
+    original = client.get("/api/settings").json()["h3_rewrite_extra_body"]
     r = client.post(
         "/api/settings",
         json={"h3_rewrite_extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
@@ -63,3 +65,5 @@ def test_setting_roundtrip(client):
     r = client.post("/api/settings", json={"h3_rewrite_extra_body": {}})
     assert r.status_code == 200
     assert client.get("/api/settings").json()["h3_rewrite_extra_body"] == {}
+    client.post("/api/settings", json={"h3_rewrite_extra_body": original})
+    assert client.get("/api/settings").json()["h3_rewrite_extra_body"] == original
