@@ -81,7 +81,9 @@ async def _h3_rewrite(
     client = LLMClient.for_role("video", timeout=timeout)
     try:
         return await client.chat(
-            build_minimax_h3_ref_messages(scene, subjects), temperature=0.4
+            build_minimax_h3_ref_messages(scene, subjects),
+            temperature=0.4,
+            extra_body=settings.h3_rewrite_extra_body or None,
         )
     except Exception as exc:
         logger.warning("MiniMax H3 prompt rewrite failed (%s); using fallback template", exc)

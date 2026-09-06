@@ -125,6 +125,14 @@ class Settings(BaseSettings):
     queue_max_retries: int = 2
     agent_max_steps: int = 24
     agent_hardening_prompt: str = DEFAULT_AGENT_HARDENING_PROMPT
+    # Extra OpenAI-compatible request fields merged into the MiniMax H3 prompt
+    # rewrite call only (the `minimax_h3_ref` profile). The rewrite is a
+    # formatting task: on a thinking model it can burn 10k+ reasoning tokens per
+    # scene, so e.g. {"chat_template_kwargs": {"enable_thinking": false}} (oMLX,
+    # vLLM, SGLang for Qwen3) makes previews seconds instead of minutes. Empty
+    # by default — never sent unless set, since strict servers reject unknown
+    # fields.
+    h3_rewrite_extra_body: dict[str, Any] = Field(default_factory=dict)
     dry_run: bool = False  # off by default — real ComfyUI jobs
 
     @property
@@ -313,6 +321,7 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
+            "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }
 
@@ -395,6 +404,7 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
+            "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
