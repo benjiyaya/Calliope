@@ -143,6 +143,31 @@ def user_allows_render(ctx: ToolContext) -> bool:
 # question/answered immediately before its user/message echo.
 
 _AFFIRMATIVE_ANSWERS = frozenset({"yes", "y", "ok", "okay", "sure", "confirm", "go ahead", "do it"})
+# Card options are full sentences ("Yes, replace with ~40 shorter scenes").
+# The FIRST word decides: yes-family grants, no-family refuses, anything
+# else falls back to the exact-match set. Mechanical, not prose guessing.
+_AFFIRMATIVE_FIRST_WORDS = frozenset(
+    {"yes", "yep", "yeah", "yup", "y", "ok", "okay", "sure", "confirm", "confirmed",
+     "proceed", "go", "do", "please", "fine", "absolutely", "definitely"}
+)
+_NEGATIVE_FIRST_WORDS = frozenset(
+    {"no", "nope", "not", "dont", "don't", "do not", "never", "cancel", "stop",
+     "skip", "wait", "hold"}
+)
+
+
+def _answer_is_affirmative(text: str) -> bool:
+    t = text.strip().lower()
+    if not t:
+        return False
+    if t in _AFFIRMATIVE_ANSWERS:
+        return True
+    first = re.split(r"[,\s.!]+", t, maxsplit=1)[0]
+    if first in _AFFIRMATIVE_FIRST_WORDS:
+        return True
+    if first in _NEGATIVE_FIRST_WORDS or t.startswith(("don't", "do not", "no ")):
+        return False
+    return False
 
 
 def latest_answer(session_id: int) -> dict[str, Any] | None:
@@ -176,5 +201,4 @@ def has_structured_approval(ctx: ToolContext, scope: str) -> bool:
     answer = latest_answer(ctx.session_id)
     if not answer or answer.get("scope") != scope:
         return False
-    text = str(answer.get("answer") or "").strip()
-    return text.lower() in _AFFIRMATIVE_ANSWERS
+    return _answer_is_affirmative(str(answer.get("answer") or ""))

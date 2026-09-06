@@ -171,3 +171,82 @@ def test_answer_to_message_records_structured_approval(client, session):
     assert resp.status_code == 200, resp.text
     assert policy.has_structured_approval(ctx, "render") is True
     assert policy.user_allows_render(ctx) is True
+
+
+def test_card_option_sentence_grants_approval():
+    """Options are full sentences ("Yes, replace with ~40 shorter scenes");
+    the first word decides. Exact 'yes' still grants; 'No, …' refuses."""
+    from calliope.agent.harness.policy import _answer_is_affirmative
+
+    assert _answer_is_affirmative("Yes, replace with ~40 shorter scenes") is True
+    assert _answer_is_affirmative("yes go!") is True
+    assert _answer_is_affirmative("Sure, do it") is True
+    assert _answer_is_affirmative("Go ahead") is True
+    assert _answer_is_affirmative("No, keep existing scenes and add more at the end") is False
+    assert _answer_is_affirmative("Just update durations, don't change content") is False
+    assert _answer_is_affirmative("no") is False
+    assert _answer_is_affirmative("") is False
+
+
+def test_ask_user_logs_tool_result_before_turn_end(client, session):
+    """The card derives from the persisted ask_user tool ROW, which needs the
+    tool/result event — the loop must log + emit the result BEFORE ending the
+    turn, or the UI shows a stuck 'working…' with no question (the reported
+    bug: user had to Stop/refresh to see anything)."""
+    import asyncio
+    import json
+
+    from calliope.agent.harness.loop import run_turn
+
+    class _AskStream:
+        def __aiter__(self):
+            async def gen():
+                yield {
+                    "type": "tool_call",
+                    "tool_call": {
+                        "id": "c1",
+                        "function": {
+                            "name": "ask_user",
+                            "arguments": json.dumps(
+                                {
+                                    "question": "Regenerate the script?",
+                                    "options": ["Yes, replace", "No, keep"],
+                                    "scope": "destructive_replace",
+                                }
+                            ),
+                        },
+                    },
+                }
+
+            return gen()
+
+    class _Client:
+        def chat_stream(self, messages, temperature=0.4, tools=None):
+            return _AskStream()
+
+        async def close(self):
+            return None
+
+    from calliope.agent.harness import loop as loop_mod
+
+    orig_llm = loop_mod._llm_for_role
+    loop_mod._llm_for_role = lambda role: _Client()
+    ctx = ToolContext(session_id=session["id"], project_id=None)
+    try:
+        history: list = []
+        asyncio.run(run_turn(ctx, history, max_iterations=5))
+    finally:
+        loop_mod._llm_for_role = orig_llm
+
+    events = session_log.read_events(session["id"])
+    types = [e.type for e in events]
+    assert session_log.TOOL_RESULT in types, types
+    tr_idx = max(i for i, t in enumerate(types) if t == session_log.TOOL_RESULT)
+    end_idx = max(i for i, t in enumerate(types) if t == session_log.TURN_END)
+    assert tr_idx < end_idx, "tool/result must precede turn/end"
+    tr = events[tr_idx]
+    assert tr.data["tool_name"] == "ask_user"
+    assert tr.data["result"]["options"] == ["Yes, replace", "No, keep"]
+    assert tr.data["result"]["question"] == "Regenerate the script?"
+    end = events[end_idx]
+    assert end.data["status"] == "awaiting_input", end.data

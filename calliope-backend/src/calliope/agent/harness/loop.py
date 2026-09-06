@@ -269,18 +269,10 @@ async def run_turn(
                             and result.get("ok") is not False
                         ):
                             repeat_cache[repeat_key] = result
-                # ask_user ends the turn: the agent's question waits for the
-                # user's answer, so the loop must not burn steps polling.
-                if isinstance(result, dict) and result.get("awaiting_user_input"):
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        }
-                    )
-                    turn_status = "awaiting_input"
-                    raise _AwaitingInput()
+                # Log + emit the result FIRST. The ask_user card and the
+                # tool-row spinner both read these; ending the turn before
+                # them left the UI with no question and a stuck "working…"
+                # (the "agent loop just stops there" bug).
                 log_append(
                     session_log.TOOL_RESULT,
                     {
@@ -322,6 +314,12 @@ async def run_turn(
                         "content": "",
                     }
                 )
+                # ask_user ends the turn: the agent's question waits for the
+                # user's answer, so the loop must not burn steps polling.
+                if isinstance(result, dict) and result.get("awaiting_user_input"):
+                    log_append(session_log.STEP_END, {"turn": turn_no, "step": iteration})
+                    turn_status = "awaiting_input"
+                    raise _AwaitingInput()
             log_append(session_log.STEP_END, {"turn": turn_no, "step": iteration})
         else:
             final_text = (

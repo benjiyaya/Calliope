@@ -126,6 +126,7 @@
 
 	interface OpenQuestion {
 		questionSeq: number;
+		question: string;
 		options: string[];
 		scope: string;
 	}
@@ -138,12 +139,14 @@
 				const r = m.tool_result as {
 					ok?: boolean;
 					question_seq?: number;
+					question?: string;
 					options?: unknown;
 					scope?: string;
 				};
 				if (r.ok !== false && Array.isArray(r.options)) {
 					return {
 						questionSeq: r.question_seq ?? m.id,
+						question: r.question ?? '',
 						options: r.options as string[],
 						scope: r.scope ?? 'info',
 					};
@@ -246,20 +249,25 @@
 				/>
 				{#if m.tool_name === 'ask_user' && lastQuestion && m.id === messages.findLast((x) => x.role === 'tool' && x.tool_name === 'ask_user')?.id}
 					<div class="question-card">
-						{#each lastQuestion.options as opt (opt)}
-							<button
-								type="button"
-								class="question-option"
-								class:affirmative={opt.toLowerCase().startsWith('yes')}
-								disabled={running}
-								onclick={() => onAnswer?.(opt, lastQuestion.scope, lastQuestion.questionSeq)}
-							>
-								{opt}
-							</button>
-						{/each}
-						{#if answerLabel(lastQuestion.scope)}
-							<p class="question-scope">{answerLabel(lastQuestion.scope)}</p>
+						{#if lastQuestion.question}
+							<p class="question-text">{lastQuestion.question}</p>
 						{/if}
+						<div class="question-options">
+							{#each lastQuestion.options as opt (opt)}
+								<button
+									type="button"
+									class="question-option"
+									class:affirmative={/^yes\b|^ok\b|^sure\b|^go\b|^do it\b|^confirm\b/i.test(opt)}
+									disabled={running}
+									onclick={() => onAnswer?.(opt, lastQuestion.scope, lastQuestion.questionSeq)}
+								>
+									{opt}
+								</button>
+							{/each}
+						</div>
+						<p class="question-hint">
+							{answerLabel(lastQuestion.scope) || 'Pick an option or just type your answer.'}
+						</p>
 					</div>
 				{/if}
 				{#if m.tool_name && ENQUEUE_TOOLS.has(m.tool_name)}
@@ -508,29 +516,45 @@
 	}
 	.question-card {
 		display: flex;
-		flex-wrap: wrap;
+		flex-direction: column;
 		gap: 8px;
-		align-items: center;
-		padding: 4px 2px 2px;
+		width: 100%;
+		max-width: 420px;
+		margin: 2px 0 6px;
+		padding: 12px 14px;
+		border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--accent) 7%, var(--bg-surface));
+	}
+	.question-text {
+		margin: 0;
+		font-size: 13px;
+		line-height: 1.5;
+		color: var(--text-primary);
+		white-space: pre-wrap;
+	}
+	.question-options {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
 	}
 	.question-option {
 		border: 1px solid color-mix(in srgb, var(--agent, var(--accent)) 45%, transparent);
 		background: var(--bg-elevated);
 		color: var(--text-primary);
-		border-radius: 999px;
-		padding: 6px 14px;
+		border-radius: var(--radius-sm);
+		padding: 8px 12px;
 		font-size: 13px;
 		font-weight: 600;
 		cursor: pointer;
+		text-align: left;
 		transition:
 			background 120ms ease,
-			border-color 120ms ease,
-			transform 120ms ease;
+			border-color 120ms ease;
 	}
 	.question-option:hover:enabled {
 		background: color-mix(in srgb, var(--agent, var(--accent)) 18%, var(--bg-elevated));
 		border-color: var(--agent, var(--accent));
-		transform: translateY(-1px);
 	}
 	.question-option:disabled {
 		opacity: 0.5;
@@ -540,8 +564,7 @@
 		border-color: var(--accent);
 		color: var(--accent);
 	}
-	.question-scope {
-		width: 100%;
+	.question-hint {
 		margin: 0;
 		font-size: 11px;
 		color: var(--text-muted);
