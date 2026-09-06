@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -28,6 +29,11 @@ from calliope.routers import (
     story,
     workflows,
 )
+
+try:
+    __version__ = _pkg_version("calliope")
+except PackageNotFoundError:  # running from a source tree that was never installed
+    __version__ = "0.0.0+src"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,7 +117,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(static_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Calliope", version="1.4.0", lifespan=lifespan)
+    app = FastAPI(title="Calliope", version=__version__, lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -135,7 +141,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"status": "ok", "version": "1.4.0", "dry_run": settings.dry_run}
+        return {"status": "ok", "version": __version__, "dry_run": settings.dry_run}
 
     # Catch unknown /api/* before StaticFiles — otherwise POST falls through and
     # returns a confusing 405 Method Not Allowed from the file server.
