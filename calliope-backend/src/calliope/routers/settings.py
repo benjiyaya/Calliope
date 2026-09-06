@@ -36,6 +36,7 @@ class SettingsUpdate(BaseModel):
     queue_max_retries: int | None = Field(None, ge=0, le=10)
     agent_max_steps: int | None = Field(None, ge=1, le=100)
     agent_hardening_prompt: str | None = Field(None, max_length=20000)
+    h3_rewrite_extra_body: dict[str, Any] | None = None
     dry_run: bool | None = None
 
 

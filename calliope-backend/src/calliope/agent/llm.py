@@ -16,6 +16,23 @@ logger = logging.getLogger("calliope.llm")
 _STREAM_UNSUPPORTED_STATUS = frozenset({400, 404, 405, 501})
 
 
+_PROTECTED_PAYLOAD_KEYS = frozenset({"model", "messages", "stream"})
+
+
+def _merge_extra_body(payload: dict[str, Any], extra_body: dict[str, Any] | None) -> None:
+    """Merge caller-supplied OpenAI-compatible request fields into a payload.
+
+    Lets one call site pass server-specific knobs (e.g. Qwen3's
+    ``chat_template_kwargs: {"enable_thinking": false}`` on oMLX / vLLM / SGLang)
+    without the client knowing about them. The identity of the request —
+    model, messages, stream — cannot be overridden.
+    """
+    for key, value in (extra_body or {}).items():
+        if key in _PROTECTED_PAYLOAD_KEYS:
+            continue
+        payload[key] = value
+
+
 class LLMClient:
     def __init__(
         self,
@@ -57,12 +74,16 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> str:
         try:
             parts: list[str] = []
             reasoning_chars = 0
             async for ev in self.chat_stream(
-                messages, temperature=temperature, response_format=response_format
+                messages,
+                temperature=temperature,
+                response_format=response_format,
+                extra_body=extra_body,
             ):
                 if ev["type"] == "delta":
                     parts.append(ev["content"])
@@ -77,7 +98,9 @@ class LLMClient:
                 "Streaming unavailable (HTTP %s); falling back to blocking call",
                 exc.response.status_code,
             )
-            return await self._chat_blocking(messages, temperature, response_format)
+            return await self._chat_blocking(
+                messages, temperature, response_format, extra_body=extra_body
+            )
         content = "".join(parts).strip()
         if not content:
             # Thinking models can burn the whole completion in reasoning and
@@ -94,6 +117,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -102,6 +126,7 @@ class LLMClient:
         }
         if response_format:
             payload["response_format"] = response_format
+        _merge_extra_body(payload, extra_body)
 
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM request to %s with model %s", url, self.model)
@@ -205,6 +230,7 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Streaming completion. Yields event dicts:
 
@@ -231,6 +257,7 @@ class LLMClient:
                 payload["tool_choice"] = tool_choice
         if response_format:
             payload["response_format"] = response_format
+        _merge_extra_body(payload, extra_body)
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM stream request to %s with model %s", url, self.model)
         tool_acc: dict[int, dict[str, Any]] = {}
