@@ -42,10 +42,6 @@
 	{#if open}
 		<div class="drawer" role="region" aria-label="Scene script">
 			<div class="block">
-				<span class="k">Heading</span>
-				<p>{scene.heading || 'Untitled scene'}</p>
-			</div>
-			<div class="block">
 				<span class="k">Action / script</span>
 				{#if scene.action?.trim()}
 					<p>{scene.action}</p>

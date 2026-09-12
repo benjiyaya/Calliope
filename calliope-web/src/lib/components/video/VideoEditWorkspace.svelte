@@ -14,6 +14,7 @@
 	import PromptPreviewModal from './PromptPreviewModal.svelte';
 	import SceneFilmstrip, { type FilmstripClip } from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
+	import ShotBrief from './ShotBrief.svelte';
 
 	type Thumb = { kind: 'image' | 'video'; src: string } | null;
 
@@ -144,34 +145,36 @@
 </script>
 
 <div class="workspace">
-	<div class="hero">
-		<ClipMonitor
-			{previewPath}
-			{status}
-			heading={(selectedClip?.clip.description || selected.heading || 'Untitled').slice(0, 80)}
-			orderIndex={selected.order_index}
-			label={selectedClip?.label}
-			idLabel={selectedClip ? `clip ${selectedClip.clip.id}` : selected ? `scene id ${selected.id}` : undefined}
-			sceneId={selectedClip?.scene.id ?? selected?.id}
-			{progress}
-			{error}
-			{errorLong}
+	<div class="preview-col">
+		<div class="hero">
+			<ClipMonitor
+				{previewPath}
+				{status}
+				heading={(selectedClip?.clip.description || selected.heading || 'Untitled').slice(0, 80)}
+				orderIndex={selected.order_index}
+				label={selectedClip?.label}
+				idLabel={selectedClip ? `clip ${selectedClip.clip.id}` : selected ? `scene id ${selected.id}` : undefined}
+				sceneId={selectedClip?.scene.id ?? selected?.id}
+				{progress}
+				{error}
+				{errorLong}
+			/>
+		</div>
+
+		<SceneFilmstrip
+			clips={filmClips}
+			{selectedClipId}
+			{statusOfClip}
+			{thumbForClip}
+			{formatClock}
+			{onSelectClip}
+			{onStep}
 		/>
+
+		<SceneScriptDrawer scene={selected} {status} {formatClock} />
 	</div>
 
-	<SceneFilmstrip
-		clips={filmClips}
-		{selectedClipId}
-		{statusOfClip}
-		{thumbForClip}
-		{formatClock}
-		{onSelectClip}
-		{onStep}
-	/>
-
-	<SceneScriptDrawer scene={selected} {status} {formatClock} />
-
-	<div class="composer-dock">
+	<aside class="dock-col" aria-label="Clip generation inputs">
 		{#if workflow}
 			{#if generateDisabled}
 				<div class="continue-warning" role="alert">
@@ -185,77 +188,85 @@
 					</div>
 				</div>
 			{:else if clipSource?.enabled}
-			<div class="clip-source-row">
-				<span class="clip-source-label" id="clip-source-label">Video source</span>
-				<button
-					type="button"
-					class="clip-source-trigger"
-					aria-haspopup="dialog"
-					aria-expanded={clipSourceOpen}
-					aria-labelledby="clip-source-label clip-source-value"
-					onclick={() => (clipSourceOpen = true)}
-				>
-					<Icon name="film" size={14} />
-					<span id="clip-source-value" class="clip-source-value">{clipSourceLabel}</span>
-					<Icon name="chevron-down" size={12} />
-				</button>
-			</div>
-			<ClipSourceModal
-				bind:open={clipSourceOpen}
-				value={clipSource.value}
-				options={clipSource.options}
-				onselect={(source) => onClipSourceChange?.(source)}
-				onupload={() => onClipSourceUpload?.()}
-			/>
-		{/if}
-		{#if assetOptions.length === 0}
-			<p class="asset-hint">
-				No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
-				file here.
-			</p>
-		{/if}
-		{#if hasJobPayload}
-			<div class="job-inputs-row">
-				<button
-					type="button"
-					class="job-inputs-trigger"
-					aria-haspopup="dialog"
-					aria-expanded={inputsOpen}
-					onclick={() => (inputsOpen = true)}
-				>
-					<Icon name="info" size={14} />
-					<span>View prompt &amp; inputs</span>
-				</button>
-			</div>
-			<JobInputsDrawer
-				bind:open={inputsOpen}
-				{job}
-				jobs={clipJobs}
-				{workflow}
-				sceneVideoPath={selectedClip?.clip.clip_path ?? selected.video_path}
-				onCopySettings={(values) => {
-					formValues = { ...formValues, ...values };
-					onFormChange?.({ ...formValues });
-				}}
-				onApplyToScene={(j, path) => onApplyToClip?.(j, path)}
-				applying={applying}
-			/>
-		{/if}
+				<div class="clip-source-row">
+					<span class="clip-source-label" id="clip-source-label">Video source</span>
+					<button
+						type="button"
+						class="clip-source-trigger"
+						aria-haspopup="dialog"
+						aria-expanded={clipSourceOpen}
+						aria-labelledby="clip-source-label clip-source-value"
+						onclick={() => (clipSourceOpen = true)}
+					>
+						<Icon name="film" size={14} />
+						<span id="clip-source-value" class="clip-source-value">{clipSourceLabel}</span>
+						<Icon name="chevron-down" size={12} />
+					</button>
+				</div>
+				<ClipSourceModal
+					bind:open={clipSourceOpen}
+					value={clipSource.value}
+					options={clipSource.options}
+					onselect={(source) => onClipSourceChange?.(source)}
+					onupload={() => onClipSourceUpload?.()}
+				/>
+			{/if}
+			{#if assetOptions.length === 0}
+				<p class="asset-hint">
+					No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
+					file here.
+				</p>
+			{/if}
+			{#if hasJobPayload}
+				<div class="job-inputs-row">
+					<button
+						type="button"
+						class="job-inputs-trigger"
+						aria-haspopup="dialog"
+						aria-expanded={inputsOpen}
+						onclick={() => (inputsOpen = true)}
+					>
+						<Icon name="info" size={14} />
+						<span>View prompt &amp; inputs</span>
+					</button>
+				</div>
+				<JobInputsDrawer
+					bind:open={inputsOpen}
+					{job}
+					jobs={clipJobs}
+					{workflow}
+					sceneVideoPath={selectedClip?.clip.clip_path ?? selected.video_path}
+					onCopySettings={(values) => {
+						formValues = { ...formValues, ...values };
+						onFormChange?.({ ...formValues });
+					}}
+					onApplyToScene={(j, path) => onApplyToClip?.(j, path)}
+					applying={applying}
+				/>
+			{/if}
+			{#if selectedClip}
+				<ShotBrief
+					clip={selectedClip.clip}
+					scene={selectedClip.scene}
+					label={selectedClip.label}
+					{formatClock}
+				/>
+			{/if}
 			<OmniComposer
 				inputs={workflow.input_schema}
 				bind:values={formValues}
 				{workflow}
 				{workflows}
 				onWorkflowChange={onWorkflowChange}
-			{assetOptions}
-			{allowUpload}
-			{generateLabel}
-			{submitting}
-			disabled={generateDisabled}
-			generateDisabledHint={generateDisabledReason}
-			onChange={onFormChange}
-			onSubmit={onPreviewPrompt ?? onGenerate}
-		/>
+				{assetOptions}
+				{allowUpload}
+				{generateLabel}
+				{submitting}
+				disabled={generateDisabled}
+				generateDisabledHint={generateDisabledReason}
+				onChange={onFormChange}
+				onSubmit={onPreviewPrompt ?? onGenerate}
+			/>
 		{:else}
 			<div class="no-wf">
 				<p class="empty-title">No video workflow enabled</p>
@@ -264,13 +275,24 @@
 				</p>
 			</div>
 		{/if}
-	</div>
+	</aside>
 </div>
 
 <style>
+	/* Two columns: the player + strip own the left, every generation input
+	   lives in the right inspector so it can't push the player out of view. */
 	.workspace {
 		flex: 1;
 		min-height: 0;
+		display: flex;
+		flex-direction: row;
+		gap: 12px;
+		overflow: hidden;
+	}
+
+	.preview-col {
+		flex: 1 1 auto;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
@@ -278,8 +300,8 @@
 	}
 
 	.hero {
-		flex: 1;
-		min-height: 140px;
+		flex: 1 1 auto;
+		min-height: 200px;
 		display: flex;
 		align-items: stretch;
 		justify-content: stretch;
@@ -287,13 +309,37 @@
 		width: 100%;
 	}
 
-	.composer-dock {
-		flex-shrink: 0;
-		min-height: 0;
+	/* Inspector — scrolls on its own so the player keeps the height. */
+	.dock-col {
+		flex: 0 0 clamp(300px, 34%, 400px);
+		min-width: 280px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding-right: 2px;
 	}
 
-	.composer-dock :global(.omni-shell) {
+	.dock-col :global(.omni-shell) {
 		flex-shrink: 0;
+	}
+
+	/* Very narrow: stack, player first. */
+	@media (max-width: 900px) {
+		.workspace {
+			flex-direction: column;
+			overflow-y: auto;
+		}
+
+		.preview-col {
+			overflow: visible;
+		}
+
+		.dock-col {
+			flex: 0 0 auto;
+			overflow: visible;
+		}
 	}
 
 	.continue-warning {
@@ -301,7 +347,7 @@
 		align-items: flex-start;
 		gap: 10px;
 		padding: 10px 12px;
-		margin: 0 0 8px;
+		margin: 0;
 		border-radius: var(--radius-md);
 		border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
 		background: color-mix(in srgb, var(--warning) 10%, var(--bg-surface));
@@ -330,7 +376,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin: 0 0 8px;
+		margin: 0;
 	}
 
 	.clip-source-label {
@@ -343,7 +389,8 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		max-width: 360px;
+		max-width: 100%;
+		min-width: 0;
 		padding: 6px 12px;
 		font: inherit;
 		font-size: 13px;
@@ -374,7 +421,7 @@
 	}
 
 	.asset-hint {
-		margin: 0 0 8px;
+		margin: 0;
 		font-size: 12px;
 		color: var(--text-muted);
 		line-height: 1.4;
@@ -383,7 +430,7 @@
 	.job-inputs-row {
 		display: flex;
 		justify-content: flex-end;
-		margin: 0 0 6px;
+		margin: 0;
 	}
 
 	.job-inputs-trigger {
