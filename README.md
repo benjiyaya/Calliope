@@ -9,7 +9,7 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 <img width="1508" height="1131" alt="Screenshot 2026-08-23 192042" src="https://github.com/user-attachments/assets/61cb10fb-a8a2-4096-beff-e504a8f7c8df" />
 
-<img width="1847" height="1177" alt="Screenshot 2026-08-23 231317" src="https://github.com/user-attachments/assets/4c1ccac3-39f0-4704-a129-6fc5b5039415" />
+<img width="1976" height="1154" alt="Screenshot 2026-09-13 025721" src="https://github.com/user-attachments/assets/b58fcecf-b6be-41ac-91d8-9f0df2fd8f21" />
 
 
 
