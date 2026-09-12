@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		name: string;
@@ -25,11 +26,11 @@
 		<span class="dot" class:running={phase === 'running'}></span>
 		<span class="name mono">{name}</span>
 		{#if phase === 'running'}
-			<span class="state">running…</span>
+			<span class="state">{t('agentTool.running')}</span>
 		{:else if phase === 'error'}
-			<span class="state err-text">failed</span>
+			<span class="state err-text">{t('agentTool.failed')}</span>
 		{:else}
-			<span class="state ok-text">done</span>
+			<span class="state ok-text">{t('agentTool.done')}</span>
 		{/if}
 		<span class="chev"><Icon name="chevron-down" size={13} /></span>
 	</button>
@@ -37,13 +38,13 @@
 		<div class="body">
 			{#if args && Object.keys(args).length > 0}
 				<div class="section">
-					<span class="label">args</span>
+					<span class="label">{t('agentTool.args')}</span>
 					<pre>{fmt(args)}</pre>
 				</div>
 			{/if}
 			{#if result != null}
 				<div class="section">
-					<span class="label">result</span>
+					<span class="label">{t('agentTool.result')}</span>
 					<pre>{fmt(result)}</pre>
 				</div>
 			{/if}

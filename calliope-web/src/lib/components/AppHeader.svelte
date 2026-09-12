@@ -1,4 +1,7 @@
 <script lang="ts">
+	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
+	import { t } from '$lib/i18n.svelte';
+
 	interface Props {
 		active?: 'projects' | 'canvas' | 'build-scene' | 'settings';
 		crumb?: string;
@@ -23,14 +26,15 @@
 				{@render status()}
 			</div>
 		{/if}
-		<nav class="top-nav" aria-label="Primary">
-			<a class="nav-link" class:active={active === 'canvas'} href="/canvas">AI Canvas</a>
-			<a class="nav-link" class:active={active === 'projects'} href="/projects">Projects</a>
-			<a class="nav-link" class:active={active === 'build-scene'} href="/build-scene">Build Scene</a>
-			<a class="nav-link" class:active={active === 'settings'} href="/settings">Settings</a>
+		<nav class="top-nav" aria-label={t('nav.primary')}>
+			<a class="nav-link" class:active={active === 'canvas'} href="/canvas">{t('nav.canvas')}</a>
+			<a class="nav-link" class:active={active === 'projects'} href="/projects">{t('nav.projects')}</a>
+			<a class="nav-link" class:active={active === 'build-scene'} href="/build-scene">{t('nav.buildScene')}</a>
+			<a class="nav-link" class:active={active === 'settings'} href="/settings">{t('nav.settings')}</a>
 		</nav>
 	</div>
 	<div class="header-right">
+		<LanguageSwitcher />
 		{#if children}
 			{@render children()}
 		{/if}

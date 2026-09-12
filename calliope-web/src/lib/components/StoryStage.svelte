@@ -16,6 +16,7 @@
 		recommendSceneCount,
 	} from '$lib/durationBudget';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 	import { agentDeepLink } from '$lib/agentTasks';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
@@ -45,7 +46,7 @@
 		'Romance',
 		'Thriller',
 	];
-	const LENGTHS_HINT = 'e.g. 2 minutes, 90 seconds, ~12 scenes';
+	const LENGTHS_HINT = $derived(t('story.lengthsHint'));
 	const TONES = [
 		'Cinematic, atmospheric',
 		'Dark, tense',
@@ -53,6 +54,29 @@
 		'Gritty, realistic',
 		'Epic, sweeping',
 	];
+
+	const GENRE_KEYS: Record<string, string> = {
+		'Adventure / Mystery': 'genres.adventure',
+		Drama: 'genres.drama',
+		'Sci-Fi': 'genres.scifi',
+		Fantasy: 'genres.fantasy',
+		Horror: 'genres.horror',
+		Romance: 'genres.romance',
+		Thriller: 'genres.thriller',
+	};
+	const TONE_KEYS: Record<string, string> = {
+		'Cinematic, atmospheric': 'tones.cinematic',
+		'Dark, tense': 'tones.dark',
+		'Whimsical, warm': 'tones.whimsical',
+		'Gritty, realistic': 'tones.gritty',
+		'Epic, sweeping': 'tones.epic',
+	};
+	function genreLabel(v: string): string {
+		return t(GENRE_KEYS[v] ?? v);
+	}
+	function toneLabel(v: string): string {
+		return t(TONE_KEYS[v] ?? v);
+	}
 
 	const EXAMPLE = {
 		idea: 'A lone cartographer discovers a map that rewrites itself every midnight, leading her into a forgotten city beneath the desert.',
@@ -134,7 +158,7 @@
 		},
 		onError: (err) => {
 			saveState = 'error';
-			toast.error(err instanceof Error ? err.message : 'Could not save story settings');
+			toast.error(err instanceof Error ? err.message : t('story.saveSettingsFailed'));
 		},
 	});
 
@@ -159,7 +183,7 @@
 		toneDraft = EXAMPLE.tone;
 		lengthDraft = EXAMPLE.target_duration;
 		const saved = await persistSettings();
-		if (saved) toast.success('Example story loaded');
+		if (saved) toast.success(t('story.exampleLoaded'));
 	}
 
 	function requestLoadExample() {
@@ -202,10 +226,10 @@
 			}
 			const created = (await res.json()) as Beat;
 			await client.invalidateQueries({ queryKey: ['story'] });
-			toast.success(`Beat ${nextIndex} added — edit it now`);
+			toast.success(t('story.beatAdded', { index: nextIndex }));
 			openBeat(created);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not add beat');
+			toast.error(err instanceof Error ? err.message : t('story.addBeatFailed'));
 		} finally {
 			addingBeat = false;
 		}
@@ -220,10 +244,10 @@
 		mutationFn: (beatId: number) => projects.deleteBeat(projectId, beatId),
 		onSuccess: () => {
 			client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Beat deleted');
+			toast.success(t('story.beatDeleted'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not delete beat');
+			toast.error(err instanceof Error ? err.message : t('story.deleteBeatFailed'));
 		},
 	});
 
@@ -238,10 +262,10 @@
 			editingBeat = null;
 			beatModalOpen = false;
 			client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Beat saved');
+			toast.success(t('story.beatSaved'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save beat');
+			toast.error(err instanceof Error ? err.message : t('story.saveBeatFailed'));
 		},
 	});
 
@@ -259,10 +283,10 @@
 			editingChar = null;
 			charModalOpen = false;
 			client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Character saved');
+			toast.success(t('story.characterSaved'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save character');
+			toast.error(err instanceof Error ? err.message : t('story.saveCharacterFailed'));
 		},
 	});
 
@@ -277,10 +301,10 @@
 			editingLoc = null;
 			locModalOpen = false;
 			client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Location saved');
+			toast.success(t('story.locationSaved'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save location');
+			toast.error(err instanceof Error ? err.message : t('story.saveLocationFailed'));
 		},
 	});
 
@@ -295,10 +319,10 @@
 			editingItem = null;
 			itemModalOpen = false;
 			client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Item saved');
+			toast.success(t('story.itemSaved'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save item');
+			toast.error(err instanceof Error ? err.message : t('story.saveItemFailed'));
 		},
 	});
 
@@ -307,81 +331,81 @@
 	}
 
 	function beatCountLabel(n: number): string {
-		return `${n} beat${n === 1 ? '' : 's'}`;
+		return t('story.beats', { n });
 	}
 </script>
 
 {#snippet saveIndicator()}
 	{#if saveState === 'saving'}
-		<span class="save-ind"><Spinner size="sm" /> Saving…</span>
+		<span class="save-ind"><Spinner size="sm" /> {t('common.saving')}</span>
 	{:else if saveState === 'saved'}
-		<span class="save-ind saved"><Icon name="check" size={13} /> Saved</span>
+		<span class="save-ind saved"><Icon name="check" size={13} /> {t('common.saved')}</span>
 	{:else if saveState === 'error'}
 		<span class="save-ind err">
-			<Icon name="alert" size={13} /> Save failed
-			<Button variant="ghost" size="sm" onclick={() => void persistSettings()}>Retry</Button>
+			<Icon name="alert" size={13} /> {t('common.saveFailed')}
+			<Button variant="ghost" size="sm" onclick={() => void persistSettings()}>{t('common.retry')}</Button>
 		</span>
 	{/if}
 {/snippet}
 
 <header class="stage-header">
-	<h2>1. Story</h2>
+	<h2>{t('story.stageTitle')}</h2>
 	<div class="stage-actions">
 		<Button
 			variant="secondary"
 			disabled={$saveProject.isPending}
 			onclick={requestLoadExample}
 		>
-			Load Example
+			{t('story.loadExample')}
 		</Button>
 		<Button variant="primary" disabled={!configured} onclick={() => void draftStoryline()}>
-			<Icon name="sparkle" size={15} /> Draft Storyline
+			<Icon name="sparkle" size={15} /> {t('story.draftStoryline')}
 		</Button>
 	</div>
 </header>
 
 {#if !configured}
-	<div class="banner">Configure an LLM in Settings before drafting a storyline.</div>
+	<div class="banner">{t('story.llmBanner')}</div>
 {/if}
 
 <div class="stack-col">
 	<Card>
 	{#snippet header()}
-		<h3 class="card-h">Story Idea</h3>
+		<h3 class="card-h">{t('story.ideaTitle')}</h3>
 		{@render saveIndicator()}
 	{/snippet}
 	<textarea
 		class="field-textarea"
 		bind:value={ideaDraft}
 		rows="5"
-		placeholder="A lone cartographer discovers a map that rewrites itself every midnight..."
+		placeholder={t('story.ideaPlaceholder')}
 		onblur={() => void persistSettings()}
 	></textarea>
 </Card>
 
 <Card>
 	{#snippet header()}
-		<h3 class="card-h">Settings</h3>
+		<h3 class="card-h">{t('story.settingsTitle')}</h3>
 		{@render saveIndicator()}
 	{/snippet}
 	<div class="grid-3">
 		<label class="field">
-			<span class="field-label">Genre</span>
+			<span class="field-label">{t('projects.genre')}</span>
 			<select
 				class="field-select"
 				bind:value={genreDraft}
 				onchange={() => void persistSettings()}
 			>
-				{#each GENRES as g}
-					<option value={g}>{g}</option>
+{#each GENRES as g}
+					<option value={g}>{genreLabel(g)}</option>
 				{/each}
 				{#if genreDraft && !GENRES.includes(genreDraft)}
-					<option value={genreDraft}>{genreDraft}</option>
+					<option value={genreDraft}>{genreLabel(genreDraft)}</option>
 				{/if}
 			</select>
 		</label>
 		<label class="field">
-			<span class="field-label">Target Length</span>
+			<span class="field-label">{t('story.targetLength')}</span>
 			<input
 				class="field-input"
 				type="text"
@@ -390,23 +414,21 @@
 				onblur={() => void persistSettings()}
 			/>
 			<span class="field-hint beat-hint">
-				Parsed as ~{secsBudget}s → Draft Storyline will require
-				<strong> {beatBudget} beats</strong>
-				(Script later aims for ~{sceneBudget} scenes). Example: “10 minutes”.
+				{t('story.lengthHint', { secs: secsBudget, beats: beatBudget, scenes: sceneBudget })}
 			</span>
 		</label>
 		<label class="field">
-			<span class="field-label">Tone</span>
+			<span class="field-label">{t('projects.tone')}</span>
 			<select
 				class="field-select"
 				bind:value={toneDraft}
 				onchange={() => void persistSettings()}
 			>
-				{#each TONES as t}
-					<option value={t}>{t}</option>
+				{#each TONES as tone}
+					<option value={tone}>{toneLabel(tone)}</option>
 				{/each}
 				{#if toneDraft && !TONES.includes(toneDraft)}
-					<option value={toneDraft}>{toneDraft}</option>
+					<option value={toneDraft}>{toneLabel(toneDraft)}</option>
 				{/if}
 			</select>
 		</label>
@@ -415,48 +437,46 @@
 
 <Card>
 	{#snippet header()}
-		<h3 class="card-h">Draft Storyline prompt</h3>
+		<h3 class="card-h">{t('story.draftPromptTitle')}</h3>
 		<Button variant="ghost" size="sm" onclick={() => (showDraftPrompt = !showDraftPrompt)}>
-			{showDraftPrompt ? 'Hide' : 'Show'} what we send to the LLM
+			{showDraftPrompt ? t('story.hidePrompt') : t('story.showPrompt')}
 		</Button>
 	{/snippet}
 	{#if showDraftPrompt}
 		<pre class="prompt-preview">{draftPromptPreview}</pre>
 		<p class="field-hint">
-			This is the user message (plus a short system rule). Beat count is a hard constraint;
-			if the model under-delivers, the server retries once, then errors instead of accepting a thin
-			outline.
+			{t('story.promptExplain')}
 		</p>
 	{:else}
 		<p class="field-hint prompt-collapsed">
-			Expand to inspect the exact prompt Draft Storyline sends to the LLM.
+			{t('story.promptCollapsedHint')}
 		</p>
 	{/if}
 </Card>
 
 <Card>
 	{#snippet header()}
-		<h3 class="card-h">Story Beats</h3>
+		<h3 class="card-h">{t('story.beatsTitle')}</h3>
 		<div class="head-actions">
 			{#if story.beats.length}
 				<StatusChip status="ready" label={beatCountLabel(story.beats.length)} />
 			{/if}
 			<Button variant="secondary" size="sm" loading={addingBeat} onclick={addBeat}>
-				<Icon name="plus" size={14} /> Add beat
+				<Icon name="plus" size={14} /> {t('story.addBeat')}
 			</Button>
 		</div>
 	{/snippet}
 	{#if story.beats.length === 0}
 		<EmptyState
-			title="No beats yet"
-			body="Draft a storyline to break your idea into beats, or add one manually and write it yourself."
+			title={t('story.noBeats')}
+			body={t('story.noBeatsBody')}
 		>
 			{#snippet icon()}
 				<Icon name="story" size={28} />
 			{/snippet}
 			{#snippet action()}
 				<Button variant="secondary" size="sm" loading={addingBeat} onclick={addBeat}>
-					<Icon name="plus" size={14} /> Add beat manually
+					<Icon name="plus" size={14} /> {t('story.addBeatManual')}
 				</Button>
 			{/snippet}
 		</EmptyState>
@@ -475,12 +495,10 @@
 						<Button
 							variant="ghost"
 							size="sm"
-							title="Delete beat {beat.order_index}"
+							title={t('story.deleteBeat', { index: beat.order_index })}
 							onclick={() => requestDeleteBeat(beat)}
 						>
-							<Icon name="trash" size={14} /><span class="sr-only"
-								>Delete beat {beat.order_index}</span
-							>
+							<Icon name="trash" size={14} /><span class="sr-only">{t('story.deleteBeat', { index: beat.order_index })}</span>
 						</Button>
 					</div>
 				</div>
@@ -488,7 +506,7 @@
 		</div>
 		<div class="beats-footer">
 			<Button variant="primary" onclick={goToAssets}>
-				Continue to Assets <Icon name="chevron-right" size={15} />
+				{t('story.continueAssets')} <Icon name="chevron-right" size={15} />
 			</Button>
 		</div>
 	{/if}
@@ -497,9 +515,9 @@
 {#if story.characters.length || story.locations.length || story.items.length}
 	<Card>
 		{#snippet header()}
-			<h3 class="card-h">Extracted</h3>
+			<h3 class="card-h">{t('story.extracted')}</h3>
 			<Button variant="ghost" size="sm" onclick={goToAssets}>
-				Open in Assets <Icon name="chevron-right" size={14} />
+				{t('story.openAssets')} <Icon name="chevron-right" size={14} />
 			</Button>
 		{/snippet}
 		<div class="chips">
@@ -513,7 +531,7 @@
 					}}
 					title={char.appearance ?? ''}
 				>
-					<span class="chip-tag">Char</span>
+					<span class="chip-tag">{t('story.charTag')}</span>
 					{char.name}
 				</button>
 			{/each}
@@ -527,7 +545,7 @@
 					}}
 					title={loc.description ?? ''}
 				>
-					<span class="chip-tag">Env</span>
+					<span class="chip-tag">{t('story.envTag')}</span>
 					{loc.name}
 				</button>
 			{/each}
@@ -541,7 +559,7 @@
 					}}
 					title={item.description ?? ''}
 				>
-					<span class="chip-tag">Item</span>
+					<span class="chip-tag">{t('story.itemTag')}</span>
 					{item.name}
 				</button>
 			{/each}
@@ -550,156 +568,156 @@
 {/if}
 </div>
 
-<Modal bind:open={beatModalOpen} title="Edit Beat" onclose={() => (editingBeat = null)}>
+<Modal bind:open={beatModalOpen} title={t('story.editBeatTitle')} onclose={() => (editingBeat = null)}>
 	{#if editingBeat}
 		<label class="field">
-			<span class="field-label">Title</span>
+			<span class="field-label">{t('story.fieldTitle')}</span>
 			<input class="field-input" bind:value={editingBeat.title} />
 		</label>
 		<label class="field">
-			<span class="field-label">Description</span>
+			<span class="field-label">{t('story.fieldDescription')}</span>
 			<textarea class="field-textarea" rows="4" bind:value={editingBeat.description}></textarea>
 		</label>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (beatModalOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (beatModalOpen = false)}>{t('common.cancel')}</Button>
 		<Button variant="primary" loading={$saveBeat.isPending} onclick={() => $saveBeat.mutate()}>
-			Save
+			{t('common.save')}
 		</Button>
 	{/snippet}
 </Modal>
 
-<Modal bind:open={charModalOpen} title="Edit Character" onclose={() => (editingChar = null)}>
+<Modal bind:open={charModalOpen} title={t('story.editCharTitle')} onclose={() => (editingChar = null)}>
 	{#if editingChar}
 		<label class="field">
-			<span class="field-label">Name</span>
-			<input class="field-input" bind:value={editingChar.name} placeholder="Name" />
+			<span class="field-label">{t('story.fieldName')}</span>
+			<input class="field-input" bind:value={editingChar.name} placeholder={t('story.fieldName')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Role</span>
-			<input class="field-input" bind:value={editingChar.role} placeholder="Role" />
+			<span class="field-label">{t('story.fieldRole')}</span>
+			<input class="field-input" bind:value={editingChar.role} placeholder={t('story.fieldRole')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Age</span>
-			<input class="field-input" bind:value={editingChar.age} placeholder="Age" />
+			<span class="field-label">{t('story.fieldAge')}</span>
+			<input class="field-input" bind:value={editingChar.age} placeholder={t('story.fieldAge')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Appearance</span>
+			<span class="field-label">{t('story.fieldAppearance')}</span>
 			<textarea
 				class="field-textarea"
 				rows="3"
 				bind:value={editingChar.appearance}
-				placeholder="Appearance"
+				placeholder={t('story.fieldAppearance')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Personality</span>
+			<span class="field-label">{t('story.fieldPersonality')}</span>
 			<textarea
 				class="field-textarea"
 				rows="2"
 				bind:value={editingChar.personality}
-				placeholder="Personality"
+				placeholder={t('story.fieldPersonality')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Consistency prompt</span>
+			<span class="field-label">{t('story.fieldConsistency')}</span>
 			<textarea
 				class="field-textarea"
 				rows="2"
 				bind:value={editingChar.consistency_prompt}
-				placeholder="Consistency prompt"
+				placeholder={t('story.fieldConsistency')}
 			></textarea>
 		</label>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (charModalOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (charModalOpen = false)}>{t('common.cancel')}</Button>
 		<Button variant="primary" loading={$saveChar.isPending} onclick={() => $saveChar.mutate()}>
-			Save
+			{t('common.save')}
 		</Button>
 	{/snippet}
 </Modal>
 
-<Modal bind:open={locModalOpen} title="Edit Location" onclose={() => (editingLoc = null)}>
+<Modal bind:open={locModalOpen} title={t('story.editLocTitle')} onclose={() => (editingLoc = null)}>
 	{#if editingLoc}
 		<label class="field">
-			<span class="field-label">Name</span>
-			<input class="field-input" bind:value={editingLoc.name} placeholder="Name" />
+			<span class="field-label">{t('story.fieldName')}</span>
+			<input class="field-input" bind:value={editingLoc.name} placeholder={t('story.fieldName')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Description</span>
+			<span class="field-label">{t('story.fieldDescription')}</span>
 			<textarea
 				class="field-textarea"
 				rows="3"
 				bind:value={editingLoc.description}
-				placeholder="Description"
+				placeholder={t('story.fieldDescription')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Consistency prompt</span>
+			<span class="field-label">{t('story.fieldConsistency')}</span>
 			<textarea
 				class="field-textarea"
 				rows="2"
 				bind:value={editingLoc.consistency_prompt}
-				placeholder="Consistency prompt"
+				placeholder={t('story.fieldConsistency')}
 			></textarea>
 		</label>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (locModalOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (locModalOpen = false)}>{t('common.cancel')}</Button>
 		<Button variant="primary" loading={$saveLoc.isPending} onclick={() => $saveLoc.mutate()}>
-			Save
+			{t('common.save')}
 		</Button>
 	{/snippet}
 </Modal>
 
-<Modal bind:open={itemModalOpen} title="Edit Item" onclose={() => (editingItem = null)}>
+<Modal bind:open={itemModalOpen} title={t('story.editItemTitle')} onclose={() => (editingItem = null)}>
 	{#if editingItem}
 		<label class="field">
-			<span class="field-label">Name</span>
-			<input class="field-input" bind:value={editingItem.name} placeholder="Name" />
+			<span class="field-label">{t('story.fieldName')}</span>
+			<input class="field-input" bind:value={editingItem.name} placeholder={t('story.fieldName')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Description</span>
+			<span class="field-label">{t('story.fieldDescription')}</span>
 			<textarea
 				class="field-textarea"
 				rows="3"
 				bind:value={editingItem.description}
-				placeholder="Description"
+				placeholder={t('story.fieldDescription')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Consistency prompt</span>
+			<span class="field-label">{t('story.fieldConsistency')}</span>
 			<textarea
 				class="field-textarea"
 				rows="2"
 				bind:value={editingItem.consistency_prompt}
-				placeholder="Consistency prompt"
+				placeholder={t('story.fieldConsistency')}
 			></textarea>
 		</label>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (itemModalOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (itemModalOpen = false)}>{t('common.cancel')}</Button>
 		<Button variant="primary" loading={$saveItem.isPending} onclick={() => $saveItem.mutate()}>
-			Save
+			{t('common.save')}
 		</Button>
 	{/snippet}
 </Modal>
 
 <ConfirmDialog
 	bind:open={confirmExampleOpen}
-	title="Load example?"
-	message="Replace your current idea with the example? This overwrites the idea, genre, tone and target length."
-	confirmLabel="Load example"
+	title={t('story.confirmExampleTitle')}
+	message={t('story.confirmExampleMsg')}
+	confirmLabel={t('story.loadExample')}
 	onconfirm={() => void loadExample()}
 />
 
 <ConfirmDialog
 	bind:open={beatDeleteOpen}
-	title="Delete beat?"
+	title={t('story.confirmDeleteBeatTitle')}
 	message={deletingBeat
-		? `Delete beat ${deletingBeat.order_index} “${deletingBeat.title}”? This cannot be undone.`
+		? t('story.confirmDeleteBeatMsg', { index: deletingBeat.order_index, title: deletingBeat.title })
 		: ''}
-	confirmLabel="Delete"
+	confirmLabel={t('common.delete')}
 	danger
 	onconfirm={() => {
 		const id = deletingBeat?.id;

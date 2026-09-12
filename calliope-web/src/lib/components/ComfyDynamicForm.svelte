@@ -4,6 +4,7 @@
 	import { toast } from '$lib/toast';
 	import Icon from './ui/Icon.svelte';
 	import Spinner from './ui/Spinner.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		inputs: ComfyDynamicInput[];
@@ -180,7 +181,7 @@
 			setValue(inp.nodeId, res.path);
 			markTouched(inp.nodeId);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Upload failed');
+			toast.error(err instanceof Error ? err.message : t('cdf.uploadFailed'));
 		} finally {
 			const next = { ...uploading };
 			delete next[inp.nodeId];
@@ -206,8 +207,7 @@
 
 {#if inputs.length === 0}
 	<p class="muted">
-		No (Input) / (Input:role) nodes detected. In ComfyUI, title editable nodes like
-		<code>(Input:prompt)</code> — see AGENTS.md.
+		{@html t('cdf.noInputs')}
 	</p>
 {:else}
 	<div class="form">
@@ -229,7 +229,7 @@
 				<label class="label" for={id}>
 					{inp.label}
 					{#if inp.required}
-						<span class="req" title="Required" aria-hidden="true">*</span>
+						<span class="req" title={t('cdf.required')} aria-hidden="true">*</span>
 					{/if}
 					{#if !quiet}
 						{#if inp.role}<span class="role">{inp.role}</span>{/if}
@@ -271,7 +271,7 @@
 									<img
 										class="upload-thumb"
 										src={assetUrl(current)}
-										alt="Uploaded file preview"
+										alt={t('cdf.uploadedPreviewAlt')}
 										onerror={hideBrokenThumb}
 									/>
 								{:else}
@@ -283,7 +283,7 @@
 								<button
 									type="button"
 									class="upload-clear"
-									aria-label="Clear"
+									aria-label={t('cdf.clearAria')}
 									onclick={() => setValue(inp.nodeId, '')}
 								>
 									<Icon name="close" size={14} />
@@ -306,23 +306,23 @@
 						>
 							{#if uploadingName}
 								<Spinner size="sm" />
-								<span>Uploading {truncateMiddle(uploadingName, 24)}…</span>
+								<span>{t('cdf.uploading', { name: truncateMiddle(uploadingName, 24) })}</span>
 							{:else}
 								<Icon name="upload" size={16} />
-								<span>Drop {uploadKindLabel(inp.kind)} here or <u>browse</u></span>
+								<span>{t('cdf.dropPre', { kind: t(uploadKindLabel(inp.kind)) })} <u>{t('cdf.browse')}</u></span>
 							{/if}
 						</button>
 						{#if assetOptions.length}
 							{@const thumb = thumbFor(current)}
 							<p class="upload-divider" aria-hidden="true">
-								<span>or choose an existing asset</span>
+								<span>{t('cdf.orChooseAsset')}</span>
 							</p>
 							<div class="pick-row">
 								{#if isImageKind(inp.kind) && thumb}
 									<img
 										class="pick-thumb"
 										src={thumb}
-										alt="Selected asset preview"
+										alt={t('cdf.selectedPreviewAlt')}
 										onerror={hideBrokenThumb}
 									/>
 								{/if}
@@ -338,7 +338,7 @@
 										markTouched(inp.nodeId);
 									}}
 								>
-									<option value="">Choose asset…</option>
+									<option value="">{t('cdf.chooseAsset')}</option>
 									{#each assetOptions as opt}
 										<option value={opt.path}>{opt.label}</option>
 									{/each}
@@ -349,7 +349,7 @@
 										class="clear"
 										onclick={() => setValue(inp.nodeId, '')}
 									>
-										Clear
+										{t('cdf.clear')}
 									</button>
 								{/if}
 							</div>
@@ -363,7 +363,7 @@
 								<img
 									class="pick-thumb"
 									src={thumb}
-									alt="Selected asset preview"
+									alt={t('cdf.selectedPreviewAlt')}
 									onerror={hideBrokenThumb}
 								/>
 							{/if}
@@ -379,7 +379,7 @@
 									markTouched(inp.nodeId);
 								}}
 							>
-								<option value="">Choose asset…</option>
+								<option value="">{t('cdf.chooseAsset')}</option>
 								{#each assetOptions as opt}
 									<option value={opt.path}>{opt.label}</option>
 								{/each}
@@ -390,12 +390,12 @@
 									class="clear"
 									onclick={() => setValue(inp.nodeId, '')}
 								>
-									Clear
+									{t('cdf.clear')}
 								</button>
 							{/if}
 						</div>
 					{:else}
-						<p class="hint">No assets yet — generate sheets / environments in Assets first.</p>
+						<p class="hint">{t('cdf.noAssets')}</p>
 					{/if}
 				{:else if inp.kind === 'audio'}
 					{#if assetOptions.length}
@@ -410,7 +410,7 @@
 								markTouched(inp.nodeId);
 							}}
 						>
-							<option value="">Choose asset…</option>
+							<option value="">{t('cdf.chooseAsset')}</option>
 							{#each assetOptions as opt}
 								<option value={opt.path}>{opt.label}</option>
 							{/each}
@@ -422,7 +422,7 @@
 							class:invalid={errored}
 							aria-required={inp.required || undefined}
 							aria-invalid={errored || undefined}
-							placeholder="Local path"
+							placeholder={t('cdf.localPath')}
 							value={current}
 							oninput={(e) => setValue(inp.nodeId, e.currentTarget.value)}
 							onblur={() => markTouched(inp.nodeId)}
@@ -441,7 +441,7 @@
 					/>
 				{/if}
 				{#if errored}
-					<span class="error-msg" role="alert">{inp.label} is required</span>
+					<span class="error-msg" role="alert">{t('cdf.requiredMsg', { label: inp.label })}</span>
 				{/if}
 			</div>
 		{/each}

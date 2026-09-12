@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toStore } from 'svelte/store';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 	import {
 		assetUrl,
 		jobsApi,
@@ -165,7 +166,7 @@
 		for (const sc of scenes) {
 			if (sc.video_path) {
 				opts.push({
-					label: `Clip #${sc.order_index} · ${sc.heading || 'scene'}`,
+					label: `Clip #${sc.order_index} · ${sc.heading || t('queue.sceneLabel')}`,
 					path: sc.video_path,
 					kind: 'video',
 					group: 'clip',
@@ -176,20 +177,20 @@
 			// Documents are agent-context files, not Comfy job inputs — never
 			// offer them in a reference picker.
 			if (up.kind === 'document') continue;
-			opts.push({ label: `${up.name} · upload`, path: up.path, kind: up.kind, group: 'upload' });
+			opts.push({ label: `${up.name} · ${t('queue.uploadSuffix')}`, path: up.path, kind: up.kind, group: 'upload' });
 		}
 		for (const cap of $shotCapturesQuery.data ?? []) {
 			if (!cap.file_path) continue;
 			if (cap.kind === 'video') {
 				opts.push({
-					label: `${cap.compTitle} · ${cap.label || 'Blockout'} · blockout clip`,
+					label: `${cap.compTitle} · ${cap.label || t('queue.blockoutLabel')} · ${t('queue.blockoutClipSuffix')}`,
 					path: cap.file_path,
 					kind: 'video',
 					group: 'shot',
 				});
 			} else if (cap.kind === 'image') {
 				opts.push({
-					label: `${cap.compTitle} · ${cap.label || 'Blockout'} · blockout`,
+					label: `${cap.compTitle} · ${cap.label || t('queue.blockoutLabel')} · ${t('queue.blockoutSuffix')}`,
 					path: cap.file_path,
 					kind: 'image',
 					group: 'shot',
@@ -343,12 +344,12 @@
 			for (const [i, c] of (s.clips ?? []).entries()) {
 				if (!c.clip_path) continue;
 				out.push({
-					label: `${s.clips.length > 1 ? `#${s.order_index}.${i + 1}` : `#${s.order_index}`} · ${s.heading || 'scene'}`,
+					label: `${s.clips.length > 1 ? `#${s.order_index}.${i + 1}` : `#${s.order_index}`} · ${s.heading || t('queue.sceneLabel')}`,
 					path: c.clip_path,
 				});
 			}
 			if ((s.clips?.length ?? 0) === 0 && s.video_path) {
-				out.push({ label: `#${s.order_index} · ${s.heading || 'scene'}`, path: s.video_path });
+				out.push({ label: `#${s.order_index} · ${s.heading || t('queue.sceneLabel')}`, path: s.video_path });
 			}
 		}
 		return out;
@@ -369,7 +370,7 @@ const generateOne = createMutation({
 		onSuccess: async () => {
 			await client.invalidateQueries({ queryKey: ['jobs'] });
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success('Clip queued');
+			toast.success(t('queue.clipQueued'));
 		},
 		onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
 	});
@@ -384,7 +385,7 @@ const generateOne = createMutation({
 		try {
 			await projects.updateClip(projectId, clipId, { clip_path: path });
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success('Clip render updated');
+			toast.success(t('queue.clipRenderUpdated'));
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -441,8 +442,8 @@ const generateOne = createMutation({
 		batching
 			? batchNote
 			: scenesNeedingClip.length > 0
-				? `Generate all (${clipTotal - clipsReady} missing)`
-				: 'Regenerate all',
+				? t('queue.generateMissing', { count: clipTotal - clipsReady })
+				: t('queue.regenerateAll'),
 	);
 
 	async function generateAll() {
@@ -459,26 +460,26 @@ const generateOne = createMutation({
 				clips.length > 0
 					? clips.map((c) => ({ id: c.id, key: String(c.id) }))
 					: [{ id: scene.id, key: String(scene.id) }];
-			for (const t of renderTargets) {
+			for (const target of renderTargets) {
 				done++;
-				batchNote = `Queueing ${done}/${totalClips}…`;
+				batchNote = t('queue.queueingProgress', { current: done, total: totalClips });
 				try {
 					// Resolve like the per-clip button does: session pick → scene's stored
 					// workflow → first enabled video workflow. A scene whose stored workflow
 					// was deleted would otherwise enqueue a job doomed to "No workflow found".
 					// Fresh per-clip drafts ride along; stale/absent drafts get the backend's
 					// auto-rewrite (deterministic template on LLM failure).
-					const clip = clips.length > 0 ? clips.find((c) => c.id === t.id) : null;
+					const clip = clips.length > 0 ? clips.find((c) => c.id === target.id) : null;
 					const draft = clip?.video_settings?.prompt_draft;
 					const draftFresh =
 						draft && clip?.video_settings?.prompt_draft_meta?.based_on
 							? clip.video_settings.prompt_draft_meta.based_on
 							: null;
 					await jobsApi.generateVideos(projectId, {
-						clip_ids: clip ? [t.id] : undefined,
-						scene_ids: clip ? undefined : [t.id],
+						clip_ids: clip ? [target.id] : undefined,
+						scene_ids: clip ? undefined : [target.id],
 						workflow_id: workflowFor(scene)?.id,
-						prompts: draft ? { [t.key]: draft } : undefined,
+						prompts: draft ? { [target.key]: draft } : undefined,
 					});
 					queued++;
 					if (draft) drafted++;
@@ -487,8 +488,8 @@ const generateOne = createMutation({
 				} catch (err) {
 					const label =
 						clips.length > 0
-							? `Clip #${scene.order_index}.${(clips.findIndex((c) => c.id === t.id) ?? 0) + 1}`
-							: `Scene #${scene.order_index}`;
+							? t('queue.clipRef', { ref: `#${scene.order_index}.${(clips.findIndex((c) => c.id === target.id) ?? 0) + 1}` })
+							: t('queue.sceneRef', { ref: `#${scene.order_index}` });
 					toast.error(`${label}: ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}
@@ -496,10 +497,9 @@ const generateOne = createMutation({
 		batching = false;
 		batchNote = '';
 		if (queued > 0) {
-			const draftNote = drafted > 0 ? ` · ${drafted} saved draft${drafted === 1 ? '' : 's'}` : '';
-			toast.success(
-				`${queued} clip${queued === 1 ? '' : 's'} queued — rendering in sequence${draftNote}`,
-			);
+			const draftNote =
+				drafted > 0 ? ` · ${t('queue.savedDrafts', { count: drafted })}` : '';
+			toast.success(t('queue.queuedInSequence', { count: queued, draftNote }));
 		}
 		await client.invalidateQueries({ queryKey: ['jobs'] });
 		await client.invalidateQueries({ queryKey: ['scenes'] });
@@ -731,14 +731,14 @@ const generateOne = createMutation({
 	);
 
 	const filmChip = $derived.by((): { status: string; label: string } => {
-		if (exportState === 'active') return { status: 'running', label: 'Exporting' };
+		if (exportState === 'active') return { status: 'running', label: t('queue.exporting') };
 		if (exportState === 'ready') {
 			return exportStale
-				? { status: 'paused', label: 'Clips changed' }
-				: { status: 'ready', label: 'Ready' };
+				? { status: 'paused', label: t('queue.clipsChanged') }
+				: { status: 'ready', label: t('common.ready') };
 		}
-		if (exportState === 'failed') return { status: 'failed', label: 'Export failed' };
-		return { status: 'idle', label: 'Not exported' };
+		if (exportState === 'failed') return { status: 'failed', label: t('queue.exportFailed') };
+		return { status: 'idle', label: t('queue.notExported') };
 	});
 
 	// Small status dot on the Film tab; the Film view itself carries the full text state.
@@ -752,7 +752,7 @@ const generateOne = createMutation({
 		mutationFn: () => jobsApi.exportFilm(projectId),
 		onSuccess: async () => {
 			await client.invalidateQueries({ queryKey: ['jobs'] });
-			toast.success('Export queued');
+			toast.success(t('queue.exportQueued'));
 		},
 		onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
 	});
@@ -771,12 +771,17 @@ const generateOne = createMutation({
 <div class="queue-root" class:is-edit={view === 'edit'}>
 <header class="stage-header">
 	<div>
-		<h2>4. Video</h2>
+		<h2>4. {t('nav.video')}</h2>
 		<p class="muted">
 			{#if scenes.length === 0}
-				Build a script first, then cut clips on the timeline.
+				{t('queue.emptyHeader')}
 			{:else}
-				{doneCount}/{clipTotal} clips done · {formatClock(totalSec)} total · {scenes.length} scenes
+				{t('queue.clipsDoneSummary', {
+					done: doneCount,
+					total: clipTotal,
+					time: formatClock(totalSec),
+					scenes: scenes.length,
+				})}
 			{/if}
 		</p>
 	</div>
@@ -786,16 +791,16 @@ const generateOne = createMutation({
 				variant="primary"
 				disabled={batching || batchTargets.length === 0}
 				loading={batching}
-				title="Queue every scene's clip in timeline order; the worker renders them one at a time"
+				title={t('queue.generateAllTitle')}
 				onclick={generateAll}
 			>
 				<Icon name="film" size={14} /> {batchLabel}
 			</Button>
 		{/if}
 		<Button variant="secondary" onclick={togglePause}>
-			{$queueStatusQuery.data?.paused ? 'Resume queue' : 'Pause queue'}
+			{$queueStatusQuery.data?.paused ? t('queue.resumeQueue') : t('queue.pauseQueue')}
 		</Button>
-		<div class="view-toggle" role="tablist" aria-label="Video stage view">
+		<div class="view-toggle" role="tablist" aria-label={t('queue.viewAria')}>
 			<button
 				type="button"
 				role="tab"
@@ -804,7 +809,7 @@ const generateOne = createMutation({
 				class:active={view === 'edit'}
 				onclick={() => (view = 'edit')}
 			>
-				<Icon name="edit" size={14} /> Edit
+				<Icon name="edit" size={14} /> {t('queue.editTab')}
 			</button>
 			<button
 				type="button"
@@ -814,7 +819,7 @@ const generateOne = createMutation({
 				class:active={view === 'film'}
 				onclick={() => (view = 'film')}
 			>
-				<Icon name="film" size={14} /> Film
+				<Icon name="film" size={14} /> {t('queue.filmTab')}
 				{#if filmDot}
 					<span class="film-dot dot-{filmDot}" aria-hidden="true"></span>
 				{/if}
@@ -827,18 +832,20 @@ const generateOne = createMutation({
 	{#if $queueStatusQuery.data?.paused}
 		<div class="paused-banner" role="status">
 			<Icon name="alert" size={16} />
-			<StatusChip status="paused" label="Queue paused" />
-			<span class="paused-text">Renders are held — workers sit idle until you resume.</span>
+			<StatusChip status="paused" label={t('queue.paused')} />
+			<span class="paused-text">{t('queue.pausedText')}</span>
 			<span class="paused-action">
-				<Button size="sm" variant="secondary" onclick={resumeQueue}>Resume now</Button>
+				<Button size="sm" variant="secondary" onclick={resumeQueue}
+					>{t('queue.resumeNow')}</Button
+				>
 			</span>
 		</div>
 	{/if}
 
 	{#if scenes.length === 0}
 		<div class="empty">
-			<p class="empty-title">No timeline yet</p>
-			<p class="muted">Generate or add scenes in Script, then come back to render clips.</p>
+			<p class="empty-title">{t('queue.noTimeline')}</p>
+			<p class="muted">{t('queue.noTimelineBody')}</p>
 		</div>
 	{:else if selected}
 		{@const selWf = workflowFor(selected)}
@@ -886,7 +893,7 @@ const generateOne = createMutation({
 			applying={applyingJob}
 			generateDisabled={selBlocked}
 			generateDisabledReason={selBlocked
-				? 'This clip continues from the previous video — pick a workflow with a video input'
+				? t('queue.chainDisabledReason')
 				: ''}
 			clipSource={{
 				enabled: selChain && selHasVideoInput && Boolean(selVideoNode),
@@ -936,7 +943,7 @@ const generateOne = createMutation({
 	/>
 	{/if}
 {:else}
-	<section class="film-view" aria-label="Film screening room">
+	<section class="film-view" aria-label={t('queue.filmViewAria')}>
 		<div class="marquee">
 			<span class="marquee-icon" aria-hidden="true"><Icon name="film" size={20} /></span>
 			<h2 class="marquee-title">{projectTitle}</h2>
@@ -946,116 +953,127 @@ const generateOne = createMutation({
 		</div>
 
 		<div class="program-frame">
-			{#if exportState === 'ready'}
-				<SafeMedia
-					class="program-media"
-					src={assetUrl(exportPath)}
-					kind="video"
-					label="Export unavailable"
-				/>
-				{#if exportStale}
-					<div class="stale-banner" role="status">
-						<Icon name="alert" size={14} />
-						<span>Clips changed since this export — re-export to update.</span>
-					</div>
-				{/if}
-			{:else if exportState === 'active'}
-				<div class="program-slate">
-					<Spinner size="lg" />
-					<h3 class="slate-title">Exporting your film…</h3>
-					<div class="slate-progress">
-						<ProgressBar
-							value={exportProg?.progress ?? 0}
-							indeterminate={exportProg == null}
-							label={exportProg?.message}
-						/>
-					</div>
-					<p class="slate-sub">You can keep editing — export runs in the background.</p>
-					<Button variant="ghost" size="sm" onclick={cancelExport}>Cancel</Button>
-				</div>
-			{:else if exportState === 'failed'}
-				<div class="program-slate">
-					<span class="slate-icon slate-icon-err" aria-hidden="true">
-						<Icon name="alert" size={32} />
-					</span>
-					<h3 class="slate-title">Export failed</h3>
-					<p class="slate-err" title={exportJob?.error ?? 'Export failed'}>
-						{exportJob?.error || 'Export failed'}
-					</p>
-					<Button
-						variant="secondary"
-						loading={$exportFilm.isPending}
-						onclick={() => $exportFilm.mutate()}
-					>
-						Retry export
-					</Button>
-				</div>
-			{:else}
-				<div class="program-slate">
-					<span class="slate-icon" aria-hidden="true">
-						<Icon name="film" size={32} />
-					</span>
-					<h3 class="slate-title">Your film isn't exported yet</h3>
-					<p class="slate-sub">
-						{clipsReady} clips · {formatClock(totalSec)} · 0.5s crossfades · loudness matched
-					</p>
-					{#if clipsMissing > 0}
-						<p class="slate-warn" role="status">
-							<Icon name="alert" size={14} />
-							<span>
-								{clipsMissing} clip{clipsMissing === 1 ? '' : 's'} without a render will be skipped
-							</span>
-						</p>
-					{/if}
-					<Button
-						variant="primary"
-						disabled={clipsReady === 0}
-						loading={$exportFilm.isPending}
-						title={clipsReady === 0 ? 'Finish at least one clip to export a film' : 'Export film'}
-						onclick={() => $exportFilm.mutate()}
-					>
-						<Icon name="film" size={14} /> Export film
-					</Button>
+{#if exportState === 'ready'}
+			<SafeMedia
+				class="program-media"
+				src={assetUrl(exportPath)}
+				kind="video"
+				label={t('queue.exportUnavailable')}
+			/>
+			{#if exportStale}
+				<div class="stale-banner" role="status">
+					<Icon name="alert" size={14} />
+					<span>{t('queue.staleBanner')}</span>
 				</div>
 			{/if}
-		</div>
-
-		{#if exportState === 'ready'}
-			{@const exportUrl = assetUrl(exportPath)}
-			<div class="film-meta">
-				<span class="film-meta-text">
-					{exportClipCount} clips · {formatClock(totalSec)}{#if exportedAgo} · Exported {exportedAgo}{/if}
-				</span>
-				<div class="film-actions">
-					{#if exportUrl}
-						<a class="btn-dl" href={exportUrl} download={`${projectTitle}.mp4`}>
-							<Icon name="download" size={14} /> Download film
-						</a>
-					{/if}
-					<Button
-						variant={exportStale ? 'primary' : 'ghost'}
-						size="sm"
-						loading={$exportFilm.isPending}
-						onclick={() => $exportFilm.mutate()}
-					>
-						Re-export
-					</Button>
+		{:else if exportState === 'active'}
+			<div class="program-slate">
+				<Spinner size="lg" />
+				<h3 class="slate-title">{t('queue.exportingTitle')}</h3>
+				<div class="slate-progress">
+					<ProgressBar
+						value={exportProg?.progress ?? 0}
+						indeterminate={exportProg == null}
+						label={exportProg?.message}
+					/>
 				</div>
+				<p class="slate-sub">{t('queue.exportingSub')}</p>
+				<Button variant="ghost" size="sm" onclick={cancelExport}
+					>{t('common.cancel')}</Button
+				>
+			</div>
+		{:else if exportState === 'failed'}
+			<div class="program-slate">
+				<span class="slate-icon slate-icon-err" aria-hidden="true">
+					<Icon name="alert" size={32} />
+				</span>
+				<h3 class="slate-title">{t('queue.exportFailed')}</h3>
+				<p class="slate-err" title={exportJob?.error ?? t('queue.exportFailed')}>
+					{exportJob?.error || t('queue.exportFailed')}
+				</p>
+				<Button
+					variant="secondary"
+					loading={$exportFilm.isPending}
+					onclick={() => $exportFilm.mutate()}
+				>
+					{t('queue.retryExport')}
+				</Button>
+			</div>
+		{:else}
+			<div class="program-slate">
+				<span class="slate-icon" aria-hidden="true">
+					<Icon name="film" size={32} />
+				</span>
+				<h3 class="slate-title">{t('queue.notExportedTitle')}</h3>
+				<p class="slate-sub">
+					{t('queue.slateSub', {
+						clips: clipsReady,
+						time: formatClock(totalSec),
+					})}
+				</p>
+				{#if clipsMissing > 0}
+					<p class="slate-warn" role="status">
+						<Icon name="alert" size={14} />
+						<span>{t('queue.clipsMissing', { count: clipsMissing })}</span>
+					</p>
+				{/if}
+				<Button
+					variant="primary"
+					disabled={clipsReady === 0}
+					loading={$exportFilm.isPending}
+					title={
+						clipsReady === 0
+							? t('queue.exportDisabledTitle')
+							: t('queue.exportFilm')
+					}
+					onclick={() => $exportFilm.mutate()}
+				>
+					<Icon name="film" size={14} /> {t('queue.exportFilm')}
+				</Button>
 			</div>
 		{/if}
+	</div>
 
-		{#if filmClips.length > 0}
-			<div class="filmstrip-block">
-				<p class="filmstrip-label">In this film</p>
-				<div class="filmstrip">
-					{#each filmClips as entry (entry.clip.id)}
-						{@const thumb = thumbForClip(entry.clip.id)}
-						<button
-							type="button"
-							class="filmstrip-item"
-							title={`${entry.scene.heading || 'Scene'} ${entry.label} — edit in timeline`}
-							onclick={() => editScene(entry.scene.id)}
-						>
+	{#if exportState === 'ready'}
+		{@const exportUrl = assetUrl(exportPath)}
+		<div class="film-meta">
+			<span class="film-meta-text">
+				{t('queue.filmMeta', { clips: exportClipCount, time: formatClock(totalSec) })}
+				{#if exportedAgo} · {t('queue.exportedAgo', { ago: exportedAgo })}{/if}
+			</span>
+			<div class="film-actions">
+				{#if exportUrl}
+					<a class="btn-dl" href={exportUrl} download={`${projectTitle}.mp4`}>
+						<Icon name="download" size={14} /> {t('queue.downloadFilm')}
+					</a>
+				{/if}
+				<Button
+					variant={exportStale ? 'primary' : 'ghost'}
+					size="sm"
+					loading={$exportFilm.isPending}
+					onclick={() => $exportFilm.mutate()}
+				>
+					{t('queue.reexport')}
+				</Button>
+			</div>
+		</div>
+	{/if}
+
+	{#if filmClips.length > 0}
+		<div class="filmstrip-block">
+			<p class="filmstrip-label">{t('queue.inThisFilm')}</p>
+			<div class="filmstrip">
+				{#each filmClips as entry (entry.clip.id)}
+					{@const thumb = thumbForClip(entry.clip.id)}
+					<button
+						type="button"
+						class="filmstrip-item"
+						title={t('queue.editInTimeline', {
+							scene: entry.scene.heading || t('queue.scene'),
+							label: entry.label,
+						})}
+						onclick={() => editScene(entry.scene.id)}
+					>
 							{#if thumb?.kind === 'image'}
 								<img class="filmstrip-media" src={thumb.src} alt="" loading="lazy" />
 							{:else if thumb?.kind === 'video'}

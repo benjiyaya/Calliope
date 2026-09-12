@@ -2,11 +2,12 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { projects, type Project } from '$lib/api';
-	import ProjectCard from '$lib/components/ProjectCard.svelte';
+	import { t } from '$lib/i18n.svelte';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import ProjectCard from '$lib/components/ProjectCard.svelte';
 	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	import { toast } from '$lib/toast';
 
@@ -21,15 +22,38 @@
 		mutationFn: projects.create,
 		onSuccess: (data: Project) => {
 			client.invalidateQueries({ queryKey: ['projects'] });
-			toast.success(`Project “${data.title}” created`);
+			toast.success(t('projects.created', { title: data.title }));
 			goto(`/project/${data.id}`);
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not create project');
+			toast.error(err instanceof Error ? err.message : t('projects.createFailed'));
 		},
 	});
 
-	const DURATIONS = ['30 seconds', '1 minute', '2 minutes', '5 minutes', '10 minutes'];
+	// English values are sent to the backend; display labels come from the dictionary.
+	const GENRES: Record<string, string> = {
+		'Adventure / Mystery': 'genres.adventure',
+		Drama: 'genres.drama',
+		'Sci-Fi': 'genres.scifi',
+		Fantasy: 'genres.fantasy',
+		Horror: 'genres.horror',
+		Romance: 'genres.romance',
+		Thriller: 'genres.thriller',
+	};
+	const TONES: Record<string, string> = {
+		'Cinematic, atmospheric': 'tones.cinematic',
+		'Dark, tense': 'tones.dark',
+		'Whimsical, warm': 'tones.whimsical',
+		'Gritty, realistic': 'tones.gritty',
+		'Epic, sweeping': 'tones.epic',
+	};
+	const DURATIONS: Record<string, string> = {
+		'30 seconds': 'durations.30',
+		'1 minute': 'durations.1m',
+		'2 minutes': 'durations.2m',
+		'5 minutes': 'durations.5m',
+		'10 minutes': 'durations.10m',
+	};
 
 	let title = $state('');
 	let idea = $state('');
@@ -61,12 +85,14 @@
 		duration = '2 minutes';
 	}
 
-	const FILTERS: { id: string; label: string }[] = [
-		{ id: 'all', label: 'All' },
-		{ id: 'in_progress', label: 'In Progress' },
-		{ id: 'completed', label: 'Completed' },
-		{ id: 'draft', label: 'Drafts' },
-	];
+	const FILTERS = $derived(
+		[
+			{ id: 'all', key: 'projects.filterAll' },
+			{ id: 'in_progress', key: 'projects.filterProgress' },
+			{ id: 'completed', key: 'projects.filterCompleted' },
+			{ id: 'draft', key: 'projects.filterDraft' },
+		].map((f) => ({ id: f.id, label: t(f.key) })),
+	);
 
 	const all = $derived($projectsQuery.data ?? []);
 	const filtered = $derived.by(() => {
@@ -90,15 +116,15 @@
 <AppHeader active="projects">
 	<Button variant="primary" onclick={openForm}>
 		<Icon name="plus" size={15} />
-		New Project
+		{t('projects.new')}
 	</Button>
 </AppHeader>
 
 <main class="container">
 	<div class="hero">
 		<div>
-			<h1>Projects</h1>
-			<p>Your local story-to-video workspace. Pick up where you left off.</p>
+			<h1>{t('projects.title')}</h1>
+			<p>{t('projects.subtitle')}</p>
 		</div>
 	</div>
 
@@ -106,66 +132,60 @@
 		<form class="new-project-card" onsubmit={onCreate}>
 			<div class="form-head">
 				<div>
-					<p class="eyebrow">New reel</p>
-					<h3>New Project</h3>
+					<p class="eyebrow">{t('projects.newReel')}</p>
+					<h3>{t('projects.new')}</h3>
 				</div>
-				<Button variant="ghost" onclick={() => (showForm = false)}>Close</Button>
+				<Button variant="ghost" onclick={() => (showForm = false)}>{t('projects.close')}</Button>
 			</div>
 
 			<label class="field">
-				<span class="field-label">Title</span>
-				<input class="field-input" bind:value={title} placeholder="Moonlit Harbor" required />
+				<span class="field-label">{t('projects.titleField')}</span>
+				<input class="field-input" bind:value={title} placeholder={t('projects.titlePlaceholder')} required />
 			</label>
 
 			<label class="field">
-				<span class="field-label">Story idea</span>
+				<span class="field-label">{t('projects.ideaField')}</span>
 				<textarea
 					class="field-textarea"
 					bind:value={idea}
-					placeholder="A lighthouse keeper finds a glowing bottle that shows memories of sailors lost at sea…"
+					placeholder={t('projects.ideaPlaceholder')}
 					rows={4}
 				></textarea>
-				<p class="field-hint">Optional — you can refine this later on the Story stage.</p>
+				<p class="field-hint">{t('projects.ideaHint')}</p>
 			</label>
 
 			<div class="form-grid">
 				<label class="field">
-					<span class="field-label">Genre</span>
+					<span class="field-label">{t('projects.genre')}</span>
 					<select class="field-select" bind:value={genre}>
-						<option>Adventure / Mystery</option>
-						<option>Drama</option>
-						<option>Sci-Fi</option>
-						<option>Fantasy</option>
-						<option>Horror</option>
-						<option>Romance</option>
-						<option>Thriller</option>
-					</select>
-				</label>
-				<label class="field">
-					<span class="field-label">Tone</span>
-					<select class="field-select" bind:value={tone}>
-						<option>Cinematic, atmospheric</option>
-						<option>Dark, tense</option>
-						<option>Whimsical, warm</option>
-						<option>Gritty, realistic</option>
-						<option>Epic, sweeping</option>
-					</select>
-				</label>
-				<label class="field">
-					<span class="field-label">Target duration</span>
-					<select class="field-select" bind:value={duration}>
-						{#each DURATIONS as d (d)}
-							<option value={d}>{d}</option>
+						{#each Object.keys(GENRES) as v (v)}
+							<option value={v}>{t(GENRES[v])}</option>
 						{/each}
 					</select>
-					<p class="field-hint">Guides beat and scene counts on the Story stage.</p>
+				</label>
+				<label class="field">
+					<span class="field-label">{t('projects.tone')}</span>
+					<select class="field-select" bind:value={tone}>
+						{#each Object.keys(TONES) as v (v)}
+							<option value={v}>{t(TONES[v])}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="field">
+					<span class="field-label">{t('projects.duration')}</span>
+					<select class="field-select" bind:value={duration}>
+						{#each Object.keys(DURATIONS) as v (v)}
+							<option value={v}>{t(DURATIONS[v])}</option>
+						{/each}
+					</select>
+					<p class="field-hint">{t('projects.durationHint')}</p>
 				</label>
 			</div>
 
 			<div class="form-actions">
-				<Button variant="secondary" onclick={() => (showForm = false)}>Cancel</Button>
+				<Button variant="secondary" onclick={() => (showForm = false)}>{t('projects.cancel')}</Button>
 				<Button variant="primary" type="submit" loading={$createProjectMutation.isPending}>
-					Create project
+					{t('projects.create')}
 				</Button>
 			</div>
 		</form>
@@ -175,10 +195,10 @@
 		<input
 			class="search field-input"
 			bind:value={search}
-			placeholder="Search projects…"
-			aria-label="Search projects"
+			placeholder={t('projects.searchPlaceholder')}
+			aria-label={t('projects.searchLabel')}
 		/>
-		<div class="filter-group" role="group" aria-label="Filter by status">
+		<div class="filter-group" role="group" aria-label={t('projects.filterBy')}>
 			{#each FILTERS as f (f.id)}
 				<button
 					type="button"
@@ -194,7 +214,7 @@
 	</div>
 
 	{#if $projectsQuery.isLoading}
-		<div class="grid" aria-busy="true" aria-label="Loading projects">
+		<div class="grid" aria-busy="true" aria-label={t('projects.loading')}>
 			{#each [1, 2, 3, 4, 5, 6] as n (n)}
 				<div class="skel-card">
 					<Skeleton height="170px" />
@@ -209,10 +229,10 @@
 		</div>
 	{:else if $projectsQuery.isError}
 		<EmptyState
-			title="Couldn't load projects"
+			title={t('projects.loadError')}
 			body={$projectsQuery.error instanceof Error
 				? $projectsQuery.error.message
-				: 'The backend did not respond.'}
+				: t('projects.loadErrorBody')}
 		>
 			{#snippet icon()}
 				<Icon name="alert" size={28} />
@@ -220,37 +240,34 @@
 			{#snippet action()}
 				<Button variant="primary" onclick={() => $projectsQuery.refetch()}>
 					<Icon name="retry" size={15} />
-					Retry
+					{t('common.retry')}
 				</Button>
 			{/snippet}
 		</EmptyState>
 	{:else if all.length === 0}
-		<EmptyState
-			title="No projects yet"
-			body="Calliope turns a story idea into characters, shots and finished video — all on your machine."
-		>
+		<EmptyState title={t('projects.emptyTitle')} body={t('projects.emptyBody')}>
 			{#snippet icon()}
 				<Icon name="video" size={28} />
 			{/snippet}
 			{#snippet action()}
 				<Button variant="primary" onclick={openForm}>
 					<Icon name="plus" size={15} />
-					Create your first project
+					{t('projects.firstProject')}
 				</Button>
 			{/snippet}
 		</EmptyState>
 	{:else if filtered.length === 0}
 		<EmptyState
 			title={search.trim()
-				? `No projects match “${search.trim()}”`
-				: 'No projects match the current filter'}
-			body="Try a different search or clear the filters."
+				? t('projects.noMatchSearch', { q: search.trim() })
+				: t('projects.noMatchFilter')}
+			body={t('projects.noMatchBody')}
 		>
 			{#snippet icon()}
 				<Icon name="search" size={28} />
 			{/snippet}
 			{#snippet action()}
-				<Button variant="secondary" onclick={clearFilters}>Clear filters</Button>
+				<Button variant="secondary" onclick={clearFilters}>{t('projects.clearFilters')}</Button>
 			{/snippet}
 		</EmptyState>
 	{:else}
@@ -260,8 +277,8 @@
 			{/each}
 			<button type="button" class="new-card" onclick={openForm}>
 				<div class="new-card-icon"><Icon name="plus" size={24} /></div>
-				<div class="new-card-title">Create New Project</div>
-				<div class="new-card-sub">Start with a story idea</div>
+				<div class="new-card-title">{t('projects.newCard')}</div>
+				<div class="new-card-sub">{t('projects.newCardSub')}</div>
 			</button>
 		</div>
 	{/if}

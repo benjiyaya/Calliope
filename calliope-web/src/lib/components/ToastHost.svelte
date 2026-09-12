@@ -9,6 +9,7 @@
 	} from '$lib/toast';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import type { IconName } from '$lib/components/ui/icons';
+	import { t } from '$lib/i18n.svelte';
 
 	let items = $state<Toast[]>([]);
 
@@ -23,25 +24,25 @@
 
 {#if items.length}
 	<div class="toast-host" aria-live="polite" aria-relevant="additions">
-		{#each items as t (t.id)}
+		{#each items as toast (toast.id)}
 			<div
-				class="toast {t.kind}"
+				class="toast {toast.kind}"
 				role="status"
-				onmouseenter={() => pauseToast(t.id)}
-				onmouseleave={() => resumeToast(t.id)}
-				onfocusin={() => pauseToast(t.id)}
-				onfocusout={() => resumeToast(t.id)}
+				onmouseenter={() => pauseToast(toast.id)}
+				onmouseleave={() => resumeToast(toast.id)}
+				onfocusin={() => pauseToast(toast.id)}
+				onfocusout={() => resumeToast(toast.id)}
 			>
 				<span class="badge" aria-hidden="true">
 					<span class="dot"></span>
-					<Icon name={kindIcon[t.kind]} size={15} />
+					<Icon name={kindIcon[toast.kind]} size={15} />
 				</span>
-				<span class="msg">{t.message}</span>
+				<span class="msg">{toast.message}</span>
 				<button
 					type="button"
 					class="dismiss"
-					aria-label="Dismiss"
-					onclick={() => dismissToast(t.id)}
+					aria-label={t('toast.dismiss')}
+					onclick={() => dismissToast(toast.id)}
 				>
 					<Icon name="close" size={14} />
 				</button>

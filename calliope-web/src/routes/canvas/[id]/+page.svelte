@@ -25,6 +25,7 @@
 	import EntityNode from '$lib/canvas/EntityNode.svelte';
 	import ArtifactNodeComp from '$lib/canvas/ArtifactNode.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 	import {
 		agentApi,
 		assetUrl,
@@ -1083,7 +1084,7 @@
 					{#if nodes.length === 0 && !$canvasQuery.isLoading}
 						<Panel position="top-center">
 							<div class="canvas-empty-hint">
-								<strong>Empty board</strong>
+								<strong>{t('canvas.emptyBoard')}</strong>
 								<span>
 									Ask the agent on the right to create characters, scenes, or to
 									generate an image or video — outputs land here as cards.
@@ -1119,7 +1120,7 @@
 							{#if activeSession}
 								<span class="chat-title">{activeSession.title}</span>
 							{:else}
-								<span class="chat-title muted">No chat selected</span>
+								<span class="chat-title muted">{t('canvas.noChatSelected')}</span>
 							{/if}
 						</div>
 						<button

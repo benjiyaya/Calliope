@@ -1,6 +1,7 @@
 <script lang="ts">
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		src: string | null;
@@ -70,7 +71,7 @@
 		class="backdrop"
 		role="dialog"
 		aria-modal="true"
-		aria-label={isVideo ? 'Video preview' : 'Image preview'}
+		aria-label={isVideo ? t('lightbox.videoPreview') : t('lightbox.imagePreview')}
 		tabindex="-1"
 		onclick={onClose}
 	>
@@ -82,8 +83,8 @@
 				<button
 					class="tool"
 					type="button"
-					aria-label={zoomed ? 'Fit to screen' : 'Zoom to 100%'}
-					title={zoomed ? 'Fit to screen' : 'Zoom to 100%'}
+aria-label={zoomed ? t('lightbox.fitToScreen') : t('lightbox.zoom100')}
+				title={zoomed ? t('lightbox.fitToScreen') : t('lightbox.zoom100')}
 					onclick={() => (zoomed = !zoomed)}
 				>
 					<Icon name="zoom-in" size={17} />
@@ -93,8 +94,8 @@
 				class="tool"
 				href={src}
 				download={downloadName}
-				aria-label="Download media"
-				title="Download"
+				aria-label={t('lightbox.downloadMedia')}
+				title={t('lightbox.download')}
 				onclick={(e) => e.stopPropagation()}
 			>
 				<Icon name="download" size={17} />
@@ -102,8 +103,8 @@
 			<button
 				class="tool"
 				type="button"
-				aria-label="Close preview"
-				title="Close (Esc)"
+				aria-label={t('lightbox.closePreview')}
+				title={t('lightbox.closeEsc')}
 				onclick={onClose}
 			>
 				<Icon name="close" size={17} />
@@ -114,7 +115,7 @@
 			<button
 				class="nav prev"
 				type="button"
-				aria-label="Previous image"
+				aria-label={t('lightbox.prev')}
 				onclick={(e) => {
 					e.stopPropagation();
 					step(-1);
@@ -125,7 +126,7 @@
 			<button
 				class="nav next"
 				type="button"
-				aria-label="Next image"
+				aria-label={t('lightbox.next')}
 				onclick={(e) => {
 					e.stopPropagation();
 					step(1);
@@ -144,7 +145,7 @@
 					{src}
 					{alt}
 					kind="video"
-					label="Video unavailable"
+					label={t('lightbox.videoUnavailable')}
 					autoplay
 					controls
 					preload="auto"
@@ -155,13 +156,13 @@
 			<div
 				class="frame"
 				class:zoomed
-				title={zoomed ? 'Click to fit' : 'Click to zoom'}
+				title={zoomed ? t('lightbox.clickToFit') : t('lightbox.clickToZoom')}
 				onclick={(e) => {
 					e.stopPropagation();
 					zoomed = !zoomed;
 				}}
 			>
-				<SafeMedia class="preview" {src} {alt} label="Image unavailable" />
+				<SafeMedia class="preview" {src} {alt} label={t('lightbox.imageUnavailable')} />
 			</div>
 		{/if}
 		{#if caption}
@@ -169,12 +170,12 @@
 		{/if}
 		<p class="hint">
 			{#if isVideo}
-				Click outside or press Esc to close ·
+				{t('lightbox.closeHint')} ·
 			{:else}
-				Click the image to zoom · Click outside or press Esc to close ·
+				{t('lightbox.clickToZoom')} · {t('lightbox.closeHint')} ·
 			{/if}
 			<a href={src} target="_blank" rel="noopener" onclick={(e) => e.stopPropagation()}
-				>Open original</a
+				>{t('lightbox.openOriginal')}</a
 			>
 		</p>
 	</div>

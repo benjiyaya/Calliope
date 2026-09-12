@@ -13,6 +13,7 @@
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import { assetUrl } from '$lib/api';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		open?: boolean;
@@ -116,15 +117,15 @@ function applyToScene() {
 	function roleLabel(role: string): string {
 		switch (role) {
 			case 'character':
-				return 'Character ref';
+				return t('jobDrawer.characterRef');
 			case 'location':
-				return 'Location ref';
+				return t('jobDrawer.locationRef');
 			case 'image':
-				return 'Ref image';
+				return t('jobDrawer.refImage');
 			case 'video':
-				return 'Video input';
+				return t('jobDrawer.videoInput');
 			case 'audio':
-				return 'Audio input';
+				return t('jobDrawer.audioInput');
 			default:
 				return role;
 		}
@@ -172,12 +173,12 @@ function applyToScene() {
 	}
 </script>
 
-<Modal bind:open {onclose} title="Scene render history" size="lg">
+<Modal bind:open {onclose} title={t('jobDrawer.title')} size="lg">
 	{#if !activeJob}
-		<p class="muted">No render jobs recorded for this scene yet.</p>
+		<p class="muted">{t('jobDrawer.noJobs')}</p>
 	{:else}
 		{#if historyJobs.length > 1}
-			<div class="history-strip" role="tablist" aria-label="Render history">
+			<div class="history-strip" role="tablist" aria-label={t('jobDrawer.historyAria')}>
 				{#each historyJobs as j (j.id)}
 					<button
 						type="button"
@@ -197,13 +198,13 @@ function applyToScene() {
 		{#if outputVideoUrl}
 			<section class="block">
 				<div class="block-head">
-					<h3 class="block-title">Output</h3>
+					<h3 class="block-title">{t('jobDrawer.output')}</h3>
 					{#if onApplyToScene && activeJob.status === 'done'}
 						{#if isActiveClip}
-							<span class="applied-tag"><Icon name="check" size={14} /> Current clip</span>
+							<span class="applied-tag"><Icon name="check" size={14} /> {t('jobDrawer.currentClip')}</span>
 						{:else}
 							<Button size="sm" onclick={applyToScene} disabled={applying}>
-								<Icon name="film" size={14} /> {applying ? 'Applying…' : 'Apply to Scene'}
+								<Icon name="film" size={14} /> {applying ? t('jobDrawer.applying') : t('jobDrawer.applyToScene')}
 							</Button>
 						{/if}
 					{/if}
@@ -224,7 +225,7 @@ function applyToScene() {
 			<span class="job-head-actions">
 				{#if onCopySettings && activeJob.payload?.input_values}
 					<Button size="sm" variant="secondary" onclick={copySettings}>
-						<Icon name="upload" size={14} /> Copy settings to form
+						<Icon name="upload" size={14} /> {t('jobDrawer.copySettings')}
 					</Button>
 				{/if}
 			</span>
@@ -233,24 +234,24 @@ function applyToScene() {
 		{#if prompt}
 			<section class="block">
 				<div class="block-head">
-					<h3 class="block-title">Prompt</h3>
+					<h3 class="block-title">{t('jobDrawer.prompt')}</h3>
 					<Button size="sm" variant="ghost" onclick={copyPrompt}>
 						<Icon name={copied ? 'check' : 'link'} size={14} />
-						{copied ? 'Copied' : 'Copy'}
+						{copied ? t('jobDrawer.copied') : t('jobDrawer.copy')}
 					</Button>
 				</div>
 				{#if workflow?.prompt_profile === 'minimax_h3_ref'}
-					<p class="block-hint">MiniMax H3 six-section rewrite — this is the exact text queued on the (Input:prompt) node.</p>
+					<p class="block-hint">{t('jobDrawer.h3Hint')}</p>
 				{/if}
 				<pre class="prompt-pre">{prompt}</pre>
 			</section>
 		{:else}
-			<p class="muted">No prompt recorded on this job.</p>
+			<p class="muted">{t('jobDrawer.noPrompt')}</p>
 		{/if}
 
 		{#if refRows.length > 0}
 			<section class="block">
-				<h3 class="block-title">References</h3>
+				<h3 class="block-title">{t('jobDrawer.references')}</h3>
 				<ul class="ref-list">
 					{#each refRows as row (row.nodeId)}
 						<li class="ref-item">
@@ -264,7 +265,7 @@ function applyToScene() {
 
 		{#if otherRows.length > 0}
 			<section class="block">
-				<h3 class="block-title">Other inputs</h3>
+				<h3 class="block-title">{t('jobDrawer.otherInputs')}</h3>
 				<ul class="ref-list">
 					{#each otherRows as row (row.nodeId)}
 						<li class="ref-item">

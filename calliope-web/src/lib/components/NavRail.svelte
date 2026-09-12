@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import type { IconName } from '$lib/components/ui/icons';
 
-	const items: { id: string; label: string; icon: IconName }[] = [
-		{ id: 'story', label: 'Story', icon: 'story' },
-		{ id: 'assets', label: 'Assets', icon: 'assets' },
-		{ id: 'script', label: 'Script', icon: 'script' },
-		{ id: 'video', label: 'Video', icon: 'video' },
-	];
+	const items = $derived(
+		[
+			{ id: 'story', key: 'nav.story', icon: 'story' },
+			{ id: 'assets', key: 'nav.assets', icon: 'assets' },
+			{ id: 'script', key: 'nav.script', icon: 'script' },
+			{ id: 'video', key: 'nav.video', icon: 'video' },
+		] as { id: string; key: string; icon: IconName }[],
+	);
 
 	interface Props {
 		active?: string;
@@ -20,15 +23,15 @@
 	let { active = 'story', onSelect, badges = {} }: Props = $props();
 </script>
 
-<nav class="nav" aria-label="Project stages">
+<nav class="nav" aria-label={t('nav.projectStages')}>
 	<button
 		class="nav-item home"
-		title="Projects"
-		aria-label="Back to projects"
+		title={t('nav.projects')}
+		aria-label={t('nav.backProjects')}
 		onclick={() => goto('/projects')}
 	>
 		<span class="icon"><Icon name="home" size={20} /></span>
-		<span class="label">Home</span>
+		<span class="label">{t('nav.home')}</span>
 	</button>
 	<div class="divider" aria-hidden="true"></div>
 	{#each items as item (item.id)}
@@ -36,19 +39,19 @@
 		<button
 			class="nav-item"
 			class:active={active === item.id}
-			title={item.label}
+			title={t(item.key)}
 			aria-current={active === item.id ? 'page' : undefined}
 			onclick={() => onSelect?.(item.id)}
 		>
 			<span class="icon">
 				<Icon name={item.icon} size={20} />
 				{#if count > 0}
-					<span class="badge" aria-label="{count} active">
+					<span class="badge" aria-label={t('nav.countActive', { count })}>
 						{count > 9 ? '9+' : count}
 					</span>
 				{/if}
 			</span>
-			<span class="label">{item.label}</span>
+			<span class="label">{t(item.key)}</span>
 		</button>
 	{/each}
 </nav>

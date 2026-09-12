@@ -2,6 +2,7 @@
 	import { type Node, type NodeProps } from '@xyflow/svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import { assetUrl } from '$lib/api';
+	import { t } from '$lib/i18n.svelte';
 
 	interface ArtifactNodeData extends Record<string, unknown> {
 		canvasNodeId: number;
@@ -37,9 +38,9 @@
 		<span class="type-chip">{data.kind}</span>
 		<span class="title" title={data.title}>{data.title}</span>
 		{#if running}
-			<span class="status running-badge">running</span>
+			<span class="status running-badge">{t('canvas.running')}</span>
 		{:else if data.status === 'failed'}
-			<span class="status failed-badge">failed</span>
+			<span class="status failed-badge">{t('canvas.failed')}</span>
 		{:else if videoSrc}
 			<span class="play-badge" aria-hidden="true">▶</span>
 		{/if}
@@ -51,7 +52,7 @@
 				type="button"
 				class="media-btn"
 				onclick={openPreview}
-				title="Open large preview"
+				title={t('canvas.openPreview')}
 			>
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video
@@ -68,7 +69,7 @@
 				type="button"
 				class="media-btn"
 				onclick={openPreview}
-				title="Open large preview"
+				title={t('canvas.openPreview')}
 			>
 				<SafeMedia
 					class="media-el"
@@ -79,9 +80,9 @@
 				/>
 			</button>
 		{:else if data.status === 'running'}
-			<span class="placeholder">generating…</span>
+			<span class="placeholder">{t('canvas.generating')}</span>
 		{:else}
-			<span class="placeholder">no media</span>
+			<span class="placeholder">{t('canvas.noMedia')}</span>
 		{/if}
 	</div>
 	<span class="out-kind">{data.kind}</span>

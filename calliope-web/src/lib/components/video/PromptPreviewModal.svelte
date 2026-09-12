@@ -13,6 +13,7 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		open?: boolean;
@@ -51,7 +52,7 @@
 
 	const preview = createMutation({
 		mutationFn: async () => {
-			if (!clip && !scene) throw new Error('No clip selected');
+			if (!clip && !scene) throw new Error(t('promptPreview.noClipSelected'));
 			return jobsApi.previewPrompt(projectId, {
 				clip_id: clip?.id,
 				scene_id: clip ? undefined : scene?.id,
@@ -124,7 +125,7 @@
 			};
 			try {
 				await projects.updateClip(projectId, clip.id, { video_settings: next });
-				toast.success('Draft saved — Generate will use it');
+				toast.success(t('promptPreview.draftSaved'));
 			} catch (err) {
 				toast.error(err instanceof Error ? err.message : String(err));
 			}
@@ -138,7 +139,7 @@
 		};
 		try {
 			await projects.updateScene(projectId, scene.id, { video_settings: next });
-			toast.success('Draft saved — Generate will use it');
+			toast.success(t('promptPreview.draftSaved'));
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : String(err));
 		}
@@ -152,7 +153,7 @@
 	function confirmGenerate() {
 		const prompt = text.trim();
 		if (!prompt) {
-			toast.error('Prompt is empty — edit or regenerate before generating');
+			toast.error(t('promptPreview.promptEmpty'));
 			return;
 		}
 		open = false;
@@ -160,30 +161,36 @@
 	}
 </script>
 
-<Modal bind:open {onclose} title="Review prompt before generating" size="lg">
+<Modal bind:open {onclose} title={t('promptPreview.title')} size="lg">
 	{#if !clip && !scene}
-		<p class="muted">No clip selected.</p>
+		<p class="muted">{t('promptPreview.noClip')}</p>
 	{:else if $preview.isPending}
 		<div class="loading">
 			<Spinner size="md" />
-			<span>Resolving prompt{workflow?.prompt_profile === 'minimax_h3_ref' ? ' (H3 rewrite)' : ''}…</span>
+			<span>{t('promptPreview.resolving', { suffix: workflow?.prompt_profile === 'minimax_h3_ref' ? t('promptPreview.h3Rewrite') : '' })}</span>
 		</div>
 	{:else}
 		<div class="head-row">
 			<span class="meta">
 				{#if clip}
-					Shot {clip.label ?? `#${scene?.order_index ?? ''}`} · {scene?.heading || 'Untitled'}
+					{t('promptPreview.shotMeta', {
+						label: clip.label ?? `#${scene?.order_index ?? ''}`,
+						heading: scene?.heading || t('promptPreview.untitled'),
+					})}
 				{:else}
-					Scene #{scene?.order_index} · {scene?.heading || 'Untitled'}
+					{t('promptPreview.sceneMeta', {
+						index: scene?.order_index ?? '',
+						heading: scene?.heading || t('promptPreview.untitled'),
+					})}
 				{/if}
 			</span>
-			<span class="meta">{workflow?.name ?? 'Default workflow'}</span>
+			<span class="meta">{workflow?.name ?? t('promptPreview.defaultWorkflow')}</span>
 		</div>
 
 		{#if stale}
 			<div class="stale-hint" role="status">
 				<Icon name="alert" size={14} />
-				<span>Saved draft is based on older content — regenerate to refresh it.</span>
+				<span>{t('promptPreview.staleHint')}</span>
 			</div>
 		{/if}
 		<textarea
@@ -191,33 +198,33 @@
 			bind:value={text}
 			rows={16}
 			spellcheck="false"
-			aria-label="Prompt text sent to the workflow"
+			aria-label={t('promptPreview.editorAria')}
 		></textarea>
 
 		{#if failed}
 			<div class="stale-hint" role="status">
 				<Icon name="alert" size={14} />
-				<span>Rewrite unavailable — showing raw scene text. You can edit and Generate, or Retry.</span>
+				<span>{t('promptPreview.failedHint')}</span>
 			</div>
 		{:else if fromDraft}
-			<p class="hint">Loaded from your saved draft. Regenerate re-runs the rewrite.</p>
+			<p class="hint">{t('promptPreview.fromDraftHint')}</p>
 		{:else if workflow?.prompt_profile === 'minimax_h3_ref'}
-			<p class="hint">MiniMax H3 six-section rewrite. Edit freely — this exact text goes to the (Input:prompt) node.</p>
+			<p class="hint">{t('promptPreview.h3Hint')}</p>
 		{:else}
-			<p class="hint">Scene prompt (prose profile). Edit freely before generating.</p>
+			<p class="hint">{t('promptPreview.proseHint')}</p>
 		{/if}
 	{/if}
 
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (open = false)}>{t('common.cancelButton')}</Button>
 		<Button variant="secondary" disabled={$preview.isPending || !text} onclick={saveDraft}>
-			Save draft
+			{t('promptPreview.saveDraft')}
 		</Button>
 		<Button variant="secondary" disabled={$preview.isPending} onclick={regenerate}>
-			<Icon name="retry" size={14} /> Regenerate
+			<Icon name="retry" size={14} /> {t('promptPreview.regenerate')}
 		</Button>
 		<Button variant="primary" disabled={$preview.isPending || !text} onclick={confirmGenerate}>
-			<Icon name="play" size={14} /> Generate
+			<Icon name="play" size={14} /> {t('promptPreview.generate')}
 		</Button>
 	{/snippet}
 </Modal>

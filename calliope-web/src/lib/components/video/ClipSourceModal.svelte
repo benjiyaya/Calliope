@@ -8,6 +8,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface ClipSourceOption {
 		/** Source key — a clip/scene path, or the 'auto' / 'upload' sentinels. */
@@ -47,7 +48,7 @@
 	}
 </script>
 
-<Modal bind:open title="Video source" size="xl">
+<Modal bind:open title={t('clipSource.title')} size="xl">
 	<div class="sources">
 		<button
 			type="button"
@@ -57,8 +58,8 @@
 		>
 			<span class="source-icon"><Icon name="sparkle" size={18} /></span>
 			<span class="source-text">
-				<span class="source-name">Auto (previous clip)</span>
-				<span class="source-desc">Continue from the previous scene's clip</span>
+				<span class="source-name">{t('clipSource.autoName')}</span>
+				<span class="source-desc">{t('clipSource.autoDesc')}</span>
 			</span>
 			{#if value === 'auto'}
 				<span class="check"><Icon name="check" size={12} /></span>
@@ -73,8 +74,8 @@
 		>
 			<span class="source-icon"><Icon name="upload" size={18} /></span>
 			<span class="source-text">
-				<span class="source-name">Upload file</span>
-				<span class="source-desc">Pick a video from your computer</span>
+				<span class="source-name">{t('clipSource.uploadName')}</span>
+				<span class="source-desc">{t('clipSource.uploadDesc')}</span>
 			</span>
 			{#if value === 'upload'}
 				<span class="check"><Icon name="check" size={12} /></span>
@@ -83,7 +84,7 @@
 	</div>
 
 	{#if options.length > 0}
-		<p class="section-label">Project clips <span class="count">{options.length}</span></p>
+		<p class="section-label">{t('clipSource.projectClips')} <span class="count">{options.length}</span></p>
 		<div class="grid-wrap">
 			<div class="grid">
 				{#each options as opt (opt.id)}
@@ -118,11 +119,11 @@
 			</div>
 		</div>
 	{:else}
-		<p class="empty">No clips in the project yet. Generate a clip first, or upload a video file.</p>
+		<p class="empty">{t('clipSource.noClips')}</p>
 	{/if}
 
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (open = false)}>{t('common.cancelButton')}</Button>
 	{/snippet}
 </Modal>
 

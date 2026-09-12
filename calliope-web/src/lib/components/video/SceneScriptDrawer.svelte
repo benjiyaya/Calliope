@@ -6,6 +6,7 @@
 	import type { Scene } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		scene: Scene;
@@ -22,8 +23,8 @@
 	<div class="row">
 		<span class="num mono">#{scene.order_index}</span>
 		<span class="sid mono">id {scene.id}</span>
-		<span class="heading" title={scene.heading || 'Untitled scene'}>
-			{scene.heading || 'Untitled scene'}
+		<span class="heading" title={scene.heading || t('scriptDrawer.untitled')}>
+			{scene.heading || t('scriptDrawer.untitled')}
 		</span>
 		<StatusChip {status} />
 		<span class="dur mono">{formatClock(scene.duration_sec || 5)}</span>
@@ -35,35 +36,35 @@
 			onclick={() => (open = !open)}
 		>
 			<Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} />
-			Script
+			{t('scriptDrawer.script')}
 		</button>
 	</div>
 
 	{#if open}
-		<div class="drawer" role="region" aria-label="Scene script">
+		<div class="drawer" role="region" aria-label={t('scriptDrawer.regionAria')}>
 			<div class="block">
-				<span class="k">Heading</span>
-				<p>{scene.heading || 'Untitled scene'}</p>
+				<span class="k">{t('scriptDrawer.heading')}</span>
+				<p>{scene.heading || t('scriptDrawer.untitled')}</p>
 			</div>
 			<div class="block">
-				<span class="k">Action / script</span>
+				<span class="k">{t('scriptDrawer.action')}</span>
 				{#if scene.action?.trim()}
 					<p>{scene.action}</p>
 				{:else}
-					<p class="muted">No action text for this scene.</p>
+					<p class="muted">{t('scriptDrawer.noAction')}</p>
 				{/if}
 			</div>
 			<div class="block">
-				<span class="k">Dialog</span>
+				<span class="k">{t('scriptDrawer.dialog')}</span>
 				{#if scene.dialog?.trim()}
 					<pre class="dialog">{scene.dialog}</pre>
 				{:else}
-					<p class="muted">No dialog for this scene.</p>
+					<p class="muted">{t('scriptDrawer.noDialog')}</p>
 				{/if}
 			</div>
 			{#if (scene.characters ?? []).length}
 				<div class="block">
-					<span class="k">Characters</span>
+					<span class="k">{t('scriptDrawer.characters')}</span>
 					<div class="chips">
 						{#each scene.characters as c}
 							<span class="chip">{c.name}</span>

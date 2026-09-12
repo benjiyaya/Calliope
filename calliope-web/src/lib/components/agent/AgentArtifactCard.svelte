@@ -3,6 +3,7 @@
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	export interface ArtifactJob {
 		id: number;
@@ -31,10 +32,10 @@
 	const isVideo = $derived(primaryPath ? isVideoPath(primaryPath, job.kind) : job.kind === 'video');
 
 	function statusWord(status: string): string {
-		if (status === 'done') return 'Ready';
-		if (status === 'running') return 'Generating';
-		if (status === 'pending') return 'Queued';
-		if (status === 'failed') return 'Failed';
+		if (status === 'done') return t('job.status.done');
+		if (status === 'running') return t('job.status.generating');
+		if (status === 'pending') return t('job.status.queued');
+		if (status === 'failed') return t('job.status.failed');
 		return status;
 	}
 
@@ -55,7 +56,7 @@
 	{#if busy}
 		<div class="waiting" aria-busy="true">
 			<span class="pulse"></span>
-			<span class="waiting-text">{job.status === 'running' ? 'Generating…' : 'Queued'}</span>
+			<span class="waiting-text">{job.status === 'running' ? t('job.status.generatingPulse') : t('job.status.queued')}</span>
 		</div>
 	{/if}
 
@@ -68,8 +69,8 @@
 			<button
 				type="button"
 				class="media-hit"
-				aria-label="Play video, artifact {job.id}"
-				title="Play in viewer"
+				aria-label={t('artifact.playVideo', { id: job.id })}
+				title={t('artifact.playInViewer')}
 				onclick={() => (preview = { src: primaryMedia, kind: 'video' })}
 			>
 				<div class="media-frame">
@@ -77,7 +78,7 @@
 						class="artifact-media"
 						src={primaryMedia}
 						kind="video"
-						label="Video unavailable"
+						label={t('artifact.videoUnavailable')}
 						controls={false}
 					/>
 					<span class="play-badge" aria-hidden="true"><Icon name="play" size={20} /></span>
@@ -87,29 +88,29 @@
 			<button
 				type="button"
 				class="media-hit"
-				aria-label="View image, artifact {job.id}"
+				aria-label={t('artifact.viewImage', { id: job.id })}
 				onclick={() => (preview = { src: primaryMedia, kind: 'image' })}
 			>
 				<div class="media-frame">
 					<SafeMedia
 						class="artifact-media"
 						src={primaryMedia}
-						alt="Artifact {job.id}"
-						label="Image unavailable"
+						alt={t('artifact.artifactLabel', { id: job.id })}
+						label={t('artifact.imageUnavailable')}
 					/>
 				</div>
 			</button>
 		{/if}
 	{:else if job.status === 'done'}
 		<div class="missing">
-			<p>File missing on disk</p>
+			<p>{t('artifact.fileMissing')}</p>
 		</div>
 	{/if}
 </div>
 
 <ImageLightbox
 	src={preview?.src ?? null}
-	alt={`Artifact #${job.id}`}
+	alt={t('artifact.artifactLabel', { id: job.id })}
 	kind={preview?.kind ?? 'image'}
 	onClose={() => (preview = null)}
 />

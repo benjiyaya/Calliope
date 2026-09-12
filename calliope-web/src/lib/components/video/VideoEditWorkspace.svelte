@@ -14,6 +14,7 @@
 	import PromptPreviewModal from './PromptPreviewModal.svelte';
 	import SceneFilmstrip, { type FilmstripClip } from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	type Thumb = { kind: 'image' | 'video'; src: string } | null;
 
@@ -108,7 +109,7 @@
 		onClipSourceChange,
 		onClipSourceUpload,
 		onPreviewPrompt,
-		generateLabel = 'Generate clip',
+		generateLabel = '',
 		submitting = false,
 		statusOfClip,
 		thumbForClip,
@@ -137,9 +138,9 @@
 	const clipSourceLabel = $derived.by(() => {
 		if (!clipSource?.enabled) return '';
 		const val = clipSource.value;
-		if (val === 'auto') return 'Auto (previous clip)';
-		if (val === 'upload') return 'Upload file';
-		return clipSource.options.find((o) => o.id === val)?.label ?? 'Auto (previous clip)';
+		if (val === 'auto') return t('clipSource.autoName');
+		if (val === 'upload') return t('clipSource.uploadName');
+		return clipSource.options.find((o) => o.id === val)?.label ?? t('clipSource.autoName');
 	});
 </script>
 
@@ -148,10 +149,10 @@
 		<ClipMonitor
 			{previewPath}
 			{status}
-			heading={(selectedClip?.clip.description || selected.heading || 'Untitled').slice(0, 80)}
+			heading={(selectedClip?.clip.description || selected.heading || t('clipMonitor.untitled')).slice(0, 80)}
 			orderIndex={selected.order_index}
 			label={selectedClip?.label}
-			idLabel={selectedClip ? `clip ${selectedClip.clip.id}` : selected ? `scene id ${selected.id}` : undefined}
+			idLabel={selectedClip ? t('videoEdit.clipId', { id: selectedClip.clip.id }) : t('videoEdit.sceneId', { id: selected.id })}
 			sceneId={selectedClip?.scene.id ?? selected?.id}
 			{progress}
 			{error}
@@ -177,16 +178,13 @@
 				<div class="continue-warning" role="alert">
 					<Icon name="alert" size={16} />
 					<div class="continue-warning-text">
-						<span class="continue-warning-title">Workflow has no video input</span>
-						<span>
-							This scene continues from the previous video. Switch to a workflow that has a video
-							input (LoadVideo node tagged (Input:video)).
-						</span>
+						<span class="continue-warning-title">{t('videoEdit.noVideoInputWf')}</span>
+						<span>{t('videoEdit.continueHint')}</span>
 					</div>
 				</div>
 			{:else if clipSource?.enabled}
 			<div class="clip-source-row">
-				<span class="clip-source-label" id="clip-source-label">Video source</span>
+				<span class="clip-source-label" id="clip-source-label">{t('videoEdit.videoSource')}</span>
 				<button
 					type="button"
 					class="clip-source-trigger"
@@ -209,10 +207,7 @@
 			/>
 		{/if}
 		{#if assetOptions.length === 0}
-			<p class="asset-hint">
-				No refs yet. Generate character sheets or environments in Assets, or upload a video/audio
-				file here.
-			</p>
+			<p class="asset-hint">{t('videoEdit.assetHint')}</p>
 		{/if}
 		{#if hasJobPayload}
 			<div class="job-inputs-row">
@@ -224,7 +219,7 @@
 					onclick={() => (inputsOpen = true)}
 				>
 					<Icon name="info" size={14} />
-					<span>View prompt &amp; inputs</span>
+					<span>{t('videoEdit.viewPrompt')}</span>
 				</button>
 			</div>
 			<JobInputsDrawer
@@ -249,7 +244,7 @@
 				onWorkflowChange={onWorkflowChange}
 			{assetOptions}
 			{allowUpload}
-			{generateLabel}
+			generateLabel={generateLabel || t('videoEdit.generateLabel')}
 			{submitting}
 			disabled={generateDisabled}
 			generateDisabledHint={generateDisabledReason}
@@ -258,9 +253,9 @@
 		/>
 		{:else}
 			<div class="no-wf">
-				<p class="empty-title">No video workflow enabled</p>
+				<p class="empty-title">{t('videoEdit.noWf')}</p>
 				<p class="muted">
-					Enable a video workflow in <a href="/settings?tab=workflows">Settings → Workflows</a>.
+					{t('videoEdit.enableWfPre')} <a href="/settings?tab=workflows">{t('videoEdit.wfLink')}</a>{t('videoEdit.enableWfPost')}
 				</p>
 			</div>
 		{/if}

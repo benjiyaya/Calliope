@@ -14,6 +14,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		open?: boolean;
@@ -29,7 +30,7 @@
 
 	let {
 		open = $bindable(false),
-		title = 'Choose reference',
+		title = t('omni.chooseReference'),
 		assets = [],
 		value = '',
 		kind = 'image',
@@ -90,13 +91,13 @@
 	}
 
 	const emptyHint = $derived.by(() => {
-		if (q) return `No matches for “${query.trim()}”.`;
-		if (tab === 'character') return 'No character sheets yet. Generate them on Assets.';
-		if (tab === 'location') return 'No environment images yet. Generate them on Assets.';
-		if (tab === 'item') return 'No misc. item images yet. Generate them on Assets.';
-		if (tab === 'shot') return 'No Build Scene captures yet. Capture blockouts on the Build Scene page.';
-		if (tab === 'clip') return 'No scene clips in this film yet.';
-		return allowUpload ? 'No uploads yet. Use Upload new… below.' : 'No uploads yet.';
+		if (q) return t('omni.noMatches', { query: query.trim() });
+		if (tab === 'character') return t('omni.emptyCharacters');
+		if (tab === 'location') return t('omni.emptyLocations');
+		if (tab === 'item') return t('omni.emptyItems');
+		if (tab === 'shot') return t('omni.emptyShots');
+		if (tab === 'clip') return t('omni.emptyClips');
+		return allowUpload ? t('omni.emptyUploadsNew') : t('omni.emptyUploads');
 	});
 
 	function pick(path: string) {
@@ -118,7 +119,7 @@
 <Modal bind:open {title} size="lg">
 	<div class="picker">
 		{#if tabs.length > 1}
-			<div class="tabs" role="tablist" aria-label="Asset type">
+			<div class="tabs" role="tablist" aria-label={t('omni.assetType')}>
 				{#each tabs as t (t.id)}
 					<button
 						type="button"
@@ -139,9 +140,11 @@
 			<Icon name="search" size={14} />
 			<input
 				type="search"
-				placeholder="Search in {tabs.find((t) => t.id === tab)?.label ?? 'this list'}…"
+				placeholder={t('omni.searchIn', {
+					name: tabs.find((t) => t.id === tab)?.label ?? t('omni.thisList'),
+				})}
 				bind:value={query}
-				aria-label="Search assets"
+				aria-label={t('omni.searchAssets')}
 			/>
 		</label>
 
@@ -184,15 +187,15 @@
 
 	{#snippet footer()}
 		{#if value && onclear}
-			<Button variant="ghost" onclick={clear}>Clear slot</Button>
+			<Button variant="ghost" onclick={clear}>{t('omni.clearSlot')}</Button>
 		{/if}
 		{#if allowUpload}
 			<Button variant="secondary" onclick={upload}>
 				<Icon name="upload" size={14} />
-				Upload new…
+				{t('omni.uploadNew')}
 			</Button>
 		{/if}
-		<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (open = false)}>{t('common.cancel')}</Button>
 	{/snippet}
 </Modal>
 

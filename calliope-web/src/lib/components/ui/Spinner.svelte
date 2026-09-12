@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { t } from '$lib/i18n.svelte';
+
 	interface Props {
 		size?: 'sm' | 'md' | 'lg';
 	}
@@ -7,7 +9,7 @@
 </script>
 
 <span class="spinner spinner-{size}" role="status">
-	<span class="sr-only">Loading</span>
+	<span class="sr-only">{t('common.loading')}</span>
 </span>
 
 <style>

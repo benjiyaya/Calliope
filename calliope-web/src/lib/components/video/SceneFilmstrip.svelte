@@ -22,6 +22,7 @@
 	import type { Scene } from '$lib/api';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	type Thumb = { kind: 'image' | 'video'; src: string } | null;
 
@@ -68,11 +69,11 @@
 	}
 </script>
 
-<section class="strip" aria-label="Clip filmstrip">
+<section class="strip" aria-label={t('filmstrip.title')}>
 	<div
 		class="track"
 		role="listbox"
-		aria-label="Scene clips"
+		aria-label={t('filmstrip.sceneClips')}
 		aria-activedescendant={selectedClipId != null ? `film-clip-${selectedClipId}` : undefined}
 		tabindex="0"
 		onkeydown={onKeydown}
@@ -81,7 +82,7 @@
 			{@const st = statusOfClip(entry.clip.id)}
 			{@const thumb = thumbForClip(entry.clip.id)}
 			{#if entry.index === 0 && i > 0}
-				<span class="divider" role="presentation" title={entry.scene.heading || 'Scene'}></span>
+				<span class="divider" role="presentation" title={entry.scene.heading || t('filmstrip.scene')}></span>
 			{/if}
 			<button
 				type="button"
@@ -92,7 +93,11 @@
 				class:selected={selectedClipId === entry.clip.id}
 				class:chained={entry.index > 0}
 				onclick={() => onSelectClip(entry.clip.id)}
-				title={`#${entry.scene.order_index} · ${entry.scene.heading || 'Scene'} · shot ${entry.index + 1} · ${formatClock(entry.clip.duration_sec || 5)}`}
+				title={t('filmstrip.clipTitle', {
+					scene: `${entry.scene.order_index} · ${entry.scene.heading || t('filmstrip.scene')}`,
+					shot: entry.index + 1,
+					time: formatClock(entry.clip.duration_sec || 5),
+				})}
 			>
 				<span class="bar" aria-hidden="true"></span>
 				<span class="thumb" aria-hidden="true">
@@ -115,11 +120,11 @@
 
 	<div class="transport">
 		<Button variant="ghost" size="sm" onclick={() => onStep(-1)}>
-			<Icon name="chevron-left" size={14} /> Prev
+			<Icon name="chevron-left" size={14} /> {t('filmstrip.prev')}
 		</Button>
 		<span class="pos">{selectedLabel}</span>
 		<Button variant="ghost" size="sm" onclick={() => onStep(1)}>
-			Next <Icon name="chevron-right" size={14} />
+			{t('filmstrip.next')} <Icon name="chevron-right" size={14} />
 		</Button>
 	</div>
 </section>

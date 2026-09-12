@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { agentApi, canvasApi } from '$lib/api';
+	import { t } from '$lib/i18n.svelte';
 
 	let failed = $state('');
 
@@ -13,7 +14,7 @@
 			const graph = await canvasApi.ensureForSession(s.id);
 			goto(`/canvas/${graph.canvas.id}?session=${s.id}`, { replaceState: true });
 		} catch (err) {
-			failed = err instanceof Error ? err.message : 'Could not open sandbox canvas';
+			failed = err instanceof Error ? err.message : t('playground.openFailed');
 		}
 	});
 </script>
@@ -21,7 +22,7 @@
 {#if failed}
 	<div class="redirect-error" role="alert">{failed}</div>
 {:else}
-	<div class="redirecting">Opening sandbox canvas…</div>
+	<div class="redirecting">{t('playground.opening')}</div>
 {/if}
 
 <style>

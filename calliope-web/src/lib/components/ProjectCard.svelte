@@ -8,6 +8,7 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		project: Project;
@@ -16,12 +17,6 @@
 	const { project }: Props = $props();
 
 	const client = useQueryClient();
-
-	const STATUS_LABEL: Record<string, string> = {
-		draft: 'Draft',
-		in_progress: 'In Progress',
-		completed: 'Ready',
-	};
 
 	const stats = $derived(
 		project.stats ?? {
@@ -62,15 +57,15 @@
 		const then = new Date(iso).getTime();
 		if (Number.isNaN(then)) return '';
 		const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-		if (mins < 1) return 'just now';
-		if (mins < 60) return `${mins}m ago`;
+		if (mins < 1) return t('projectCard.timeJustNow');
+		if (mins < 60) return t('projectCard.timeM', { count: mins });
 		const hours = Math.round(mins / 60);
-		if (hours < 24) return `${hours}h ago`;
+		if (hours < 24) return t('projectCard.timeH', { count: hours });
 		const days = Math.round(hours / 24);
-		if (days < 30) return `${days}d ago`;
+		if (days < 30) return t('projectCard.timeD', { count: days });
 		const months = Math.round(days / 30);
-		if (months < 12) return `${months}mo ago`;
-		return `${Math.round(months / 12)}y ago`;
+		if (months < 12) return t('projectCard.timeMo', { count: months });
+		return t('projectCard.timeY', { count: Math.round(months / 12) });
 	}
 
 	const updatedLabel = $derived(relativeTime(project.updated_at));
@@ -108,10 +103,10 @@
 		mutationFn: (title: string) => projects.update(project.id, { title }),
 		onSuccess: (updated) => {
 			client.invalidateQueries({ queryKey: ['projects'] });
-			toast.success(`Renamed to “${updated.title}”`);
+			toast.success(t('projectCard.renamedTo', { title: updated.title }));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not rename project');
+			toast.error(err instanceof Error ? err.message : t('projectCard.renameFailed'));
 		},
 	});
 
@@ -134,10 +129,10 @@
 		mutationFn: () => projects.delete(project.id),
 		onSuccess: () => {
 			client.invalidateQueries({ queryKey: ['projects'] });
-			toast.success(`Deleted “${project.title}”`);
+			toast.success(t('projectCard.deleted', { title: project.title }));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not delete project');
+			toast.error(err instanceof Error ? err.message : t('projectCard.deleteFailed'));
 		},
 	});
 </script>
@@ -146,7 +141,7 @@
 	<button
 		type="button"
 		class="card-main"
-		aria-label="Open project {project.title}"
+		aria-label={t('projectCard.open', { title: project.title })}
 		onclick={() => goto(`/project/${project.id}`)}
 	>
 		<div class="card-thumb">
@@ -162,7 +157,7 @@
 				<div class="card-thumb-icon"><Icon name="video" size={26} /></div>
 			{/if}
 			<div class="card-status">
-				<StatusChip status={project.status} label={STATUS_LABEL[project.status]} />
+				<StatusChip status={project.status} label={t(`projectCard.status.${project.status}`)} />
 			</div>
 		</div>
 		<div class="card-body">
@@ -170,20 +165,23 @@
 				{project.title}
 				<span class="open-arrow">→</span>
 			</div>
-			<p class="card-desc">{project.idea || 'No story idea yet.'}</p>
+			<p class="card-desc">{project.idea || t('projectCard.noIdea')}</p>
 			<div class="card-meta">
 				<div class="card-stats">
 					<span class="card-stat">
 						<Icon name="script" size={13} />
-						{stats.scene_count} scenes
+						{t('projectCard.scenes', { count: stats.scene_count })}
 					</span>
 					<span class="card-stat">
 						<Icon name="assets" size={13} />
-						{stats.character_count} characters
+						{t('projectCard.characters', { count: stats.character_count })}
 					</span>
 					<span class="card-stat">
 						<Icon name="image" size={13} />
-						{stats.asset_ready_count}/{stats.asset_total_count} assets
+						{t('projectCard.assets', {
+							ready: stats.asset_ready_count,
+							total: stats.asset_total_count,
+						})}
 					</span>
 				</div>
 				<span title={updatedTitle}>{updatedLabel}</span>
@@ -195,7 +193,7 @@
 		<button
 			type="button"
 			class="menu-btn"
-			aria-label="Actions for {project.title}"
+			aria-label={t('projectCard.actions', { title: project.title })}
 			aria-haspopup="menu"
 			aria-expanded={menuOpen}
 			onclick={() => (menuOpen = !menuOpen)}
@@ -203,10 +201,10 @@
 			⋯
 		</button>
 		{#if menuOpen}
-			<div class="menu" role="menu" aria-label="Project actions">
+			<div class="menu" role="menu" aria-label={t('projectCard.menuLabel')}>
 				<button type="button" role="menuitem" class="menu-item" onclick={openRename}>
 					<Icon name="edit" size={14} />
-					Rename
+					{t('common.rename')}
 				</button>
 				<button
 					type="button"
@@ -218,7 +216,7 @@
 					}}
 				>
 					<Icon name="image" size={14} />
-					Change cover…
+					{t('projectCard.changeCover')}
 				</button>
 				<button
 					type="button"
@@ -230,14 +228,14 @@
 					}}
 				>
 					<Icon name="trash" size={14} />
-					Delete
+					{t('common.delete')}
 				</button>
 			</div>
 		{/if}
 	</div>
 </article>
 
-<Modal bind:open={renameOpen} title="Rename project">
+<Modal bind:open={renameOpen} title={t('projectCard.renameTitle')}>
 	<form
 		onsubmit={(e) => {
 			e.preventDefault();
@@ -245,27 +243,27 @@
 		}}
 	>
 		<label class="field">
-			<span class="field-label">Title</span>
+			<span class="field-label">{t('common.title')}</span>
 			<input class="field-input" bind:value={renameValue} required />
 		</label>
 	</form>
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (renameOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (renameOpen = false)}>{t('common.cancel')}</Button>
 		<Button
 			variant="primary"
 			disabled={!renameValue.trim() || $renameMutation.isPending}
 			onclick={submitRename}
 		>
-			Rename
+			{t('common.rename')}
 		</Button>
 	{/snippet}
 </Modal>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
-	title="Delete project?"
-	message="This deletes “{project.title}” and its story data. Generated asset files stay on disk. This cannot be undone."
-	confirmLabel="Delete"
+	title={t('projectCard.deleteTitle')}
+	message={t('projectCard.deleteMessage', { title: project.title })}
+	confirmLabel={t('common.delete')}
 	danger
 	onconfirm={() => $deleteMutation.mutate()}
 />

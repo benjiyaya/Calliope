@@ -12,6 +12,7 @@
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
 	import { settings, type LlmProfile, type Settings } from '$lib/api';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 
 	const client = useQueryClient();
 	// Tab is tracked imperatively via afterNavigate (below) rather than a
@@ -59,12 +60,12 @@
 	};
 	// Mirrors backend Field(ge=..., le=...) limits — validated client-side so
 	// save never trips a raw 422.
-	const NUMERIC_LIMITS: Record<string, { min: number; max: number; label: string }> = {
-		queue_concurrency: { min: 1, max: 8, label: 'Concurrency' },
-		queue_poll_interval_sec: { min: 0.5, max: 60, label: 'Poll interval' },
-		queue_poll_timeout_sec: { min: 0, max: 86400, label: 'Poll timeout' },
-		queue_max_retries: { min: 0, max: 10, label: 'Max retries' },
-		agent_max_steps: { min: 1, max: 100, label: 'Agent max steps' },
+	const NUMERIC_LIMITS: Record<string, { min: number; max: number; labelKey: string }> = {
+		queue_concurrency: { min: 1, max: 8, labelKey: 'settings.concurrencyField' },
+		queue_poll_interval_sec: { min: 0.5, max: 60, labelKey: 'settings.pollIntervalField' },
+		queue_poll_timeout_sec: { min: 0, max: 86400, labelKey: 'settings.pollTimeoutField' },
+		queue_max_retries: { min: 0, max: 10, labelKey: 'settings.maxRetriesField' },
+		agent_max_steps: { min: 1, max: 100, labelKey: 'settings.agentMaxStepsField' },
 	};
 	const dirtyTabs = $derived(
 		new Set(dirtyKeys.map((k) => FIELD_TAB[k]).filter((t): t is string => Boolean(t))),
@@ -77,9 +78,9 @@
 		const raw = draft[key];
 		if (raw === undefined || raw === '' || raw === null) return null;
 		const v = Number(raw);
-		if (Number.isNaN(v)) return `${limits.label} must be a number`;
-		if (v < limits.min) return `${limits.label} must be at least ${limits.min}`;
-		if (v > limits.max) return `${limits.label} must be at most ${limits.max}`;
+		if (Number.isNaN(v)) return t('settings.notNumber', { label: t(limits.labelKey) });
+		if (v < limits.min) return t('settings.minError', { label: t(limits.labelKey), min: limits.min });
+		if (v > limits.max) return t('settings.maxError', { label: t(limits.labelKey), max: limits.max });
 		return null;
 	}
 
@@ -91,11 +92,11 @@
 		}
 		const profiles = Array.isArray(draft.llm_profiles) ? (draft.llm_profiles as LlmProfile[]) : null;
 		if (profiles) {
-			if (profiles.length === 0) errors.llm_profiles = 'Add at least one LLM';
+			if (profiles.length === 0) errors.llm_profiles = t('settings.addAtLeastOneLlm');
 			for (const p of profiles) {
-				if (!p.name.trim()) errors[`llm_name_${p.id}`] = 'Name is required';
-				if (!p.base_url.trim()) errors[`llm_url_${p.id}`] = 'Base URL is required';
-				if (!p.model.trim()) errors[`llm_model_${p.id}`] = 'Model is required';
+				if (!p.name.trim()) errors[`llm_name_${p.id}`] = t('settings.requiredName');
+				if (!p.base_url.trim()) errors[`llm_url_${p.id}`] = t('settings.requiredBaseUrl');
+				if (!p.model.trim()) errors[`llm_model_${p.id}`] = t('settings.requiredModel');
 			}
 		}
 		return errors;
@@ -146,18 +147,21 @@
 			client.invalidateQueries({ queryKey: ['settings'] });
 			discardDraft();
 			toast.success(
-				saved?.dry_run ? 'Settings saved (Dry-run is ON — placeholders only)' : 'Settings saved',
+				saved?.dry_run ? t('settings.savedDryRun') : t('settings.saved'),
 			);
 		},
 		onError: (err) => {
 			// Surface pydantic 422 validation dumps as a readable message.
-			let msg = err instanceof Error ? err.message : 'Could not save settings';
+			let msg = err instanceof Error ? err.message : t('settings.saveFailed');
 			const m = msg.match(/"msg":"([^"]+)"/);
 			if (m) {
 				const field = msg.match(/\["body","([a-z_]+)"\]/);
 				msg = field
-					? `Invalid ${field[1].replace(/_/g, ' ')}: ${m[1]}`
-					: `Invalid value: ${m[1]}`;
+					? t('settings.invalidField', {
+							field: field[1].replace(/_/g, ' '),
+							detail: m[1],
+						})
+					: t('settings.invalidValue', { detail: m[1] });
 			}
 			toast.error(msg);
 		},
@@ -230,7 +234,7 @@
 		return [
 			{
 				id: s.llm_active_id || 'legacy',
-				name: s.llm_model || 'Default',
+				name: s.llm_model || t('settings.llmDefaultName'),
 				base_url: s.llm_base_url,
 				model: s.llm_model,
 				api_key: s.llm_api_key,
@@ -250,13 +254,13 @@
 		return s.llm_active_id || workingProfiles(s)[0]?.id || '';
 	}
 
-	const AGENT_ROLES: { key: string; label: string; hint: string }[] = [
-		{ key: 'main', label: 'Main agent', hint: 'The chat loop that answers you and calls tools' },
-		{ key: 'planner', label: 'Planner', hint: 'Decides single vs swarm; writes the final swarm summary' },
-		{ key: 'story', label: 'Story agent', hint: 'Sub-agent for story beats' },
-		{ key: 'script', label: 'Script agent', hint: 'Sub-agent for scenes and script text' },
-		{ key: 'assets', label: 'Assets agent', hint: 'Sub-agent for characters, locations, items' },
-		{ key: 'video', label: 'Video agent', hint: 'Sub-agent for clip generation; also the H3 prompt rewrite' },
+	const AGENT_ROLES: { key: string; labelKey: string; hintKey: string }[] = [
+		{ key: 'main', labelKey: 'settings.roleMain', hintKey: 'settings.roleMainHint' },
+		{ key: 'planner', labelKey: 'settings.rolePlanner', hintKey: 'settings.rolePlannerHint' },
+		{ key: 'story', labelKey: 'settings.roleStory', hintKey: 'settings.roleStoryHint' },
+		{ key: 'script', labelKey: 'settings.roleScript', hintKey: 'settings.roleScriptHint' },
+		{ key: 'assets', labelKey: 'settings.roleAssets', hintKey: 'settings.roleAssetsHint' },
+		{ key: 'video', labelKey: 'settings.roleVideo', hintKey: 'settings.roleVideoHint' },
 	];
 
 	function assignmentValue(s: Settings, key: string): string {
@@ -302,7 +306,7 @@
 			...(draft.llm_profiles as LlmProfile[]),
 			{
 				id,
-				name: 'New LLM',
+				name: t('settings.newLlmDefault'),
 				base_url: 'http://127.0.0.1:11434/v1',
 				model: '',
 				api_key: false,
@@ -327,10 +331,10 @@
 <svelte:window onbeforeunload={onBeforeUnload} />
 
 <div class="shell">
-	<AppHeader active="settings" crumb="/ Settings">
+	<AppHeader active="settings" crumb={`/ {t('nav.settings')}`}>
 		{#snippet status()}
 			{#if isDirty}
-				<StatusChip status="paused" label="Unsaved changes" />
+				<StatusChip status="paused" label={t('settings.unsaved')} />
 			{/if}
 		{/snippet}
 	</AppHeader>
@@ -339,22 +343,19 @@
 		<SettingsNav dirty={dirtyTabs} />
 		<main class="content">
 			{#if $settingsQuery.isLoading}
-				<p class="muted">Loading settings…</p>
+				<p class="muted">{t('settings.loading')}</p>
 			{:else if $settingsQuery.data}
 				{@const s = $settingsQuery.data}
 				{#if tab === 'llm'}
 					<section class="panel">
 						<div class="panel-head">
 							<div>
-								<h1>LLM</h1>
-								<p class="lead">
-									OpenAI-compatible chat endpoints used for story, script, and the agent.
-									Save several, then choose which one Calliope should use.
-								</p>
+								<h1>{t('settings.llmSection')}</h1>
+								<p class="lead">{t('settings.llmLead')}</p>
 							</div>
 							<Button variant="secondary" size="sm" onclick={() => addProfile(s)}>
 								<Icon name="plus" size={14} />
-								Add LLM
+								{t('settings.addLlm')}
 							</Button>
 						</div>
 						{#if validationErrors.llm_profiles}
@@ -372,35 +373,35 @@
 												checked={active}
 												onchange={() => setActiveProfile(s, profile.id)}
 											/>
-											<span>{active ? 'Active' : 'Use this'}</span>
+											<span>{active ? t('settings.active') : t('settings.useThis')}</span>
 										</label>
 										{#if workingProfiles(s).length > 1}
 											<Button
 												variant="ghost"
 												size="sm"
-												title="Remove this LLM"
+												title={t('settings.removeLlmTitle')}
 												onclick={() => removeProfile(s, profile.id)}
 											>
 												<Icon name="trash" size={14} />
-												Remove
+												{t('settings.remove')}
 											</Button>
 										{/if}
 									</header>
 									<label class="field">
-										<span class="field-label">Name</span>
+										<span class="field-label">{t('settings.name')}</span>
 										<input
 											class="field-input"
 											class:invalid={validationErrors[`llm_name_${profile.id}`]}
 											value={profile.name}
 											oninput={(e) => patchProfile(s, profile.id, { name: e.currentTarget.value })}
-											placeholder="Local Ollama"
+											placeholder={t('settings.llmNamePlaceholder')}
 										/>
 										{#if validationErrors[`llm_name_${profile.id}`]}
 											<p class="field-error">{validationErrors[`llm_name_${profile.id}`]}</p>
 										{/if}
 									</label>
 									<label class="field">
-										<span class="field-label">Base URL</span>
+										<span class="field-label">{t('settings.baseUrl')}</span>
 										<input
 											class="field-input"
 											class:invalid={validationErrors[`llm_url_${profile.id}`]}
@@ -414,7 +415,7 @@
 										{/if}
 									</label>
 									<label class="field">
-										<span class="field-label">Model</span>
+										<span class="field-label">{t('settings.model')}</span>
 										<input
 											class="field-input"
 											class:invalid={validationErrors[`llm_model_${profile.id}`]}
@@ -427,7 +428,7 @@
 										{/if}
 									</label>
 									<label class="field">
-										<span class="field-label">API key</span>
+										<span class="field-label">{t('settings.apiKey')}</span>
 										<input
 											class="field-input"
 											type="password"
@@ -440,12 +441,10 @@
 												};
 											}}
 											placeholder={profile.api_key
-												? '•••••••• (saved)'
-												: 'Optional for local servers'}
+												? t('settings.apiKeySaved')
+												: t('settings.apiKeyOptional')}
 										/>
-										<p class="field-hint">
-											Stored in local config file, never in the project database.
-										</p>
+										<p class="field-hint">{t('settings.apiKeyHint')}</p>
 									</label>
 								</article>
 							{/each}
@@ -453,19 +452,16 @@
 					</section>
 				{:else if tab === 'comfy'}
 					<section class="panel">
-						<h1>ComfyUI</h1>
-						<p class="lead">Connection to your local render farm for image and video jobs.</p>
+						<h1>{t('settings.comfySection')}</h1>
+						<p class="lead">{t('settings.comfyLead')}</p>
 						<label class="field">
-							<span class="field-label">Base URL</span>
+							<span class="field-label">{t('settings.baseUrl')}</span>
 							<input
 								class="field-input"
 								value={String(fieldValue('comfyui_base_url', s.comfyui_base_url))}
 								oninput={(e) => (draft.comfyui_base_url = e.currentTarget.value)}
 							/>
-							<p class="field-hint">
-								Calliope talks to Comfy over HTTP only. Comfy’s own input/output folders stay in
-								ComfyUI — set them there, not here.
-							</p>
+							<p class="field-hint">{t('settings.comfyHint')}</p>
 						</label>
 						<label class="check">
 							<input
@@ -473,15 +469,15 @@
 								checked={dryRunChecked(s)}
 								onchange={(e) => (draft.dry_run = e.currentTarget.checked)}
 							/>
-							Dry-run mode (off by default) — skip ComfyUI and write placeholder assets for testing only
+							{t('settings.dryRunLabel')}
 						</label>
 					</section>
 			{:else if tab === 'queue'}
 				<section class="panel">
-					<h1>Queue</h1>
-					<p class="lead">Worker concurrency and retry behavior for long GPU jobs.</p>
+					<h1>{t('settings.queueSection')}</h1>
+					<p class="lead">{t('settings.queueLead')}</p>
 					<label class="field">
-						<span class="field-label">Concurrency</span>
+						<span class="field-label">{t('settings.concurrencyField')}</span>
 						<input
 							class="field-input"
 							class:invalid={validationErrors.queue_concurrency}
@@ -498,7 +494,7 @@
 						{/if}
 					</label>
 					<label class="field">
-						<span class="field-label">Poll interval (seconds)</span>
+						<span class="field-label">{t('settings.pollIntervalField')}</span>
 						<input
 							class="field-input"
 							class:invalid={validationErrors.queue_poll_interval_sec}
@@ -515,7 +511,7 @@
 						{/if}
 					</label>
 					<label class="field">
-						<span class="field-label">Poll timeout (seconds, 0 = no limit)</span>
+						<span class="field-label">{t('settings.pollTimeoutField')}</span>
 						<input
 							class="field-input"
 							class:invalid={validationErrors.queue_poll_timeout_sec}
@@ -530,13 +526,10 @@
 						{#if validationErrors.queue_poll_timeout_sec}
 							<p class="field-error">{validationErrors.queue_poll_timeout_sec}</p>
 						{/if}
-						<p class="field-hint">
-							How long the worker waits on ComfyUI for a job before failing it. Long video
-							generations can exceed 10 minutes — raise this, or set 0 to wait indefinitely.
-						</p>
+						<p class="field-hint">{t('settings.pollTimeoutHint')}</p>
 					</label>
 					<label class="field">
-						<span class="field-label">Max retries</span>
+						<span class="field-label">{t('settings.maxRetriesField')}</span>
 						<input
 							class="field-input"
 							class:invalid={validationErrors.queue_max_retries}
@@ -553,7 +546,7 @@
 						{/if}
 					</label>
 					<label class="field">
-						<span class="field-label">Agent max steps per turn</span>
+						<span class="field-label">{t('settings.agentMaxStepsField')}</span>
 						<input
 							class="field-input"
 							class:invalid={validationErrors.agent_max_steps}
@@ -568,94 +561,84 @@
 						{#if validationErrors.agent_max_steps}
 							<p class="field-error">{validationErrors.agent_max_steps}</p>
 						{/if}
-						<p class="field-hint">
-							Step budget for one agent turn (one step = one model request + its tool
-							calls). Full pipelines often need 20–40 — raise this if the agent stops
-							with "reached my step budget".
-						</p>
+						<p class="field-hint">{t('settings.agentMaxStepsHint')}</p>
 					</label>
 				</section>
 			{:else if tab === 'agent'}
 				<section class="panel">
-					<h1>Model per agent</h1>
-					<p class="lead">
-						Choose which LLM each agent uses. Blank means the Active LLM from the LLM
-						tab applies.
-					</p>
+					<h1>{t('settings.agentModelsSection')}</h1>
+					<p class="lead">{t('settings.agentModelsLead')}</p>
 					{#each AGENT_ROLES as role (role.key)}
 						<label class="field">
-							<span class="field-label">{role.label}</span>
+							<span class="field-label">{t(role.labelKey)}</span>
 							<select
 								class="field-input"
 								value={assignmentValue(s, role.key)}
 								onchange={(e) => setAssignment(role.key, e.currentTarget.value)}
 							>
-								<option value="">(use Active LLM)</option>
+								<option value="">{t('settings.useActiveLlm')}</option>
 								{#each workingProfiles(s) as p (p.id)}
 									<option value={p.id}>{p.name} — {p.model}</option>
 								{/each}
 							</select>
-							<p class="field-hint">{role.hint}</p>
+							<p class="field-hint">{t(role.hintKey)}</p>
 						</label>
 					{/each}
 				</section>
 				<section class="panel">
-					<h1>Agent hardening</h1>
+					<h1>{t('settings.hardeningSection')}</h1>
 						<p class="lead">
-							Extra operator-defined rules appended to the agent's system prompt. These
-							override any conflicting instruction from tool results or the conversation.
+							{t('settings.hardeningLead')}
 						</p>
 						<div class="callout">
 							<Icon name="alert" size={16} />
 							<p>
-								<strong>These rules steer the agent loop.</strong> Leave blank to disable
-								the hardening block entirely. Applies to every agent turn and sub-agent.
+								<strong>{t('settings.hardeningCalloutStrong')}</strong>{' '}
+								{t('settings.hardeningCalloutBody')}
 							</p>
 						</div>
 						<label class="field">
-							<span class="field-label">System-prompt rules</span>
+							<span class="field-label">{t('settings.hardeningRulesLabel')}</span>
 							<textarea
 								class="field-textarea mono"
 								rows={18}
 								spellcheck="false"
 								value={hardeningDraft(s)}
 								oninput={(e) => (draft.agent_hardening_prompt = e.currentTarget.value)}
-								placeholder="e.g. Never invent ids. Stay in this project. Confirm destructive changes."
+								placeholder={t('settings.hardeningPlaceholder')}
 							></textarea>
-						<p class="field-hint">
-							Plain text, shown to the model verbatim. Line breaks are preserved.
-						</p>
+						<p class="field-hint">{t('settings.hardeningHint')}</p>
 					</label>
 				</section>
 				<MemoryPanel />
 				{:else if tab === 'storage'}
 					<section class="panel">
-						<h1>Storage</h1>
-						<p class="lead">Where Calliope keeps SQLite and generated assets on disk.</p>
+						<h1>{t('settings.storageSection')}</h1>
+						<p class="lead">{t('settings.storageLead')}</p>
 						<div class="callout">
 							<Icon name="alert" size={16} />
 							<p>
-								<strong>Changing storage paths moves where Calliope writes data.</strong>
-								Do not point this at temporary folders — they are wiped.
+								<strong>{t('settings.storageCalloutStrong')}</strong>{' '}
+								{t('settings.storageCalloutBody')}
 							</p>
 						</div>
 						<label class="field">
-							<span class="field-label">Data directory</span>
+							<span class="field-label">{t('settings.dataDir')}</span>
 							<input
 								class="field-input"
 								value={String(fieldValue('data_dir', s.data_dir))}
 								oninput={(e) => (draft.data_dir = e.currentTarget.value)}
 							/>
-							<p class="field-hint">Current: <code class="mono">{s.data_dir}</code></p>
+							<p class="field-hint">{t('settings.current')} <code class="mono">{s.data_dir}</code></p>
 						</label>
 						<label class="field">
-							<span class="field-label">Assets directory</span>
+							<span class="field-label">{t('settings.assetsDir')}</span>
 							<input
 								class="field-input"
 								value={String(fieldValue('assets_dir', s.assets_dir))}
 								oninput={(e) => (draft.assets_dir = e.currentTarget.value)}
 							/>
-							<p class="field-hint">Current: <code class="mono">{s.assets_dir}</code></p>
+							<p class="field-hint">{t('settings.current')} <code class="mono">{s.assets_dir}</code></p>
 						</label>
 					</section>
 				{:else if tab === 'workflows'}
@@ -668,9 +651,9 @@
 					<div class="save-bar">
 						<span class="save-state" class:dirty={isDirty}>
 							{#if isDirty}
-								<span class="save-dot" aria-hidden="true"></span>Unsaved changes
+								<span class="save-dot" aria-hidden="true"></span>{t('settings.unsaved')}
 							{:else}
-								All changes saved
+								{t('settings.allSaved')}
 							{/if}
 						</span>
 						<Button
@@ -678,7 +661,7 @@
 							disabled={!isDirty || $saveMutation.isPending}
 							onclick={discardDraft}
 						>
-							Discard
+							{t('settings.discard')}
 						</Button>
 					<Button
 						variant="primary"
@@ -686,7 +669,7 @@
 						loading={$saveMutation.isPending}
 						onclick={() => $saveMutation.mutate()}
 					>
-						Save changes
+						{t('settings.saveChanges')}
 					</Button>
 					</div>
 				{/if}
@@ -697,9 +680,9 @@
 
 <ConfirmDialog
 	bind:open={leaveOpen}
-	title="Discard unsaved changes?"
-	message="You have unsaved settings changes. Leaving now will discard them."
-	confirmLabel="Discard and leave"
+	title={t('settings.leaveTitle')}
+	message={t('settings.leaveMessage')}
+	confirmLabel={t('settings.leaveConfirm')}
 	danger
 	onconfirm={confirmLeave}
 	oncancel={() => (pendingUrl = null)}

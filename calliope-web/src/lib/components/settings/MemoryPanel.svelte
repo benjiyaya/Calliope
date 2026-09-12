@@ -4,6 +4,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 
 	const client = useQueryClient();
 	const memoriesQuery = createQuery({
@@ -31,15 +32,15 @@
 		onSuccess: () => {
 			newContent = '';
 			client.invalidateQueries({ queryKey: ['agent-memories'] });
-			toast.success('Memory saved');
+			toast.success(t('memory.saved'));
 		},
-		onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not save'),
+		onError: (err) => toast.error(err instanceof Error ? err.message : t('memory.saveFailed')),
 	});
 
 	const deleteMutation = createMutation({
 		mutationFn: (id: number) => agentApi.deleteMemory(id),
 		onSuccess: () => client.invalidateQueries({ queryKey: ['agent-memories'] }),
-		onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not delete'),
+		onError: (err) => toast.error(err instanceof Error ? err.message : t('memory.deleteFailed')),
 	});
 
 	const canAdd = $derived(
@@ -55,18 +56,13 @@
 </script>
 
 <section class="panel">
-	<h1>Memory</h1>
-	<p class="lead">
-		Durable preferences and conventions the agent carries across chats. The
-		agent saves these itself when you state a preference ("I always want…",
-		"never do…"); you can add or delete them here. Saved memories are
-		injected into every agent turn.
-	</p>
+	<h1>{t('memory.title')}</h1>
+	<p class="lead">{t('memory.lead')}</p>
 
 	<div class="add-row">
 		<input
 			class="field-input add-input"
-			placeholder="e.g. User prefers terse scene descriptions"
+			placeholder={t('memory.placeholder')}
 			maxlength={500}
 			bind:value={newContent}
 			onkeydown={(e) => {
@@ -74,21 +70,21 @@
 			}}
 		/>
 		<select class="field-input scope-select" bind:value={newScope}>
-			<option value="global">Global</option>
-			<option value="project">Project</option>
+			<option value="global">{t('memory.scopeGlobal')}</option>
+			<option value="project">{t('memory.scopeProject')}</option>
 		</select>
 		{#if newScope === 'project'}
 			<select class="field-input scope-select" bind:value={newProjectId}>
-				<option value={null}>Choose project…</option>
+				<option value={null}>{t('memory.chooseProject')}</option>
 				{#each ($projectsQuery.data ?? []) as p (p.id)}
 					<option value={p.id}>{p.title}</option>
 				{/each}
 			</select>
 		{/if}
 		<select class="field-input scope-select" bind:value={newKind}>
-			<option value="preference">preference</option>
-			<option value="convention">convention</option>
-			<option value="correction">correction</option>
+			<option value="preference">{t('memory.kindPreference')}</option>
+			<option value="convention">{t('memory.kindConvention')}</option>
+			<option value="correction">{t('memory.kindCorrection')}</option>
 		</select>
 		<Button
 			variant="primary"
@@ -96,33 +92,29 @@
 			disabled={!canAdd || $addMutation.isPending}
 			onclick={() => $addMutation.mutate()}
 		>
-			Add
+			{t('common.add')}
 		</Button>
 	</div>
 
 	{#if $memoriesQuery.isLoading}
-		<p class="muted">Loading memories…</p>
+		<p class="muted">{t('memory.loading')}</p>
 	{:else if globalMemories.length === 0 && projectMemories.length === 0}
-		<p class="muted">
-			No memories yet. Tell the agent a preference ("always give me
-			16:9", "never show the villain's face") and it will save one — or
-			add it above.
-		</p>
+		<p class="muted">{t('memory.empty')}</p>
 	{:else}
 		{#if globalMemories.length > 0}
-			<h2 class="group-head">Global</h2>
+			<h2 class="group-head">{t('memory.groupGlobal')}</h2>
 			<div class="mem-list">
 				{#each globalMemories as m (m.id)}
 					<div class="mem-row">
 						<span class="mem-kind">{m.kind}</span>
 						<span class="mem-content">{m.content}</span>
 						<span class="mem-meta">
-							{m.source === 'user' ? 'you' : 'agent'} · used {m.use_count}×
+							{m.source === 'user' ? t('memory.sourceYou') : t('memory.sourceAgent')} · {t('memory.usedCount', { count: m.use_count })}
 						</span>
 						<button
 							type="button"
 							class="mem-del"
-							title="Forget"
+							title={t('memory.forget')}
 							onclick={() => $deleteMutation.mutate(m.id)}
 						>
 							<Icon name="trash" size={13} />
@@ -132,7 +124,7 @@
 			</div>
 		{/if}
 		{#if projectMemories.length > 0}
-			<h2 class="group-head">Per project</h2>
+			<h2 class="group-head">{t('memory.groupProject')}</h2>
 			<div class="mem-list">
 				{#each projectMemories as m (m.id)}
 					<div class="mem-row">
@@ -140,12 +132,12 @@
 						<span class="mem-project">{m.project_title ?? `#${m.project_id}`}</span>
 						<span class="mem-content">{m.content}</span>
 						<span class="mem-meta">
-							{m.source === 'user' ? 'you' : 'agent'} · used {m.use_count}×
+							{m.source === 'user' ? t('memory.sourceYou') : t('memory.sourceAgent')} · {t('memory.usedCount', { count: m.use_count })}
 						</span>
 						<button
 							type="button"
 							class="mem-del"
-							title="Forget"
+							title={t('memory.forget')}
 							onclick={() => $deleteMutation.mutate(m.id)}
 						>
 							<Icon name="trash" size={13} />

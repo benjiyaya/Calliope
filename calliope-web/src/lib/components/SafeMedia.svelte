@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { t } from '$lib/i18n.svelte';
+
 	interface Props {
 		src: string | null | undefined;
 		alt?: string;
@@ -17,7 +19,7 @@
 		src = null,
 		alt = '',
 		kind = 'image',
-		label = 'No media',
+		label,
 		class: klass = '',
 		loading = 'lazy',
 		controls = true,
@@ -36,6 +38,8 @@
 	});
 
 	const usable = $derived(Boolean(src) && !failed);
+
+	const labelText = $derived(label ?? t('safeMedia.noMedia'));
 
 	function markAvailable() {
 		onAvailable?.();
@@ -70,8 +74,8 @@
 		/>
 	{/if}
 {:else}
-	<div class="safe-media-ph {klass}" role="img" aria-label={label}>
-		<span>{label}</span>
+	<div class="safe-media-ph {klass}" role="img" aria-label={labelText}>
+		<span>{labelText}</span>
 	</div>
 {/if}
 

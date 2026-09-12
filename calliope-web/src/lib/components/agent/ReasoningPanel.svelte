@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		/** Persisted reasoning text (from stored message). */
@@ -25,11 +26,11 @@
 			</span>
 			<span class="label">
 				{#if isLive && !open}
-					Thinking…
+					{t('reasoning.thinking')}
 				{:else if open}
-					Reasoning
+					{t('reasoning.title')}
 				{:else}
-					Show reasoning
+					{t('reasoning.show')}
 				{/if}
 			</span>
 			<span class="chev"><Icon name="chevron-down" size={12} /></span>

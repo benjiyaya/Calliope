@@ -17,6 +17,7 @@
 	import { createUploadManager, truncateMiddle } from '$lib/comfy/useUpload.svelte';
 	import { toast } from '$lib/toast';
 	import WorkflowMentionMenu from './WorkflowMentionMenu.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 interface Props {
 	running: boolean;
@@ -350,7 +351,7 @@ let {
 		const list = Array.from(files);
 		for (const file of list) {
 			if (attachments.length >= ATTACH_LIMIT) {
-				toast.error(`At most ${ATTACH_LIMIT} attachments`);
+				toast.error(t('agentComposer.attachLimit', { count: ATTACH_LIMIT }));
 				break;
 			}
 			const slot = `attach-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -481,7 +482,7 @@ let {
 	class="composer"
 	class:drag-over={dragOver}
 	role="region"
-	aria-label="Message composer"
+	aria-label={t('agentComposer.aria')}
 	ondragover={(e) => {
 		e.preventDefault();
 		dragOver = true;
@@ -490,7 +491,7 @@ let {
 	ondrop={onDrop}
 >
 	{#if attachments.length > 0 || uploadingNames.length > 0}
-		<div class="tray" aria-label="Attachments">
+		<div class="tray" aria-label={t('agentComposer.attachments')}>
 			{#each attachments as a, i (a.path)}
 				<div class="tile">
 					{#if a.kind === 'image'}
@@ -511,7 +512,7 @@ let {
 					<button
 						type="button"
 						class="tile-x"
-						title="Remove"
+						title={t('agentComposer.remove')}
 						onclick={() => removeAttachment(i)}
 						disabled={running}
 					>
@@ -536,8 +537,8 @@ let {
 			role="textbox"
 			tabindex="0"
 			aria-multiline="true"
-			aria-label="Message"
-			data-placeholder={running ? 'Agent is working…' : 'Describe what you want to build or change…'}
+			aria-label={t('agentComposer.message')}
+			data-placeholder={running ? t('agentComposer.working') : t('agentComposer.placeholder')}
 			onkeydown={onKeydown}
 			oninput={onEditorInput}
 			onpaste={onPaste}
@@ -554,16 +555,16 @@ let {
 			<button
 				type="button"
 				class="attach"
-				title="Attach image, video, or audio"
+				title={t('agentComposer.attach')}
 				disabled={busy}
 				onclick={() => fileInput?.click()}
 			>
 				<Icon name="paperclip" size={16} />
 			</button>
 			{#if running}
-				<button type="button" class="send stop" onclick={onCancel} title="Stop the agent">
+				<button type="button" class="send stop" onclick={onCancel} title={t('agentComposer.stopTitle')}>
 					<Icon name="stop" size={14} />
-					Stop
+					{t('common.stop')}
 				</button>
 			{:else}
 				<button
@@ -571,9 +572,9 @@ let {
 					class="send"
 					onclick={submit}
 					disabled={!sendable}
-					title="Send (Enter)"
+					title={t('agentComposer.sendTitle')}
 				>
-					Send
+					{t('common.send')}
 					<Icon name="chevron-right" size={14} />
 				</button>
 			{/if}
@@ -585,7 +586,7 @@ let {
 	open={mentionOpen}
 	items={mentionLocked ? [] : mentionItems}
 	lockReason={mentionLocked
-		? 'One workflow per message — remove the existing @ tag to pick another.'
+		? t('agentComposer.mentionLock')
 		: null}
 	activeIndex={mentionIndex}
 	anchor={mentionAnchor}

@@ -11,6 +11,7 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import { acceptForKind } from '$lib/comfy/useUpload.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		input: ComfyDynamicInput;
@@ -89,13 +90,13 @@
 
 	const displayLabel = $derived(
 		input.role === 'character'
-			? 'Character'
+			? t('omni.roleCharacter')
 			: input.role === 'location'
-				? 'Location'
+				? t('omni.roleLocation')
 				: input.role === 'video'
-					? 'Video'
+					? t('omni.roleVideo')
 					: input.role === 'audio'
-						? 'Audio'
+						? t('omni.roleAudio')
 						: input.label,
 	);
 
@@ -163,7 +164,7 @@
 					e.stopPropagation();
 					onclear();
 				}}
-				aria-label="Remove {displayLabel}"
+				aria-label={t('omni.removeSlot', { label: displayLabel })}
 			>
 				<Icon name="close" size={12} />
 			</button>
@@ -173,13 +174,13 @@
 	<span class="tile-label">{displayLabel}</span>
 
 	{#if invalid && !value}
-		<span class="tile-req">Required</span>
+		<span class="tile-req">{t('omni.required')}</span>
 	{/if}
 </div>
 
 <AssetPickerModal
 	bind:open={pickerOpen}
-	title="Choose {displayLabel}"
+	title={t('omni.choose', { label: displayLabel })}
 	assets={matchingAssets}
 	{value}
 	kind={input.kind}
