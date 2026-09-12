@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { agentApi, canvasApi } from '$lib/api';
-	import { AGENT_TASK_PROMPTS, AGENT_TASK_TITLES, isAgentTaskKind } from '$lib/agentTasks';
+	import { AGENT_TASK_PROMPTS, AGENT_TASK_TITLE_KEYS, isAgentTaskKind } from '$lib/agentTasks';
 	import { t } from '$lib/i18n.svelte';
 
 	let failed = $state('');
@@ -21,7 +21,7 @@
 				const task = isAgentTaskKind(taskParam) ? taskParam : null;
 				const s = await agentApi.createSession({
 					...(pid != null && Number.isFinite(pid) ? { project_id: pid } : {}),
-					...(task ? { title: AGENT_TASK_TITLES[task] } : {}),
+					...(task ? { title: t(AGENT_TASK_TITLE_KEYS[task]) } : {}),
 				});
 				sessionId = s.id;
 				prefill = task ? AGENT_TASK_PROMPTS[task] : '';

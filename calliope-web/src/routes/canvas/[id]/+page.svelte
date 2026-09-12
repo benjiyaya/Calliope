@@ -52,7 +52,7 @@
 
 	const canvasId = Number(page.params.id);
 	if (!Number.isFinite(canvasId)) {
-		throw new Error('Invalid canvas id');
+		throw new Error(t('canvas.invalidId'));
 	}
 
 	const RAIL_KEY = 'calliope.canvas.railCollapsed';
@@ -234,7 +234,7 @@
 				y: node.position.y,
 			});
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not save position');
+			toast.error(err instanceof Error ? err.message : t('canvas.savePosFailed'));
 		}
 	}
 
@@ -491,7 +491,7 @@
 				: await canvasApi.ensureForSession(s.id);
 			goto(`/canvas/${graph.canvas.id}?session=${s.id}`);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not open that canvas');
+			toast.error(err instanceof Error ? err.message : t('canvas.openThatFailed'));
 		}
 	}
 
@@ -523,7 +523,7 @@
 			const graph = await canvasApi.ensureForSession(s.id);
 			goto(`/canvas/${graph.canvas.id}?session=${s.id}`);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not create session');
+			toast.error(err instanceof Error ? err.message : t('canvas.sessionCreateFailed'));
 		}
 	}
 
@@ -540,19 +540,19 @@
 				goto(`/canvas/${graph.canvas.id}?session=${s.id}`);
 			}
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not create session');
+			toast.error(err instanceof Error ? err.message : t('canvas.sessionCreateFailed'));
 		}
 	}
 
 	async function removeSession(id: number) {
-		if (!confirm('Delete this chat and its message history?')) return;
+		if (!confirm(t('canvas.confirmDeleteChat'))) return;
 		try {
 			await agentApi.deleteSession(id);
 			if (activeId === id) activeId = null;
 			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
-			toast.success('Session deleted');
+			toast.success(t('canvas.sessionDeleted'));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not delete session');
+			toast.error(err instanceof Error ? err.message : t('canvas.sessionDeleteFailed'));
 		}
 	}
 
@@ -572,9 +572,9 @@
 			// Follow the chat to its sandbox canvas (created on demand).
 			const graph = await canvasApi.ensureForSession(sid);
 			goto(`/canvas/${graph.canvas.id}?session=${sid}`);
-			toast.success('Chat unlinked — moved to Sandbox');
+			toast.success(t('canvas.chatUnlinked'));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Unlink failed');
+			toast.error(err instanceof Error ? err.message : t('canvas.unlinkFailed'));
 		}
 	}
 
@@ -598,7 +598,7 @@
 			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Failed to send');
+			toast.error(err instanceof Error ? err.message : t('canvas.sendFailed'));
 		},
 	});
 
@@ -611,9 +611,9 @@
 			// so the composer leaves its running state immediately.
 			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
 			await client.invalidateQueries({ queryKey: ['agent-session', activeId] });
-			toast.info('Run cancelled');
+			toast.info(t('canvas.runCancelled'));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Cancel failed');
+			toast.error(err instanceof Error ? err.message : t('canvas.cancelFailed'));
 		}
 	}
 
@@ -628,7 +628,7 @@
 			activeId = s.id;
 			$sendMutation.mutate(payload);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not create session');
+			toast.error(err instanceof Error ? err.message : t('canvas.sessionCreateFailed'));
 		}
 	}
 
@@ -865,9 +865,9 @@
 		try {
 			const res = await canvasApi.tidy(canvasId);
 			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
-			toast.success(`Tidied ${res.moved} cards into columns`);
+			toast.success(t('canvas.tidied', { count: res.moved }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Tidy failed');
+			toast.error(err instanceof Error ? err.message : t('canvas.tidyFailed'));
 		} finally {
 			tidying = false;
 		}
@@ -956,17 +956,17 @@
 			savedFlash = true;
 			setTimeout(() => (savedFlash = false), 1400);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Rename failed');
+			toast.error(err instanceof Error ? err.message : t('canvas.renameFailed'));
 		}
 	}
 
 	const SUGGESTIONS: { label: string; prompt: string }[] = [
 		{
-			label: 'Create a new film',
+			label: t('canvas.suggestFilm'),
 			prompt: 'Create a new film project and guide me through drafting the story.',
 		},
 		{
-			label: 'Draft a storyline',
+			label: t('canvas.suggestStory'),
 			prompt: 'Draft a storyline — beats, characters, environments, and misc. items.',
 		},
 	];
@@ -977,7 +977,7 @@
 
 	{#if $canvasQuery.isError}
 		<div class="load-error" role="alert">
-			Could not load this canvas
+			{t('canvas.loadFailed')}
 			{#if $canvasQuery.error instanceof Error}
 				— {$canvasQuery.error.message}
 			{/if}
@@ -1012,7 +1012,7 @@
 							type="button"
 							class="title-btn"
 							onclick={() => (titleEditing = true)}
-							title="Rename canvas"
+							title={t('canvas.rename')}
 						>
 							{canvas.title}
 						</button>
@@ -1030,11 +1030,11 @@
 						class="unlink-btn"
 						onclick={unlinkActiveSession}
 						disabled={!activeSession || running}
-						title={running
-							? 'Wait for the run to finish'
-							: activeSession
-								? `Unlink this chat from ${canvas.project.title}`
-								: 'No chat on this canvas yet'}
+title={running
+			? t('canvas.waitFinish')
+			: activeSession
+			? t('canvas.unlinkFrom', { title: canvas.project.title })
+			: t('canvas.noChatYet')}
 						aria-label={`Unlink this chat from ${canvas.project.title}`}
 					>
 						<Icon name="link-off" size={12} />
@@ -1075,20 +1075,17 @@
 							class="tidy-btn"
 							disabled={tidying || nodes.length === 0}
 							onclick={tidyCanvas}
-							title="Re-arrange all cards into clean columns and grids"
+							title={t('canvas.tidyTitle')}
 						>
 							<Icon name="drag" size={14} />
-							Tidy layout
+							{t('canvas.tidy')}
 						</button>
 					</Panel>
 					{#if nodes.length === 0 && !$canvasQuery.isLoading}
 						<Panel position="top-center">
 							<div class="canvas-empty-hint">
 								<strong>{t('canvas.emptyBoard')}</strong>
-								<span>
-									Ask the agent on the right to create characters, scenes, or to
-									generate an image or video — outputs land here as cards.
-								</span>
+								<span>{t('canvas.emptyHint')}</span>
 							</div>
 						</Panel>
 					{/if}
@@ -1127,8 +1124,8 @@
 							type="button"
 							class="chat-toggle"
 							onclick={toggleChat}
-							title="Collapse chat"
-							aria-label="Collapse chat"
+							title={t('canvas.collapseChat')}
+							aria-label={t('canvas.collapseChat')}
 						>
 							<Icon name="chevron-right" size={14} />
 						</button>
@@ -1165,8 +1162,8 @@
 					type="button"
 					class="chat-expand"
 					onclick={toggleChat}
-					title="Expand chat"
-					aria-label="Expand chat"
+					title={t('canvas.expandChat')}
+					aria-label={t('canvas.expandChat')}
 				>
 					<Icon name="chevron-left" size={14} />
 				</button>

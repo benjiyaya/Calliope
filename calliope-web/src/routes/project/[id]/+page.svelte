@@ -152,8 +152,8 @@
 	{#if !enabled}
 		<div class="invalid-wrap">
 			<EmptyState
-				title="Project not found"
-				body={`“${data.id}” isn’t a valid project id — the link may be broken or the project was deleted.`}
+				title={t('project.notFound')}
+				body={t('project.invalidIdBody', { id: data.id })}
 			>
 				{#snippet icon()}
 					<Icon name="folder" size={28} />
@@ -169,13 +169,13 @@
 			<Button
 				variant="secondary"
 				size="sm"
-				title="Open the Video stage"
+				title={t('project.openVideoStage')}
 				onclick={() => selectStage('video')}
 			>
 				<Icon name="queue" size={13} />
 				{runningCount + queuedCount > 0
-					? `${runningCount} running · ${queuedCount} queued`
-					: 'Queue idle'}
+					? t('project.runningQueued', { running: runningCount, queued: queuedCount })
+					: t('project.queueIdle')}
 				{#if queuePaused}
 					<StatusChip status="paused" />
 				{/if}
