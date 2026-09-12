@@ -73,7 +73,7 @@
 	<div
 		class="track"
 		role="listbox"
-		aria-label={t('filmstrip.sceneClips')}
+		aria-label={t('filmstrip.sceneClips', { n: clips.length })}
 		aria-activedescendant={selectedClipId != null ? `film-clip-${selectedClipId}` : undefined}
 		tabindex="0"
 		onkeydown={onKeydown}

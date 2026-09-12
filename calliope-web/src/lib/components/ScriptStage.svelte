@@ -440,7 +440,7 @@
 						<span class="clip-title">
 							<Icon name="film" size={12} />
 							{(scene.clips ?? []).length}
-							{((scene.clips ?? []).length === 1 ? t('script.shotClipSingular') : t('script.shotClipPlural'))}
+							{((scene.clips ?? []).length === 1 ? t('script.shotClipSingular') : t('script.shotClipPlural', { n: (scene.clips ?? []).length }))}
 							{#if (scene.clips ?? []).some((c) => c.clip_path)}
 								· {t('script.renderedCount', { count: (scene.clips ?? []).filter((c) => c.clip_path).length })}
 							{/if}

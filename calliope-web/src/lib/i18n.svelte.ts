@@ -34,6 +34,8 @@ export function t(key: string, vars?: Record<string, string | number>): string {
 	let s: string = dictionaries[language.current][key] ?? (en as Record<string, string>)[key] ?? key;
 	if (vars) {
 		for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+		// ponytail: count 语义占位统一为 {n}；调用方传 count 即命中
+		if (vars.count !== undefined) s = s.replaceAll('{n}', String(vars.count));
 	}
 	return s;
 }

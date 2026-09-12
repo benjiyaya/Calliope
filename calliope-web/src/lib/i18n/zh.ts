@@ -700,7 +700,7 @@ export const zh: Dict = {
 
 	// --- Filmstrip ---
 	'filmstrip.title': '胶片条',
-	'filmstrip.clipTitle': '片段 {n}',
+	'filmstrip.clipTitle': '{scene} · 镜头 {shot} · {time}',
 	'filmstrip.scene': '场景',
 	'filmstrip.sceneClips': '{n} 个片段',
 	'filmstrip.prev': '上一个片段',

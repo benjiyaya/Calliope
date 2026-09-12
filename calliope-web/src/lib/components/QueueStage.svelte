@@ -462,7 +462,7 @@ const generateOne = createMutation({
 					: [{ id: scene.id, key: String(scene.id) }];
 			for (const target of renderTargets) {
 				done++;
-				batchNote = t('queue.queueingProgress', { current: done, total: totalClips });
+				batchNote = t('queue.queueingProgress', { n: done, total: totalClips });
 				try {
 					// Resolve like the per-clip button does: session pick → scene's stored
 					// workflow → first enabled video workflow. A scene whose stored workflow
@@ -977,7 +977,7 @@ const generateOne = createMutation({
 						label={exportProg?.message}
 					/>
 				</div>
-				<p class="slate-sub">{t('queue.exportingSub')}</p>
+				<p class="slate-sub">{t('queue.exportingSub', { n: clipsReady })}</p>
 				<Button variant="ghost" size="sm" onclick={cancelExport}
 					>{t('common.cancel')}</Button
 				>
@@ -1038,7 +1038,7 @@ const generateOne = createMutation({
 		{@const exportUrl = assetUrl(exportPath)}
 		<div class="film-meta">
 			<span class="film-meta-text">
-				{t('queue.filmMeta', { clips: exportClipCount, time: formatClock(totalSec) })}
+				{t('queue.filmMeta', { scenes: scenes.length, clips: exportClipCount, duration: formatClock(totalSec) })}
 				{#if exportedAgo} · {t('queue.exportedAgo', { ago: exportedAgo })}{/if}
 			</span>
 			<div class="film-actions">
@@ -1069,7 +1069,7 @@ const generateOne = createMutation({
 						type="button"
 						class="filmstrip-item"
 						title={t('queue.editInTimeline', {
-							scene: entry.scene.heading || t('queue.scene'),
+							scene: entry.scene.heading || t('queue.scene', { n: entry.scene.order_index }),
 							label: entry.label,
 						})}
 						onclick={() => editScene(entry.scene.id)}

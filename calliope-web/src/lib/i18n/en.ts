@@ -700,7 +700,7 @@ export const en = {
 
 	// --- Filmstrip ---
 	'filmstrip.title': 'Filmstrip',
-	'filmstrip.clipTitle': 'Clip {n}',
+	'filmstrip.clipTitle': '{scene} · shot {shot} · {time}',
 	'filmstrip.scene': 'Scene',
 	'filmstrip.sceneClips': '{n} clips',
 	'filmstrip.prev': 'Previous clip',
@@ -804,8 +804,8 @@ export const en = {
 	'wf.deleteTitle': 'Delete workflow',
 	'wf.deleteMessage': 'This workflow and its saved JSON will be deleted.',
 	'wf.analyzeRegister': 'Analyze & register',
-	'wf.countImage': '{n} image',
-	'wf.countVideo': '{n} video',
+	'wf.countImage': '{n} images',
+	'wf.countVideo': '{n} videos',
 	'wf.countSaved': '{n} saved',
 	'wf.profileH3': 'Use case',
 	'wf.profileProse': 'This workflow generates {kind} from a {target}.',
