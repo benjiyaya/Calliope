@@ -745,6 +745,20 @@ export const en = {
 	'videoEdit.assetHint': 'Pick the generation target',
 	'videoEdit.continueHint': 'Continue with the selected workflow',
 	'videoEdit.viewPrompt': 'View prompt',
+	'videoEdit.dockAria': 'Clip generation inputs',
+
+	// --- Shot brief ---
+	'shotBrief.copyTitle': 'Copy shot description',
+	'shotBrief.copied': 'Copied',
+	'shotBrief.copy': 'Copy',
+	'shotBrief.collapse': 'Collapse shot brief',
+	'shotBrief.expand': 'Expand shot brief',
+	'shotBrief.noDesc': 'No shot description — this clip inherited the scene defaults.',
+	'shotBrief.notePre': 'This clip has no per-shot description yet — the text above is the full scene action. Use',
+	'shotBrief.breakIntoShots': 'Break into shots',
+	'shotBrief.notePost': 'in the Script stage to split it into coverage.',
+	'shotBrief.dialogKey': 'Dialog in this shot',
+	'shotBrief.characters': 'Characters',
 
 	// --- Prompt preview modal ---
 	'promptPreview.title': 'Prompt preview',

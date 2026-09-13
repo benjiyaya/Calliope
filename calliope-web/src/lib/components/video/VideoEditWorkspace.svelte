@@ -14,7 +14,8 @@
 	import PromptPreviewModal from './PromptPreviewModal.svelte';
 	import SceneFilmstrip, { type FilmstripClip } from './SceneFilmstrip.svelte';
 	import SceneScriptDrawer from './SceneScriptDrawer.svelte';
-	import { t } from '$lib/i18n.svelte';
+import { t } from '$lib/i18n.svelte';
+	import ShotBrief from './ShotBrief.svelte';
 
 	type Thumb = { kind: 'image' | 'video'; src: string } | null;
 
@@ -145,34 +146,36 @@
 </script>
 
 <div class="workspace">
-	<div class="hero">
-		<ClipMonitor
-			{previewPath}
-			{status}
-			heading={(selectedClip?.clip.description || selected.heading || t('clipMonitor.untitled')).slice(0, 80)}
-			orderIndex={selected.order_index}
-			label={selectedClip?.label}
-			idLabel={selectedClip ? t('videoEdit.clipId', { id: selectedClip.clip.id }) : t('videoEdit.sceneId', { id: selected.id })}
-			sceneId={selectedClip?.scene.id ?? selected?.id}
-			{progress}
-			{error}
-			{errorLong}
+<div class="preview-col">
+		<div class="hero">
+			<ClipMonitor
+				{previewPath}
+				{status}
+				heading={(selectedClip?.clip.description || selected.heading || t('clipMonitor.untitled')).slice(0, 80)}
+				orderIndex={selected.order_index}
+				label={selectedClip?.label}
+				idLabel={selectedClip ? t('videoEdit.clipId', { id: selectedClip.clip.id }) : selected ? t('videoEdit.sceneId', { id: selected.id }) : undefined}
+				sceneId={selectedClip?.scene.id ?? selected?.id}
+				{progress}
+				{error}
+				{errorLong}
+			/>
+		</div>
+
+		<SceneFilmstrip
+			clips={filmClips}
+			{selectedClipId}
+			{statusOfClip}
+			{thumbForClip}
+			{formatClock}
+			{onSelectClip}
+			{onStep}
 		/>
+
+		<SceneScriptDrawer scene={selected} {status} {formatClock} />
 	</div>
 
-	<SceneFilmstrip
-		clips={filmClips}
-		{selectedClipId}
-		{statusOfClip}
-		{thumbForClip}
-		{formatClock}
-		{onSelectClip}
-		{onStep}
-	/>
-
-	<SceneScriptDrawer scene={selected} {status} {formatClock} />
-
-	<div class="composer-dock">
+	<aside class="dock-col" aria-label={t('videoEdit.dockAria')}>
 		{#if workflow}
 			{#if generateDisabled}
 				<div class="continue-warning" role="alert">
@@ -183,7 +186,7 @@
 					</div>
 				</div>
 			{:else if clipSource?.enabled}
-			<div class="clip-source-row">
+<div class="clip-source-row">
 				<span class="clip-source-label" id="clip-source-label">{t('videoEdit.videoSource')}</span>
 				<button
 					type="button"
@@ -236,21 +239,29 @@
 				applying={applying}
 			/>
 		{/if}
+{#if selectedClip}
+				<ShotBrief
+					clip={selectedClip.clip}
+					scene={selectedClip.scene}
+					label={selectedClip.label}
+					{formatClock}
+				/>
+			{/if}
 			<OmniComposer
 				inputs={workflow.input_schema}
 				bind:values={formValues}
 				{workflow}
 				{workflows}
 				onWorkflowChange={onWorkflowChange}
-			{assetOptions}
-			{allowUpload}
-			generateLabel={generateLabel || t('videoEdit.generateLabel')}
-			{submitting}
-			disabled={generateDisabled}
-			generateDisabledHint={generateDisabledReason}
-			onChange={onFormChange}
-			onSubmit={onPreviewPrompt ?? onGenerate}
-		/>
+{assetOptions}
+				{allowUpload}
+				generateLabel={generateLabel || t('videoEdit.generateLabel')}
+				{submitting}
+				disabled={generateDisabled}
+				generateDisabledHint={generateDisabledReason}
+				onChange={onFormChange}
+				onSubmit={onPreviewPrompt ?? onGenerate}
+			/>
 		{:else}
 			<div class="no-wf">
 				<p class="empty-title">{t('videoEdit.noWf')}</p>
@@ -259,13 +270,24 @@
 				</p>
 			</div>
 		{/if}
-	</div>
+	</aside>
 </div>
 
 <style>
+	/* Two columns: the player + strip own the left, every generation input
+	   lives in the right inspector so it can't push the player out of view. */
 	.workspace {
 		flex: 1;
 		min-height: 0;
+		display: flex;
+		flex-direction: row;
+		gap: 12px;
+		overflow: hidden;
+	}
+
+	.preview-col {
+		flex: 1 1 auto;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
@@ -273,8 +295,8 @@
 	}
 
 	.hero {
-		flex: 1;
-		min-height: 140px;
+		flex: 1 1 auto;
+		min-height: 200px;
 		display: flex;
 		align-items: stretch;
 		justify-content: stretch;
@@ -282,13 +304,37 @@
 		width: 100%;
 	}
 
-	.composer-dock {
-		flex-shrink: 0;
-		min-height: 0;
+	/* Inspector — scrolls on its own so the player keeps the height. */
+	.dock-col {
+		flex: 0 0 clamp(300px, 34%, 400px);
+		min-width: 280px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding-right: 2px;
 	}
 
-	.composer-dock :global(.omni-shell) {
+	.dock-col :global(.omni-shell) {
 		flex-shrink: 0;
+	}
+
+	/* Very narrow: stack, player first. */
+	@media (max-width: 900px) {
+		.workspace {
+			flex-direction: column;
+			overflow-y: auto;
+		}
+
+		.preview-col {
+			overflow: visible;
+		}
+
+		.dock-col {
+			flex: 0 0 auto;
+			overflow: visible;
+		}
 	}
 
 	.continue-warning {
@@ -296,7 +342,7 @@
 		align-items: flex-start;
 		gap: 10px;
 		padding: 10px 12px;
-		margin: 0 0 8px;
+		margin: 0;
 		border-radius: var(--radius-md);
 		border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
 		background: color-mix(in srgb, var(--warning) 10%, var(--bg-surface));
@@ -325,7 +371,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin: 0 0 8px;
+		margin: 0;
 	}
 
 	.clip-source-label {
@@ -338,7 +384,8 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		max-width: 360px;
+		max-width: 100%;
+		min-width: 0;
 		padding: 6px 12px;
 		font: inherit;
 		font-size: 13px;
@@ -369,7 +416,7 @@
 	}
 
 	.asset-hint {
-		margin: 0 0 8px;
+		margin: 0;
 		font-size: 12px;
 		color: var(--text-muted);
 		line-height: 1.4;
@@ -378,7 +425,7 @@
 	.job-inputs-row {
 		display: flex;
 		justify-content: flex-end;
-		margin: 0 0 6px;
+		margin: 0;
 	}
 
 	.job-inputs-trigger {

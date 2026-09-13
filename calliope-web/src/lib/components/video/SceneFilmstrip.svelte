@@ -1,13 +1,10 @@
 <script module lang="ts">
+	import type { Clip, Scene } from '$lib/api';
+
 	/** One entry in the strip: a renderable clip pinned to its parent scene. */
 	export interface FilmstripClip {
-		clip: {
-			id: number;
-			clip_path: string | null;
-			duration_sec: number | null;
-			chain_from_prev?: number | boolean | null;
-		};
-		scene: import('$lib/api').Scene;
+		clip: Clip;
+		scene: Scene;
 		index: number;
 		label: string;
 	}
@@ -19,7 +16,6 @@
 	 * Renders CLIPS (playback order, `#3.2` labels) with scene-divider grouping.
 	 * Never sticky; fixed height; keyboard Left/Right/Home/End.
 	 */
-	import type { Scene } from '$lib/api';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -93,11 +89,11 @@
 				class:selected={selectedClipId === entry.clip.id}
 				class:chained={entry.index > 0}
 				onclick={() => onSelectClip(entry.clip.id)}
-				title={t('filmstrip.clipTitle', {
-					scene: `${entry.scene.order_index} · ${entry.scene.heading || t('filmstrip.scene')}`,
-					shot: entry.index + 1,
-					time: formatClock(entry.clip.duration_sec || 5),
-				})}
+title={t('filmstrip.clipTitle', {
+				scene: `${entry.scene.order_index} · ${entry.scene.heading || t('filmstrip.scene')}`,
+				shot: entry.index + 1,
+				time: formatClock(entry.clip.duration_sec || 5),
+			}) + (entry.clip.description ? `\n${entry.clip.description}` : '')}
 			>
 				<span class="bar" aria-hidden="true"></span>
 				<span class="thumb" aria-hidden="true">

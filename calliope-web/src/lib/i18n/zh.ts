@@ -745,6 +745,20 @@ export const zh: Dict = {
 	'videoEdit.assetHint': '选择生成目标',
 	'videoEdit.continueHint': '使用所选工作流继续',
 	'videoEdit.viewPrompt': '查看提示词',
+	'videoEdit.dockAria': '片段生成输入',
+
+	// --- Shot brief ---
+	'shotBrief.copyTitle': '复制镜头描述',
+	'shotBrief.copied': '已复制',
+	'shotBrief.copy': '复制',
+	'shotBrief.collapse': '收起镜头简报',
+	'shotBrief.expand': '展开镜头简报',
+	'shotBrief.noDesc': '此镜头没有描述——沿用了场次默认值。',
+	'shotBrief.notePre': '此镜头暂无独立描述——上方文本即完整场次动作。可在剧本舞台使用',
+	'shotBrief.breakIntoShots': '拆分为镜头',
+	'shotBrief.notePost': '将其拆分为覆盖镜头。',
+	'shotBrief.dialogKey': '本镜头对白',
+	'shotBrief.characters': '角色',
 
 	// --- Prompt preview modal ---
 	'promptPreview.title': '提示词预览',

@@ -13,7 +13,6 @@ result into your project as a reference image/video.
 
 <img width="1781" height="1248" alt="Screenshot 2026-09-11 060020" src="https://github.com/user-attachments/assets/f8b39354-de28-4e6b-a055-b91c6ee33a4a" />
 
-
 - **New "Build Scene" tab** with the same three-panel shell as AI Canvas:
   scene tree + inspector (left), 3D viewport (center), agent chat (right).
 - **Agent-driven blockout:** describe what you want in chat — the agent
