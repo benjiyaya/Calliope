@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { language, setLanguage, type Language } from '$lib/i18n.svelte';
+	import { t } from '$lib/i18n.svelte';
 </script>
 
 <select
 	class="lang-switcher"
 	value={language.current}
-	aria-label="Language"
+	aria-label={t('common.language')}
 	onchange={(e) => setLanguage(e.currentTarget.value as Language)}
 >
 	<option value="en">English</option>

@@ -166,7 +166,7 @@
 		for (const sc of scenes) {
 			if (sc.video_path) {
 				opts.push({
-					label: `Clip #${sc.order_index} · ${sc.heading || t('queue.sceneLabel')}`,
+					label: `${t('queue.clipLabel', { n: sc.order_index })} · ${sc.heading || t('queue.sceneLabel')}`,
 					path: sc.video_path,
 					kind: 'video',
 					group: 'clip',

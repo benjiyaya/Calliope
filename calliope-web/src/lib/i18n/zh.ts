@@ -26,6 +26,7 @@ export const zh: Dict = {
 	'common.send': '发送',
 	'common.stop': '停止',
 	'common.title': '标题',
+	'common.language': '语言',
 
 	// --- App shell / nav ---
 	'nav.canvas': 'AI 画布',
@@ -248,6 +249,8 @@ export const zh: Dict = {
 	'canvas.sessionDeleted': '对话已删除',
 	'canvas.chatUnlinked': '对话已取消关联——已移至沙盒',
 	'canvas.unlinkFailed': '取消关联失败',
+	'canvas.unlinkButton': '解除关联',
+	'canvas.resizePanel': '调整对话面板大小（拖拽或方向键），当前 {width} 像素',
 	'canvas.sendFailed': '发送失败',
 	'canvas.runCancelled': '运行已取消',
 	'canvas.cancelFailed': '取消失败',
@@ -416,6 +419,7 @@ export const zh: Dict = {
 	'story.saveSettingsFailed': '无法保存设置',
 	'story.settingsTitle': '故事设置',
 	'story.llmBanner': '故事阶段使用当前激活的大语言模型来起草和润色节拍。',
+	'story.newBeat': '新节拍 {n}',
 
 	// --- Assets stage ---
 	'assets.title': '素材',
@@ -610,6 +614,8 @@ export const zh: Dict = {
 
 	// --- Queue stage ---
 	'queue.sceneLabel': '场景',
+	'queue.clipLabel': '片段 #{n}',
+	'queue.jobLabel': '任务 #{n}',
 	'queue.scene': '场景 {n}',
 	'queue.sceneRef': '场景参考',
 	'queue.clipRef': '片段参考',

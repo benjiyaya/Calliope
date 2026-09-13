@@ -24,6 +24,7 @@ export const en = {
 	'common.send': 'Send',
 	'common.stop': 'Stop',
 	'common.title': 'Title',
+	'common.language': 'Language',
 
 	// --- App shell / nav ---
 	'nav.canvas': 'AI Canvas',
@@ -248,6 +249,8 @@ export const en = {
 	'canvas.sessionDeleted': 'Session deleted',
 	'canvas.chatUnlinked': 'Chat unlinked — moved to Sandbox',
 	'canvas.unlinkFailed': 'Unlink failed',
+	'canvas.unlinkButton': 'Unlink',
+	'canvas.resizePanel': 'Resize chat panel (drag or arrow keys), currently {width} pixels',
 	'canvas.sendFailed': 'Failed to send',
 	'canvas.runCancelled': 'Run cancelled',
 	'canvas.cancelFailed': 'Cancel failed',
@@ -416,6 +419,7 @@ export const en = {
 	'story.saveSettingsFailed': 'Could not save settings',
 	'story.settingsTitle': 'Story settings',
 	'story.llmBanner': 'The story stage uses the active LLM to draft and refine beats.',
+	'story.newBeat': 'New beat {n}',
 
 	// --- Assets stage ---
 	'assets.title': 'Assets',
@@ -610,6 +614,8 @@ export const en = {
 
 	// --- Queue stage ---
 	'queue.sceneLabel': 'Scene',
+	'queue.clipLabel': 'Clip #{n}',
+	'queue.jobLabel': 'Job #{n}',
 	'queue.scene': 'Scene {n}',
 	'queue.sceneRef': 'Scene reference',
 	'queue.clipRef': 'Clip reference',

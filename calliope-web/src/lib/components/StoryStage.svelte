@@ -216,7 +216,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					order_index: nextIndex,
-					title: `New beat ${nextIndex}`,
+					title: t('story.newBeat', { n: nextIndex }),
 					description: '',
 				}),
 			});

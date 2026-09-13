@@ -215,7 +215,7 @@ function applyToScene() {
 		{/if}
 
 		<div class="job-head">
-			<span class="job-meta">Job #{activeJob.id}</span>
+			<span class="job-meta">{t('queue.jobLabel', { n: activeJob.id })}</span>
 			<span class="job-meta">·</span>
 			<span class="job-meta">{activeJob.status}</span>
 			{#if activeJob.completed_at}

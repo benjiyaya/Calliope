@@ -1035,10 +1035,10 @@ title={running
 			: activeSession
 			? t('canvas.unlinkFrom', { title: canvas.project.title })
 			: t('canvas.noChatYet')}
-						aria-label={`Unlink this chat from ${canvas.project.title}`}
+						aria-label={t('canvas.unlinkFrom', { title: canvas.project.title })}
 					>
 						<Icon name="link-off" size={12} />
-						Unlink
+						{t('canvas.unlinkButton')}
 					</button>
 				{:else}
 					<span class="sandbox-chip">
@@ -1097,7 +1097,7 @@ title={running
 					type="button"
 					class="chat-splitter"
 					class:dragging
-					aria-label={`Resize chat panel (drag or arrow keys), currently ${Math.round(chatWidth)} pixels`}
+					aria-label={t('canvas.resizePanel', { width: Math.round(chatWidth) })}
 					onmousedown={startDrag}
 					onkeydown={(e) => {
 						if (e.key === 'ArrowLeft') {
