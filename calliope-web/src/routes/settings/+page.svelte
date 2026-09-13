@@ -331,7 +331,7 @@
 <svelte:window onbeforeunload={onBeforeUnload} />
 
 <div class="shell">
-	<AppHeader active="settings" crumb={`/ {t('nav.settings')}`}>
+	<AppHeader active="settings" crumb={'/ ' + t('nav.settings')}>
 		{#snippet status()}
 			{#if isDirty}
 				<StatusChip status="paused" label={t('settings.unsaved')} />
