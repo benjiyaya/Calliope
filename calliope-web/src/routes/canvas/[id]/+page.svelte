@@ -26,6 +26,7 @@
 	import ArtifactNodeComp from '$lib/canvas/ArtifactNode.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import { storageGet, storageSet } from '$lib/storage';
 	import {
 		agentApi,
 		assetUrl,
@@ -297,10 +298,10 @@
 	}
 
 	function restoreViewportFromStorage(): Viewport | null {
-		if (typeof localStorage === 'undefined') return null;
+		const raw = storageGet(viewportLocalStorageKey(canvasId));
+		if (raw == null) return null;
 		try {
-			const raw = localStorage.getItem(viewportLocalStorageKey(canvasId));
-			return raw ? (JSON.parse(raw) as Viewport) : null;
+			return JSON.parse(raw) as Viewport;
 		} catch {
 			return null;
 		}
@@ -313,11 +314,7 @@
 			const json = JSON.stringify(v);
 			// localStorage first (synchronous, survives navigation + reloads
 			// even if the request never lands), backend per canvas second.
-			try {
-				localStorage.setItem(viewportLocalStorageKey(canvasId), json);
-			} catch {
-				// storage full/blocked — backend save still applies
-			}
+			storageSet(viewportLocalStorageKey(canvasId), json);
 			void canvasApi
 				.patchCanvas(canvasId, { viewport_json: json })
 				.catch(() => undefined);
@@ -444,7 +441,7 @@
 			replaceUrlParam('session');
 			return;
 		}
-		const stored = Number(localStorage.getItem(SESSION_KEY));
+		const stored = Number(storageGet(SESSION_KEY));
 		if (Number.isFinite(stored) && sessions.some((s) => s.id === stored)) {
 			const s = sessions.find((x) => x.id === stored)!;
 			if ((s.project_id ?? null) === (canvas.project_id ?? null)) {
@@ -873,20 +870,16 @@
 		}
 	}
 
-	let railCollapsed = $state(
-		typeof localStorage !== 'undefined' && localStorage.getItem(RAIL_KEY) === '1',
-	);
-	let chatCollapsed = $state(
-		typeof localStorage !== 'undefined' && localStorage.getItem(CHAT_KEY) === '1',
-	);
+	let railCollapsed = $state(storageGet(RAIL_KEY) === '1');
+	let chatCollapsed = $state(storageGet(CHAT_KEY) === '1');
 
 	function toggleRail() {
 		railCollapsed = !railCollapsed;
-		localStorage.setItem(RAIL_KEY, railCollapsed ? '1' : '0');
+		storageSet(RAIL_KEY, railCollapsed ? '1' : '0');
 	}
 	function toggleChat() {
 		chatCollapsed = !chatCollapsed;
-		localStorage.setItem(CHAT_KEY, chatCollapsed ? '1' : '0');
+		storageSet(CHAT_KEY, chatCollapsed ? '1' : '0');
 	}
 
 	// ---- draggable chat splitter ---------------------------------------------
@@ -905,7 +898,7 @@
 	}
 
 	$effect(() => {
-		const raw = Number(localStorage.getItem(CHAT_W_KEY));
+		const raw = Number(storageGet(CHAT_W_KEY));
 		if (Number.isFinite(raw) && raw > 0) chatWidth = clampChatWidth(raw);
 		// Keep the panel within the cap when the window shrinks.
 		const onResize = () => (chatWidth = clampChatWidth(chatWidth));
@@ -928,7 +921,7 @@
 			dragging = false;
 			document.body.style.userSelect = '';
 			document.body.style.cursor = '';
-			localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+			storageSet(CHAT_W_KEY, String(Math.round(chatWidth)));
 			document.removeEventListener('mousemove', onMove);
 			document.removeEventListener('mouseup', onUp);
 		};
@@ -1103,11 +1096,11 @@ title={running
 						if (e.key === 'ArrowLeft') {
 							e.preventDefault();
 							chatWidth = clampChatWidth(chatWidth + 24);
-							localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+							storageSet(CHAT_W_KEY, String(Math.round(chatWidth)));
 						} else if (e.key === 'ArrowRight') {
 							e.preventDefault();
 							chatWidth = clampChatWidth(chatWidth - 24);
-							localStorage.setItem(CHAT_W_KEY, String(Math.round(chatWidth)));
+							storageSet(CHAT_W_KEY, String(Math.round(chatWidth)));
 						}
 					}}
 				></button>

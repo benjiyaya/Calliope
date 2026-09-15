@@ -6,6 +6,8 @@ import { ja } from './i18n/ja';
 import { ko } from './i18n/ko';
 import { zh } from './i18n/zh';
 
+import { storageGet, storageSet } from './storage';
+
 export type Language = 'en' | 'zh' | 'es' | 'fr' | 'de' | 'ja' | 'ko';
 
 export type Dict = typeof en;
@@ -19,10 +21,10 @@ function isLanguage(value: string | null): value is Language {
 }
 
 function initialLanguage(): Language {
-	if (typeof localStorage === 'undefined') return 'en';
-	// Validate against the registered dictionaries — a stored value from a
-	// language this build no longer ships must not blank the UI.
-	const stored = localStorage.getItem(STORAGE_KEY);
+	// Validated against the registered dictionaries — a stored value naming a
+	// language this build no longer ships must not blank the UI. This runs on
+	// the server too, where storage is absent and we render the default.
+	const stored = storageGet(STORAGE_KEY);
 	return isLanguage(stored) ? stored : 'en';
 }
 
@@ -30,11 +32,7 @@ export const language = $state<{ current: Language }>({ current: initialLanguage
 
 export function setLanguage(lang: Language) {
 	language.current = lang;
-	try {
-		localStorage.setItem(STORAGE_KEY, lang);
-	} catch {
-		/* ponytail: storage unavailable (private mode) — UI language just won't persist */
-	}
+	storageSet(STORAGE_KEY, lang);
 }
 
 /** Look up a UI string. Falls back to English, then to the key itself. */
