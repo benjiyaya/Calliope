@@ -37,10 +37,6 @@ export function setLanguage(lang: Language) {
 	}
 }
 
-export function toggleLanguage() {
-	setLanguage(language.current === 'zh' ? 'en' : 'zh');
-}
-
 /** Look up a UI string. Falls back to English, then to the key itself. */
 export function t(key: string, vars?: Record<string, string | number>): string {
 	let s: string = dictionaries[language.current][key] ?? (en as Record<string, string>)[key] ?? key;
