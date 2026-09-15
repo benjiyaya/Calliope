@@ -1,12 +1,13 @@
 {
 	"name": "calliope-web",
-	"version": "1.5.2",
+	"version": "1.5.3",
 	"private": true,
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test": "node scripts/check-storage-ssr.mjs",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write ."
 	},

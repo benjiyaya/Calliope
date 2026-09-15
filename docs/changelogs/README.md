@@ -2,6 +2,7 @@
 
 Dated notes for GitHub releases. Newest first.
 
+- [2026-09-16 SSR storage fix](./2026-09-16-ssr-storage-fix.md) — fix the `localStorage.getItem is not a function` crash on Node 22+; new `npm test` guard (1.5.3)
 - [2026-09-16 multilingual UI](./2026-09-16-multilingual-ui.md) — seven-language UI (en/zh/es/fr/de/ja/ko); header language switcher; correct backend version; local start scripts (1.5.2)
 - [2026-09-13 clip shot brief](./2026-09-13-clip-shot-brief.md) — per-clip brief in the Video composer; two-column Video stage (1.5.1)
 - [2026-09-10 Build Scene + scene → clips](./2026-09-10-build-scene-clips.md) — 3D blockout composer; vision/doc input; 1 scene : N shot clips; faithful scripts (1.5.0)
