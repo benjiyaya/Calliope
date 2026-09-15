@@ -1,17 +1,29 @@
+import { de } from './i18n/de';
 import { en } from './i18n/en';
+import { es } from './i18n/es';
+import { fr } from './i18n/fr';
+import { ja } from './i18n/ja';
+import { ko } from './i18n/ko';
 import { zh } from './i18n/zh';
 
-export type Language = 'en' | 'zh';
+export type Language = 'en' | 'zh' | 'es' | 'fr' | 'de' | 'ja' | 'ko';
 
 export type Dict = typeof en;
 
-const dictionaries: Record<Language, Record<string, string>> = { en, zh };
+const dictionaries: Record<Language, Record<string, string>> = { en, zh, es, fr, de, ja, ko };
 
 const STORAGE_KEY = 'calliope-lang';
 
+function isLanguage(value: string | null): value is Language {
+	return value !== null && Object.hasOwn(dictionaries, value);
+}
+
 function initialLanguage(): Language {
 	if (typeof localStorage === 'undefined') return 'en';
-	return localStorage.getItem(STORAGE_KEY) === 'zh' ? 'zh' : 'en';
+	// Validate against the registered dictionaries — a stored value from a
+	// language this build no longer ships must not blank the UI.
+	const stored = localStorage.getItem(STORAGE_KEY);
+	return isLanguage(stored) ? stored : 'en';
 }
 
 export const language = $state<{ current: Language }>({ current: initialLanguage() });
