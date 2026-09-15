@@ -6,6 +6,7 @@
 	 * The value display sits between the two buttons, all inside one pill.
 	 */
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		label: string;
@@ -13,6 +14,8 @@
 		min?: number;
 		max?: number;
 		step?: number;
+		/** Appended to the numeric value (e.g. "s" for seconds). */
+		unit?: string;
 		/** If true, value is hidden behind a dice/randomize icon (for seed). */
 		obscured?: boolean;
 		onchange: (value: number) => void;
@@ -24,6 +27,7 @@
 		min = 0,
 		max = 999999,
 		step = 1,
+		unit = '',
 		obscured = false,
 		onchange,
 	}: Props = $props();
@@ -44,17 +48,17 @@
 </script>
 
 <div class="stepper-pill" title={label}>
-	<button type="button" class="step-btn" onclick={decrement} aria-label="Decrease {label}">
+	<button type="button" class="step-btn" onclick={decrement} aria-label={t('omni.decrease', { label })}>
 		<Icon name="close" size={12} />
 	</button>
 	<span class="step-value">
 		{#if obscured && !value}
 			<Icon name="sparkle" size={12} />
 		{:else}
-			{value}{label === 'Duration' ? 's' : ''}
+			{value}{unit}
 		{/if}
 	</span>
-	<button type="button" class="step-btn" onclick={increment} aria-label="Increase {label}">
+	<button type="button" class="step-btn" onclick={increment} aria-label={t('omni.increase', { label })}>
 		<Icon name="plus" size={12} />
 	</button>
 </div>

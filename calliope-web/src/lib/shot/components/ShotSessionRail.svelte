@@ -7,6 +7,7 @@
 	 */
 	import type { AgentSession } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		sessions: AgentSession[];
@@ -39,8 +40,8 @@
 			type="button"
 			class="rail-btn"
 			onclick={() => onToggleCollapse?.()}
-			title="Expand scenes"
-			aria-label="Expand scenes"
+			title={t('shot.railExpand')}
+			aria-label={t('shot.railExpand')}
 		>
 			<Icon name="drag" size={14} />
 		</button>
@@ -48,8 +49,8 @@
 			type="button"
 			class="rail-btn"
 			onclick={onNew}
-			title="New scene"
-			aria-label="New scene"
+			title={t('shot.newScene')}
+			aria-label={t('shot.newScene')}
 		>
 			<Icon name="plus" size={14} />
 		</button>
@@ -62,7 +63,7 @@
 					class:run={s.running || s.status === 'running'}
 					onclick={() => onSelect(s.id)}
 					title={s.title}
-					aria-label={`Open ${s.title}`}
+					aria-label={t('shot.railOpen', { title: s.title })}
 				></button>
 			{/each}
 		</div>
@@ -74,19 +75,19 @@
 				type="button"
 				class="collapse-toggle"
 				onclick={() => onToggleCollapse?.()}
-				title="Collapse scenes"
-				aria-label="Collapse scenes"
+				title={t('shot.railCollapse')}
+				aria-label={t('shot.railCollapse')}
 			>
 				<Icon name="drag" size={14} />
 			</button>
 		{/if}
 		<button type="button" class="new-chat" onclick={onNew}>
 			<Icon name="plus" size={14} />
-			New scene
+			{t('shot.newScene')}
 		</button>
 
 		{#if scenes.length === 0}
-			<p class="muted">No scenes yet.</p>
+			<p class="muted">{t('shot.railNoScenes')}</p>
 		{/if}
 
 		{#each scenes as s (s.id)}
@@ -102,7 +103,7 @@
 					class="del"
 					role="button"
 					tabindex="-1"
-					aria-label="Delete scene"
+					aria-label={t('shot.railDeleteScene')}
 					onclick={(e) => {
 						e.stopPropagation();
 						onDelete(s.id);

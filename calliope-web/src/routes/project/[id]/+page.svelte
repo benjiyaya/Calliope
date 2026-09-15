@@ -16,6 +16,7 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
+	import { t } from '$lib/i18n.svelte';
 	import { jobsApi, projects, settings } from '$lib/api';
 	import { connectEvents, type CalliopeEvent, type EventConnectionState } from '$lib/events';
 	import { handleJobEvent } from '$lib/jobProgress';
@@ -151,14 +152,14 @@
 	{#if !enabled}
 		<div class="invalid-wrap">
 			<EmptyState
-				title="Project not found"
-				body={`“${data.id}” isn’t a valid project id — the link may be broken or the project was deleted.`}
+				title={t('project.notFound')}
+				body={t('project.invalidIdBody', { id: data.id })}
 			>
 				{#snippet icon()}
 					<Icon name="folder" size={28} />
 				{/snippet}
 				{#snippet action()}
-					<Button variant="primary" onclick={() => goto('/projects')}>Back to projects</Button>
+					<Button variant="primary" onclick={() => goto('/projects')}>{t('project.backToProjects')}</Button>
 				{/snippet}
 			</EmptyState>
 		</div>
@@ -168,13 +169,13 @@
 			<Button
 				variant="secondary"
 				size="sm"
-				title="Open the Video stage"
+				title={t('project.openVideoStage')}
 				onclick={() => selectStage('video')}
 			>
 				<Icon name="queue" size={13} />
 				{runningCount + queuedCount > 0
-					? `${runningCount} running · ${queuedCount} queued`
-					: 'Queue idle'}
+					? t('project.runningQueued', { running: runningCount, queued: queuedCount })
+					: t('project.queueIdle')}
 				{#if queuePaused}
 					<StatusChip status="paused" />
 				{/if}

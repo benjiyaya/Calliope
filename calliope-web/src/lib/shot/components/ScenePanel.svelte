@@ -5,19 +5,20 @@
 	 */
 	import { shotStore } from '$lib/shot/shotStore.svelte';
 	import type { ObjectType } from '$lib/shot/shotStore.svelte';
+	import { t } from '$lib/i18n.svelte';
 
-	const ADD_TYPES: { type: ObjectType; label: string; group: string }[] = [
-		{ type: 'male', label: 'Male', group: 'Characters' },
-		{ type: 'female', label: 'Female', group: 'Characters' },
-		{ type: 'child', label: 'Child', group: 'Characters' },
-		{ type: 'cube', label: 'Cube', group: 'Blockout' },
-		{ type: 'plane', label: 'Plane', group: 'Blockout' },
-		{ type: 'cylinder', label: 'Cylinder', group: 'Blockout' },
-		{ type: 'sphere', label: 'Sphere', group: 'Blockout' },
-		{ type: 'capsule', label: 'Capsule', group: 'Blockout' },
-		{ type: 'cone', label: 'Cone', group: 'Blockout' },
-		{ type: 'torus', label: 'Torus', group: 'Blockout' },
-		{ type: 'camera', label: 'Camera', group: 'Blockout' },
+	const ADD_TYPES: { type: ObjectType; group: string }[] = [
+		{ type: 'male', group: 'Characters' },
+		{ type: 'female', group: 'Characters' },
+		{ type: 'child', group: 'Characters' },
+		{ type: 'cube', group: 'Blockout' },
+		{ type: 'plane', group: 'Blockout' },
+		{ type: 'cylinder', group: 'Blockout' },
+		{ type: 'sphere', group: 'Blockout' },
+		{ type: 'capsule', group: 'Blockout' },
+		{ type: 'cone', group: 'Blockout' },
+		{ type: 'torus', group: 'Blockout' },
+		{ type: 'camera', group: 'Blockout' },
 	];
 
 	let renamingId = $state<string | null>(null);
@@ -39,22 +40,22 @@
 
 <div class="panel">
 	<header class="panel-head">
-		<span class="panel-title">Scene</span>
+		<span class="panel-title">{t('shot.scene')}</span>
 		<div class="head-actions">
-			<button class="btn ghost" onclick={() => (showAdd = !showAdd)} title="Add object">＋</button>
+			<button class="btn ghost" onclick={() => (showAdd = !showAdd)} title={t('shot.addObject')}>＋</button>
 			<button
 				class="btn ghost danger"
 				onclick={() => shotStore.objects.length && shotStore.clearScene()}
-				title="Clear scene"
+				title={t('shot.clearScene')}
 			>⌫</button>
 		</div>
 	</header>
 
 	{#if showAdd}
 		<div class="add-grid">
-			{#each ADD_TYPES as t (t.type)}
-				<button class="add-item" onclick={() => { shotStore.addObject(t.type); showAdd = false; }}>
-					{t.label}
+			{#each ADD_TYPES as item (item.type)}
+				<button class="add-item" onclick={() => { shotStore.addObject(item.type); showAdd = false; }}>
+					{t(`shot.objName.${item.type}`)}
 				</button>
 			{/each}
 		</div>
@@ -80,21 +81,21 @@
 					</button>
 				{/if}
 				<div class="row-actions">
-					<button class="icon" onclick={() => shotStore.toggleObjectVisibility(o.id)} title="Visibility">
+					<button class="icon" onclick={() => shotStore.toggleObjectVisibility(o.id)} title={t('shot.visibility')}>
 						{o.visible ? '◉' : '○'}
 					</button>
-					<button class="icon" onclick={() => shotStore.toggleObjectLock(o.id)} title="Lock">
+					<button class="icon" onclick={() => shotStore.toggleObjectLock(o.id)} title={t('shot.lock')}>
 						{o.locked ? '🔒' : '🔓'}
 					</button>
-					<button class="icon danger" onclick={() => shotStore.deleteObject(o.id)} title="Delete">✕</button>
+					<button class="icon danger" onclick={() => shotStore.deleteObject(o.id)} title={t('common.delete')}>✕</button>
 				</div>
 			</li>
 		{:else}
-			<li class="empty">Empty scene — add a character or blockout shape.</li>
+			<li class="empty">{t('shot.emptyScene')}</li>
 		{/each}
 	</ul>
 
-	<footer class="hint">Click selects · drag gizmo moves · double-click renames</footer>
+	<footer class="hint">{t('shot.hint')}</footer>
 </div>
 
 <style>

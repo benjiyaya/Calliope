@@ -7,6 +7,7 @@
 	import ReasoningPanel from './ReasoningPanel.svelte';
 	import { agentColor, agentDisplayName } from './agentPalette';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		messages: AgentMessage[];
@@ -158,8 +159,8 @@
 	});
 
 	function answerLabel(scope: string): string {
-		if (scope === 'render') return 'Your click records approval to generate.';
-		if (scope === 'destructive_replace') return 'Your click records approval to replace content.';
+		if (scope === 'render') return t('agentChat.approveRender');
+		if (scope === 'destructive_replace') return t('agentChat.approveReplace');
 		return '';
 	}
 
@@ -189,17 +190,14 @@
 <div class="chat" bind:this={listEl} onscroll={onScroll}>
 	{#if loading}
 		<div class="empty">
-			<p class="empty-hint">Loading chat…</p>
+			<p class="empty-hint">{t('agentChat.loading')}</p>
 		</div>
 	{:else if messages.length === 0 && !running}
 		<div class="empty">
 			<div class="empty-mark"><Icon name="sparkle" size={22} /></div>
 			<p class="empty-eyebrow">Calliope</p>
-			<p class="empty-title">What are we making?</p>
-			<p class="empty-hint">
-				Tell your production agent the idea and it takes the story to script to video — or ask it to
-				work on one of your projects.
-			</p>
+			<p class="empty-title">{t('agentChat.emptyTitle')}</p>
+			<p class="empty-hint">{t('agentChat.emptyHint')}</p>
 			{#if suggestions.length > 0}
 				<div class="suggestions">
 					{#each suggestions as s (s.label)}
@@ -266,7 +264,7 @@
 							{/each}
 						</div>
 						<p class="question-hint">
-							{answerLabel(lastQuestion.scope) || 'Pick an option or just type your answer.'}
+							{answerLabel(lastQuestion.scope) || t('agentChat.pickOption')}
 						</p>
 					</div>
 				{/if}
@@ -320,7 +318,7 @@
 				{#if streaming}
 					<div class="stream-text">{streaming}<span class="caret"></span></div>
 				{:else}
-					<div class="thinking"><span class="pulse"></span> working…</div>
+					<div class="thinking"><span class="pulse"></span> {t('agentChat.working')}</div>
 				{/if}
 				{#if streamingReasoning}
 					<ReasoningPanel streaming={streamingReasoning} />

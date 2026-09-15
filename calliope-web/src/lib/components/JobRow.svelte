@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { jobsApi, type Job } from '$lib/api';
+	import { t } from '$lib/i18n.svelte';
 	import { progressFor } from '$lib/jobProgress';
 	import { toast } from '$lib/toast';
 	import Button from './ui/Button.svelte';
@@ -31,10 +32,10 @@
 	);
 	const kindLabel = $derived(
 		job.kind === 'export'
-			? 'Export film'
+			? t('job.exportFilm')
 			: job.kind.charAt(0).toUpperCase() + job.kind.slice(1),
 	);
-	const title = $derived(label ?? `${kindLabel} #${job.id}`);
+	const title = $derived(label ?? t('job.title', { kind: kindLabel, id: String(job.id) }));
 	const active = $derived(job.status === 'pending' || job.status === 'running');
 	const entry = $derived(progressFor(job.id));
 
@@ -48,9 +49,9 @@
 		try {
 			await jobsApi.cancel(job.id);
 			await refresh();
-			toast.info(`Cancelled #${job.id}`);
+			toast.info(t('job.cancelled', { id: String(job.id) }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Cancel failed');
+			toast.error(err instanceof Error ? err.message : t('job.cancelFailed'));
 		} finally {
 			busy = false;
 		}
@@ -61,9 +62,9 @@
 		try {
 			await jobsApi.retry(job.id);
 			await refresh();
-			toast.success(`Re-queued #${job.id}`);
+			toast.success(t('job.requeued', { id: String(job.id) }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Retry failed');
+			toast.error(err instanceof Error ? err.message : t('job.retryFailed'));
 		} finally {
 			busy = false;
 		}
@@ -92,11 +93,11 @@
 	</div>
 	<div class="actions">
 		{#if active}
-			<Button size="sm" variant="ghost" loading={busy} title="Cancel job" onclick={cancel}>
+			<Button size="sm" variant="ghost" loading={busy} title={t('job.cancelJob')} onclick={cancel}>
 				<Icon name="close" size={13} />
 			</Button>
 		{:else if job.status === 'failed'}
-			<Button size="sm" variant="ghost" loading={busy} title="Retry job" onclick={retry}>
+			<Button size="sm" variant="ghost" loading={busy} title={t('job.retryJob')} onclick={retry}>
 				<Icon name="retry" size={13} />
 			</Button>
 		{/if}

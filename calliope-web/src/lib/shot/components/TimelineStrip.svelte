@@ -7,6 +7,7 @@
 	 */
 	import { shotStore, MAX_TIMELINE_DURATION } from '../shotStore.svelte';
 	import type { CameraKeyframe } from '../shotStore.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	let { onExportVideo }: { onExportVideo?: () => void } = $props();
 
@@ -86,7 +87,7 @@
 
 <div class="timeline">
 	<div class="controls">
-		<button class="icon-btn" onclick={togglePlay} title={playing ? 'Pause' : 'Play the timeline (camera + object tracks)'}>
+		<button class="icon-btn" onclick={togglePlay} title={playing ? t('shot.timelinePause') : t('shot.timelinePlay')}>
 			{playing ? '❚❚' : '▶'}
 		</button>
 		<label class="dur">
@@ -108,7 +109,7 @@
 		bind:this={trackEl}
 		onpointerdown={onTrackScrub}
 		role="slider"
-		aria-label="Timeline playhead"
+		aria-label={t('shot.timelinePlayhead')}
 		aria-valuemin={0}
 		aria-valuemax={duration}
 		aria-valuenow={elapsed}
@@ -120,7 +121,7 @@
 			<button
 				class="keyframe cam"
 				style={keyframeStyle(k)}
-				title={`Camera keyframe @ ${k.time.toFixed(1)}s — double-click to delete`}
+				title={t('shot.camKeyframe', { time: k.time.toFixed(1) })}
 				onclick={(e) => {
 					e.stopPropagation();
 					shotStore.setElapsed(k.time);
@@ -137,7 +138,7 @@
 					class="keyframe obj"
 					class:selected={k.id === selectedKeyframeId}
 					style={`left:${duration > 0 ? (k.time / duration) * 100 : 0}%`}
-					title={`${selectedObject.name} keyframe @ ${k.time.toFixed(1)}s — drag to move, double-click to delete`}
+					title={t('shot.objKeyframe', { name: selectedObject.name, time: k.time.toFixed(1) })}
 					onpointerdown={(e) => onMarkerPointerDown(e, k.id)}
 					ondblclick={(e) => {
 						e.stopPropagation();
@@ -149,28 +150,28 @@
 	</div>
 
 	<div class="actions">
-		<button class="icon-btn" onclick={() => shotStore.requestCameraKeyframeAt(elapsed)} title="Keyframe the current camera view at the playhead">
+		<button class="icon-btn" onclick={() => shotStore.requestCameraKeyframeAt(elapsed)} title={t('shot.keyframeCamAdd')}>
 			◉
-		</button>		<button class="icon-btn" onclick={() => shotStore.removeCameraKeyframeAt(elapsed)} title="Remove camera keyframe at the playhead">
+		</button>		<button class="icon-btn" onclick={() => shotStore.removeCameraKeyframeAt(elapsed)} title={t('shot.keyframeCamRemove')}>
 			◌
 		</button>
 		{#if selectedObject}
 			<span class="obj-actions">
-				<button class="icon-btn obj-add" onclick={addKeyframeAtPlayhead} title={`Keyframe ${selectedObject.name}'s current transform at the playhead`}>
+				<button class="icon-btn obj-add" onclick={addKeyframeAtPlayhead} title={t('shot.keyframeObjAdd', { name: selectedObject.name })}>
 					◆+
 				</button>
 				<button
 					class="icon-btn"
 					onclick={deleteSelectedKeyframe}
 					disabled={!selectedKeyframeId || selectedObject.keyframes.length <= 1}
-					title={selectedKeyframeId ? 'Delete the selected object keyframe' : 'Select an object keyframe first'}
+					title={selectedKeyframeId ? t('shot.keyframeObjDelete') : t('shot.keyframeObjSelectFirst')}
 				>
 					◆−
 				</button>
 			</span>
 		{/if}
-		<button class="export" onclick={onExportVideo} disabled={exporting || track.length < 2} title={track.length < 2 ? 'Add at least two camera keyframes' : 'Render the camera track to a video clip'}>
-			Export video
+		<button class="export" onclick={onExportVideo} disabled={exporting || track.length < 2} title={track.length < 2 ? t('shot.exportHint') : t('shot.exportTitle')}>
+			{t('shot.exportVideo')}
 		</button>
 	</div>
 </div>

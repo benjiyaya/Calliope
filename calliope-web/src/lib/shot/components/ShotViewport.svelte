@@ -21,6 +21,7 @@ import { JOINT_CONFIGS, getJoint, setDOF, getDOF } from '../helpers/jointConfig'
 import { getCharacterAnchors, solveShot } from '../calibration/shotSolver';
 import { getCompositionPreset } from '../calibration/compositionPresets';
 import { sampleTrack } from '../motion/sampleTrack';
+import { t } from '$lib/i18n.svelte';
 import '../types/mannequin-js.d';
 
 let { oncapture, onselectionchange }: { oncapture?: (dataUrl: string) => void; onselectionchange?: () => void } = $props();
@@ -653,16 +654,16 @@ let gizmoDragging = false;
 		return new Promise((resolve, reject) => {
 			const reader = new FileReader();
 			reader.onload = () => resolve(String(reader.result));
-			reader.onerror = () => reject(new Error('Could not read recorded blob'));
+			reader.onerror = () => reject(new Error(t('shot.errBlob')));
 			reader.readAsDataURL(blob);
 		});
 	}
 
 	async function exportVideo(): Promise<{ dataUrl: string; ext: string }> {
 		const mime = pickVideoMime();
-		if (!mime) throw new Error('MediaRecorder is not available in this browser');
+		if (!mime) throw new Error(t('shot.errRecorder'));
 		if (shotStore.cameraTrack.length < 2) {
-			throw new Error('Add at least two camera keyframes before exporting');
+			throw new Error(t('shot.errExportKeyframes'));
 		}
 		const stream = renderer.domElement.captureStream(30);
 		const chunks: Blob[] = [];
@@ -699,7 +700,7 @@ let gizmoDragging = false;
 
 		const ext = mime.includes('mp4') ? 'mp4' : 'webm';
 		const blob = new Blob(chunks, { type: mime });
-		if (blob.size === 0) throw new Error('Recording produced no data');
+		if (blob.size === 0) throw new Error(t('shot.errNoData'));
 		return { dataUrl: await blobToDataUrl(blob), ext };
 	}
 

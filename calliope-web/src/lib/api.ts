@@ -1,4 +1,5 @@
 import type { AgentComposerPayload } from '$lib/agentComposer';
+import { t } from '$lib/i18n.svelte';
 
 const API_BASE = '';
 
@@ -124,7 +125,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 		},
 	});
 	if (!res.ok) {
-		const body = await res.text().catch(() => 'unknown error');
+		const body = await res.text().catch(() => t('api.unknownError'));
 		throw new Error(`${res.status}: ${body}`);
 	}
 	return res.json() as Promise<T>;
@@ -134,7 +135,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 async function apiUpload<T>(path: string, form: FormData): Promise<T> {
 	const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form });
 	if (!res.ok) {
-		const body = await res.text().catch(() => 'unknown error');
+		const body = await res.text().catch(() => t('api.unknownError'));
 		throw new Error(`${res.status}: ${body}`);
 	}
 	return res.json() as Promise<T>;

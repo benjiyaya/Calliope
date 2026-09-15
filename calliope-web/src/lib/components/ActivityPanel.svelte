@@ -3,6 +3,7 @@
 	import { toStore } from 'svelte/store';
 	import { jobsApi, type Job } from '$lib/api';
 	import type { CalliopeEvent, EventConnectionState } from '$lib/events';
+	import { t } from '$lib/i18n.svelte';
 	import JobRow from './JobRow.svelte';
 	import Button from './ui/Button.svelte';
 	import Icon from './ui/Icon.svelte';
@@ -55,45 +56,47 @@
 
 		switch (ev.type) {
 			case 'agent.thinking':
-				title = 'Agent';
-				detail = msg || 'Working…';
+				title = t('activity.agentWorking');
+				detail = msg || t('activity.working');
 				tone = 'work';
 				break;
 			case 'story.ready':
-				title = 'Story ready';
-				detail = msg || 'Storyline drafted';
+				title = t('activity.storyReady');
+				detail = msg || t('activity.storylineDrafted');
 				tone = 'ok';
 				break;
 			case 'job.created':
-				title = 'Queued';
+				title = t('activity.queued');
 				detail = msg || [kind, jobId].filter(Boolean).join(' ');
 				tone = 'info';
 				break;
 			case 'job.started':
-				title = 'Running';
+				title = t('activity.running');
 				detail = msg || [kind, jobId].filter(Boolean).join(' ');
 				tone = 'work';
 				break;
 			case 'job.completed':
-				title = 'Finished';
+				title = t('activity.finished');
 				detail =
 					msg ||
-					[kind, jobId, outputs ? `${outputs} file(s)` : ''].filter(Boolean).join(' · ');
+					[kind, jobId, outputs ? t('activity.files', { count: outputs }) : '']
+						.filter(Boolean)
+						.join(' · ');
 				tone = 'ok';
 				break;
 			case 'job.failed':
-				title = 'Failed';
+				title = t('activity.failed');
 				detail = err || msg || [kind, jobId].filter(Boolean).join(' ');
 				tone = 'err';
 				break;
 			case 'asset.ready':
-				title = 'Asset ready';
-				detail = msg || (paths ? `${paths} file(s) saved` : 'Output saved');
+				title = t('activity.assetReady');
+				detail = msg || (paths ? t('activity.filesSaved', { count: paths }) : t('activity.outputSaved'));
 				tone = 'ok';
 				break;
 			case 'job.deleted':
-				title = 'Removed';
-				detail = msg || jobId || 'Job deleted';
+				title = t('activity.removed');
+				detail = msg || jobId || t('activity.jobDeleted');
 				tone = 'warn';
 				break;
 			default:
@@ -163,45 +166,45 @@
 	const connected = $derived(connState === 'open');
 </script>
 
-<aside class="activity" class:collapsed aria-label="Activity">
+<aside class="activity" class:collapsed aria-label={t('activity.title')}>
 	{#if collapsed}
 		<button
 			type="button"
 			class="rail-toggle"
 			onclick={onToggle}
 			aria-expanded="false"
-			title="Show activity"
+			title={t('activity.show')}
 		>
 			<span class="pip rail-pip" class:live={connected} class:reconnecting={connState === 'reconnecting'} aria-hidden="true"></span>
 			{#if busyCount > 0}
-				<span class="rail-count" title="{busyCount} job(s) running or queued">{busyCount}</span>
+				<span class="rail-count" title={t('activity.busyCount', { count: busyCount })}>{busyCount}</span>
 			{/if}
-			<span class="rail-label">Activity</span>
+			<span class="rail-label">{t('activity.title')}</span>
 			<span class="rail-chevron" aria-hidden="true">‹</span>
 		</button>
 	{:else}
 		<header class="head">
 			<div class="head-title">
 				<span class="pip" class:live={connected} class:reconnecting={connState === 'reconnecting'} aria-hidden="true"></span>
-				<strong>Activity</strong>
+				<strong>{t('activity.title')}</strong>
 				{#if connState === 'reconnecting'}
-					<span class="conn-state warn">Reconnecting…</span>
+					<span class="conn-state warn">{t('activity.reconnecting')}</span>
 				{:else if connState === 'connecting'}
-					<span class="conn-state">Connecting…</span>
+					<span class="conn-state">{t('activity.connecting')}</span>
 				{/if}
 			</div>
-			<Button variant="ghost" size="sm" onclick={onToggle} title="Hide activity">
-				Hide <Icon name="chevron-right" size={13} />
+			<Button variant="ghost" size="sm" onclick={onToggle} title={t('activity.hide')}>
+				{t('activity.hide')} <Icon name="chevron-right" size={13} />
 			</Button>
 		</header>
 
 		<div class="body">
-			<section class="queue" aria-label="Queue">
+			<section class="queue" aria-label={t('activity.queue')}>
 				<div class="section-head">
-					<p class="eyebrow">Queue</p>
+					<p class="eyebrow">{t('activity.queue')}</p>
 				</div>
 				{#if queueRows.length === 0}
-					<p class="queue-empty">Queue idle — renders and generations land here.</p>
+					<p class="queue-empty">{t('activity.queueIdle')}</p>
 				{:else}
 					<div class="job-list">
 						{#each queueRows as job (job.id)}
@@ -209,20 +212,20 @@
 						{/each}
 					</div>
 				{/if}
-				<div class="stats-strip" aria-label="Queue stats">
-					<span><span class="sd sd-running" aria-hidden="true"></span>{stats.running} running</span>
-					<span><span class="sd sd-queued" aria-hidden="true"></span>{stats.queued} queued</span>
-					<span><span class="sd sd-done" aria-hidden="true"></span>{stats.done} done</span>
-					<span><span class="sd sd-failed" aria-hidden="true"></span>{stats.failed} failed</span>
+				<div class="stats-strip" aria-label={t('activity.queueStats')}>
+					<span><span class="sd sd-running" aria-hidden="true"></span>{stats.running} {t('activity.running').toLowerCase()}</span>
+					<span><span class="sd sd-queued" aria-hidden="true"></span>{stats.queued} {t('activity.queued').toLowerCase()}</span>
+					<span><span class="sd sd-done" aria-hidden="true"></span>{stats.done} {t('activity.done')}</span>
+					<span><span class="sd sd-failed" aria-hidden="true"></span>{stats.failed} {t('activity.failed').toLowerCase()}</span>
 				</div>
 			</section>
 
-			<section class="log-section" aria-label="Agent log">
-				<p class="eyebrow">Agent log</p>
+			<section class="log-section" aria-label={t('activity.agentLog')}>
+				<p class="eyebrow">{t('activity.agentLog')}</p>
 				{#if entries.length === 0}
 					<div class="empty">
-						<p>Quiet for now.</p>
-						<p class="hint">Draft a story, generate assets, or regenerate the script — progress shows up here.</p>
+						<p>{t('activity.quiet')}</p>
+						<p class="hint">{t('activity.quietHint')}</p>
 					</div>
 				{:else}
 					<ul class="log">

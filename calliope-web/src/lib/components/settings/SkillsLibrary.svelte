@@ -5,6 +5,7 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 
 	interface SkillSummary {
 		name: string;
@@ -58,7 +59,7 @@
 			const res = await agentApi.readSkillFile(skill, file);
 			preview = { skill, path: file, content: res.content, truncated: res.truncated };
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not read file');
+			toast.error(err instanceof Error ? err.message : t('skills.couldNotRead'));
 		} finally {
 			previewLoading = false;
 		}
@@ -67,7 +68,7 @@
 	async function copyText(text: string, quiet = false) {
 		try {
 			await navigator.clipboard.writeText(text);
-			if (!quiet) toast.success('Copied');
+			if (!quiet) toast.success(t('skills.copied'));
 		} catch {
 			/* clipboard unavailable — text stays selectable */
 		}
@@ -77,22 +78,19 @@
 <section class="panel">
 	<div class="panel-head">
 		<div>
-			<h1>Skills</h1>
-			<p class="lead">
-				Reusable expertise the agent loads on demand — prompt patterns, workflow recipes,
-				styling guides. Skills are plain folders you edit outside the app.
-			</p>
+			<h1>{t('skills.title')}</h1>
+			<p class="lead">{t('skills.lead')}</p>
 		</div>
 		<Button
 			variant="secondary"
 			size="sm"
 			onclick={() => {
 				$skillsQuery.refetch();
-				toast.info('Skills refreshed');
+				toast.info(t('skills.refreshed'));
 			}}
 		>
 			<Icon name="retry" size={14} />
-			Refresh
+			{t('skills.refresh')}
 		</Button>
 	</div>
 
@@ -104,9 +102,9 @@
 				type="button"
 				class="mini-btn"
 				onclick={() => copyText($pathQuery.data?.path ?? '')}
-				title="Copy folder path"
+				title={t('skills.copyPath')}
 			>
-				copy path
+				{t('skills.copyPathBtn')}
 			</button>
 		</div>
 	{/if}
@@ -114,45 +112,14 @@
 	<div class="callout info">
 		<Icon name="edit" size={16} />
 		<div class="callout-body">
-			<p class="howto-title"><strong>How to add a skill</strong></p>
+			<p class="howto-title"><strong>{t('skills.howtoTitle')}</strong></p>
 			<ol class="howto">
-				<li>
-					<strong>Create a folder</strong> inside the skills path above, named after your
-					skill (lowercase, dashes — e.g. <code class="mono">night-city-prompts</code>).
-				</li>
-				<li>
-					<strong>Add a <code class="mono">SKILL.md</code></strong> inside it, starting with
-					YAML frontmatter so Calliope can list it:
-					<pre class="mono snippet">{`---
-name: night-city-prompts
-description: "Use when the user wants neon/cyberpunk night-scene prompts."
-version: 1.0.0
----
-
-# Night City Prompts
-Write the guidance the agent should follow here…`}</pre>
-					<p class="snippet-note">
-						<code class="mono">name</code> is what the agent types after
-						<code class="mono">/</code>; <code class="mono">description</code> tells the agent
-						<em>when</em> to use the skill — write it like a trigger condition.
-					</p>
-				</li>
-				<li>
-					<strong>Extra files are welcome</strong> (e.g.
-					<code class="mono">references/style-guide.md</code>). Mention them in the SKILL.md
-					body ("Load references/style-guide.md for the full spec") — the agent reads them
-					with the same containment guards.
-				</li>
-				<li>
-					<strong>Save, then Refresh.</strong> The skill appears below, in the chat composer's
-					<code class="mono">/</code> picker, and the agent lists it automatically. Editing
-					an existing SKILL.md takes effect on the next agent turn — no restart.
-				</li>
+				<li>{@html t('skills.howto1')}</li>
+				<li>{@html t('skills.howto2')}</li>
+				<li>{@html t('skills.howto3')}</li>
+				<li>{@html t('skills.howto4')}</li>
 			</ol>
-			<p class="note">
-				Built-in skills are seeded into this folder on first run and are yours to edit —
-				Calliope never overwrites your changes.
-			</p>
+			<p class="note">{@html t('skills.note')}</p>
 		</div>
 	</div>
 
@@ -162,7 +129,7 @@ Write the guidance the agent should follow here…`}</pre>
 			<Skeleton height="72px" />
 		</div>
 	{:else if ($skillsQuery.data ?? []).length === 0}
-		<p class="empty">No skills found — add one using the steps above.</p>
+		<p class="empty">{t('skills.noSkills')}</p>
 	{:else}
 		<div class="stack">
 			{#each $skillsQuery.data ?? [] as skill (skill.dir)}
@@ -173,7 +140,7 @@ Write the guidance the agent should follow here…`}</pre>
 							class="expand"
 							aria-expanded={expanded === skill.dir}
 							onclick={() => toggleFiles(skill.dir)}
-							title={expanded === skill.dir ? 'Hide files' : 'Show files'}
+							title={expanded === skill.dir ? t('skills.hideFiles') : t('skills.showFiles')}
 						>
 							<Icon
 								name={expanded === skill.dir ? 'chevron-down' : 'chevron-right'}
@@ -201,7 +168,7 @@ Write the guidance the agent should follow here…`}</pre>
 					</header>
 					{#if expanded === skill.dir}
 						<div class="files">
-							<p class="files-label">Files in <span class="mono">{skill.dir}/</span></p>
+							<p class="files-label">{t('skills.filesIn')} <span class="mono">{skill.dir}/</span></p>
 							{#each filesBySkill[skill.dir] ?? [] as file (file)}
 								<button
 									type="button"
@@ -213,7 +180,7 @@ Write the guidance the agent should follow here…`}</pre>
 									<span class="mono">{file}</span>
 								</button>
 							{:else}
-								<span class="muted">No files found</span>
+								<span class="muted">{t('skills.noFiles')}</span>
 							{/each}
 						</div>
 					{/if}
@@ -223,22 +190,22 @@ Write the guidance the agent should follow here…`}</pre>
 	{/if}
 
 	{#if previewLoading}
-		<p class="muted">Loading file…</p>
+		<p class="muted">{t('skills.loadingFile')}</p>
 	{:else if preview}
 		<div class="preview-panel">
 			<header class="preview-head">
 				<span class="mono preview-path">{preview.skill}/{preview.path}</span>
 				{#if preview.truncated}
-					<span class="truncated-chip">truncated to 8k chars</span>
+					<span class="truncated-chip">{t('skills.truncated')}</span>
 				{/if}
 				<button
 					type="button"
 					class="mini-btn"
 					onclick={() => copyText(preview?.content ?? '')}
 				>
-					copy
+					{t('skills.copy')}
 				</button>
-				<button type="button" class="mini-btn" onclick={() => (preview = null)}>close</button>
+				<button type="button" class="mini-btn" onclick={() => (preview = null)}>{t('skills.close')}</button>
 			</header>
 			<pre class="mono preview-body">{preview.content}</pre>
 		</div>

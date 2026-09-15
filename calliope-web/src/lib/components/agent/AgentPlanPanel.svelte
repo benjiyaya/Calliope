@@ -2,6 +2,7 @@
 	import type { AgentPlan } from '$lib/api';
 	import { agentColor, agentDisplayName } from './agentPalette';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		plan: AgentPlan;
@@ -21,10 +22,10 @@
 	}
 
 	function statusLabel(status: string): string {
-		if (status === 'running') return 'Running';
-		if (status === 'done') return 'Done';
-		if (status === 'failed') return 'Failed';
-		return 'Queued';
+		if (status === 'running') return t('job.status.running');
+		if (status === 'done') return t('job.status.done');
+		if (status === 'failed') return t('job.status.failed');
+		return t('queue.queued');
 	}
 </script>
 
@@ -33,7 +34,7 @@
 		<span class="icon-wrap" class:spinning={running}>
 			<Icon name="sparkle" size={13} />
 		</span>
-		<span class="title">Planner</span>
+		<span class="title">{t('agentPlan.planner')}</span>
 		{#if plan.note}
 			<span class="note">{plan.note}</span>
 		{/if}

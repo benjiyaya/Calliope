@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { AgentSession } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		sessions: AgentSession[];
@@ -46,8 +47,8 @@
 			type="button"
 			class="rail-btn"
 			onclick={() => onToggleCollapse?.()}
-			title="Expand sessions"
-			aria-label="Expand sessions"
+			title={t('sessionSidebar.expand')}
+			aria-label={t('sessionSidebar.expand')}
 		>
 			<Icon name="drag" size={14} />
 		</button>
@@ -55,8 +56,8 @@
 			type="button"
 			class="rail-btn"
 			onclick={onNewSandbox}
-			title="New sandbox chat"
-			aria-label="New sandbox chat"
+			title={t('sessionSidebar.newSandbox')}
+			aria-label={t('sessionSidebar.newSandbox')}
 		>
 			<Icon name="plus" size={14} />
 		</button>
@@ -69,7 +70,7 @@
 					class:run={s.running || s.status === 'running'}
 					onclick={() => onSelect(s.id)}
 					title={s.title}
-					aria-label={`Open ${s.title}`}
+					aria-label={t('sessionSidebar.open', { title: s.title })}
 				></button>
 			{/each}
 		</div>
@@ -81,25 +82,25 @@
 				type="button"
 				class="collapse-toggle"
 				onclick={() => onToggleCollapse?.()}
-				title="Collapse sessions"
-				aria-label="Collapse sessions"
+				title={t('sessionSidebar.collapse')}
+				aria-label={t('sessionSidebar.collapse')}
 			>
 				<Icon name="drag" size={14} />
 			</button>
 		{/if}
 		<button type="button" class="new-chat" onclick={onNewSandbox}>
 			<Icon name="plus" size={14} />
-			New sandbox chat
+			{t('sessionSidebar.newSandboxButton')}
 		</button>
 
 		{#if sessions.length === 0}
-			<p class="muted">No sessions yet.</p>
+			<p class="muted">{t('sessionSidebar.noSessions')}</p>
 		{/if}
 
 		{#if sandbox.length > 0}
 			<div class="group">
 				<div class="group-head">
-					<span class="group-title">Sandbox</span>
+					<span class="group-title">{t('sessionSidebar.sandbox')}</span>
 					<span class="count">{sandbox.length}</span>
 				</div>
 				{#each sandbox as s (s.id)}
@@ -111,56 +112,56 @@
 					>
 						<span class="dot" class:run={s.running || s.status === 'running'}></span>
 						<span class="title">{s.title}</span>
-						<span
-							class="del"
-							role="button"
-							tabindex="-1"
-							aria-label="Delete session"
-							onclick={(e) => {
-								e.stopPropagation();
-								onDelete(s.id);
-							}}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.stopPropagation();
-									onDelete(s.id);
-								}
-							}}
-						>
-							<Icon name="trash" size={12} />
-						</span>
-					</button>
-				{/each}
-			</div>
-		{/if}
-
-		{#each grouped as g (g.project?.id ?? 0)}
-			<div class="group">
-				<div class="group-head">
-					<span class="group-title" title={g.project?.title}>
-						{g.project?.title ?? `Project #${g.project?.id ?? '?'}`}
-					</span>
-					<span class="count">{g.items.length}</span>
-					<span
-						class="add-chat"
+<span
+						class="del"
 						role="button"
-						tabindex="0"
-						aria-label="New chat for this project"
-						title="New chat for this project"
+						tabindex="-1"
+						aria-label={t('sessionSidebar.deleteSession')}
 						onclick={(e) => {
 							e.stopPropagation();
-							if (g.project) onNewProjectChat(g.project.id);
+							onDelete(s.id);
 						}}
 						onkeydown={(e) => {
 							if (e.key === 'Enter') {
 								e.stopPropagation();
-								if (g.project) onNewProjectChat(g.project.id);
+								onDelete(s.id);
 							}
 						}}
 					>
-						<Icon name="plus" size={12} />
+						<Icon name="trash" size={12} />
 					</span>
-				</div>
+				</button>
+			{/each}
+		</div>
+	{/if}
+
+	{#each grouped as g (g.project?.id ?? 0)}
+		<div class="group">
+			<div class="group-head">
+				<span class="group-title" title={g.project?.title}>
+					{g.project?.title ?? t('sessionSidebar.projectFallback', { id: g.project?.id ?? '?' })}
+				</span>
+				<span class="count">{g.items.length}</span>
+				<span
+					class="add-chat"
+					role="button"
+					tabindex="0"
+					aria-label={t('sessionSidebar.newProjectChat')}
+					title={t('sessionSidebar.newProjectChat')}
+					onclick={(e) => {
+						e.stopPropagation();
+						if (g.project) onNewProjectChat(g.project.id);
+					}}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') {
+							e.stopPropagation();
+							if (g.project) onNewProjectChat(g.project.id);
+						}
+					}}
+				>
+					<Icon name="plus" size={12} />
+				</span>
+			</div>
 				{#each g.items as s (s.id)}
 					<button
 						type="button"
@@ -170,24 +171,24 @@
 					>
 						<span class="dot" class:run={s.running || s.status === 'running'}></span>
 						<span class="title">{s.title}</span>
-						<span
-							class="del"
-							role="button"
-							tabindex="-1"
-							aria-label="Delete session"
-							onclick={(e) => {
+<span
+						class="del"
+						role="button"
+						tabindex="-1"
+						aria-label={t('sessionSidebar.deleteSession')}
+						onclick={(e) => {
+							e.stopPropagation();
+							onDelete(s.id);
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
 								e.stopPropagation();
 								onDelete(s.id);
-							}}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.stopPropagation();
-									onDelete(s.id);
-								}
-							}}
-						>
-							<Icon name="trash" size={12} />
-						</span>
+							}
+						}}
+					>
+						<Icon name="trash" size={12} />
+					</span>
 					</button>
 				{/each}
 			</div>

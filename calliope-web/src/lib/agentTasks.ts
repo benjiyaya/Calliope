@@ -17,10 +17,10 @@ export const AGENT_TASK_PROMPTS: Record<AgentTaskKind, string> = {
 		'Regenerate the full script for this project — turn the storyline into ordered scenes with action and dialogue.',
 };
 
-/** A sidebar-friendly title for the auto-created session. */
-export const AGENT_TASK_TITLES: Record<AgentTaskKind, string> = {
-	story: 'Draft Storyline',
-	script: 'Regenerate Script',
+/** i18n key for the auto-created session's sidebar title. */
+export const AGENT_TASK_TITLE_KEYS: Record<AgentTaskKind, string> = {
+	story: 'agent.task.story',
+	script: 'agent.task.script',
 };
 
 export function isAgentTaskKind(value: string | null | undefined): value is AgentTaskKind {

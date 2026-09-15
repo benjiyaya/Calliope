@@ -12,6 +12,7 @@
 	import { toast } from '$lib/toast';
 	import Button from './ui/Button.svelte';
 	import Icon from './ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		path: string;
@@ -88,23 +89,23 @@
 
 	const attachMutation = createMutation({
 		mutationFn: () => {
-			if (projectId === '') throw new Error('Pick a project');
+			if (projectId === '') throw new Error(t('attach.pickProject'));
 			const payload: Parameters<typeof playgroundApi.attach>[0] = {
 				path,
 				project_id: Number(projectId),
 				target,
 			};
 			if (target === 'character_sheet') {
-				if (characterId === '') throw new Error('Pick a character');
+				if (characterId === '') throw new Error(t('attach.pickCharacter'));
 				payload.character_id = Number(characterId);
 			} else if (target === 'location') {
-				if (locationId === '') throw new Error('Pick a location');
+				if (locationId === '') throw new Error(t('attach.pickLocation'));
 				payload.location_id = Number(locationId);
 			} else if (target === 'item') {
 				const name = itemName.trim();
 				if (name) payload.name = name;
 			} else {
-				if (sceneId === '') throw new Error('Pick a scene');
+				if (sceneId === '') throw new Error(t('attach.pickScene'));
 				payload.scene_id = Number(sceneId);
 			}
 			return playgroundApi.attach(payload);
@@ -113,11 +114,14 @@
 			message = '';
 			open = false;
 			const p = projectList.find((x) => x.id === res.project_id);
-			attached = { projectId: res.project_id, title: p?.title ?? `Project #${res.project_id}` };
-			toast.success('Added to project');
+			attached = {
+				projectId: res.project_id,
+				title: p?.title ?? t('attach.projectFallback', { id: res.project_id }),
+			};
+			toast.success(t('attach.added'));
 		},
 		onError: (err) => {
-			message = err instanceof Error ? err.message : 'Attach failed';
+			message = err instanceof Error ? err.message : t('attach.failed');
 			toast.error(message);
 		},
 	});
@@ -127,7 +131,7 @@
 		const stem = base.replace(/\.[^.]+$/, '');
 		const stripped = stem.replace(/^[0-9a-f]{8}-/i, '');
 		const pretty = (stripped || stem).replace(/[_-]+/g, ' ').trim();
-		return pretty || 'New item';
+		return pretty || t('attach.newItem');
 	}
 
 	const projectList = $derived(($projectsQuery.data ?? []) as Project[]);
@@ -142,12 +146,12 @@
 	{#if attached && !open}
 		<div class="attached" role="status">
 			<span class="attached-check" aria-hidden="true"><Icon name="check" size={14} /></span>
-			<span class="attached-text">Added to <strong>{attached.title}</strong></span>
-			<a class="attached-link" href={stageLink}>View in project</a>
+			<span class="attached-text">{t('attach.addedTo')} <strong>{attached.title}</strong></span>
+			<a class="attached-link" href={stageLink}>{t('attach.viewInProject')}</a>
 			<button
 				class="attached-dismiss"
 				type="button"
-				title="Dismiss"
+				title={t('attach.dismiss')}
 				onclick={() => (attached = null)}
 			>
 				<Icon name="close" size={12} />
@@ -161,14 +165,14 @@
 				open = true;
 			}}
 		>
-			Add to project
+			{t('attach.addToProject')}
 		</Button>
 	{:else}
-		<div class="panel" role="group" aria-label="Add artifact to project">
+		<div class="panel" role="group" aria-label={t('attach.panelAria')}>
 			<label class="field">
-				<span class="field-label">Project</span>
+				<span class="field-label">{t('attach.projectField')}</span>
 				<select class="field-select" bind:value={projectId}>
-					<option value="">Select project…</option>
+					<option value="">{t('attach.selectProject')}</option>
 					{#each projectList as p}
 						<option value={p.id}>{p.title}</option>
 					{/each}
@@ -177,63 +181,63 @@
 
 			{#if !isVideo}
 				<label class="field">
-					<span class="field-label">Add as</span>
+					<span class="field-label">{t('attach.addAs')}</span>
 					<select class="field-select" bind:value={target}>
-						<option value="character_sheet">Character sheet</option>
-						<option value="location">Background / location</option>
-						<option value="item">Misc. item</option>
+						<option value="character_sheet">{t('attach.asCharacterSheet')}</option>
+						<option value="location">{t('attach.asLocation')}</option>
+						<option value="item">{t('attach.asItem')}</option>
 					</select>
 				</label>
 
 				{#if target === 'character_sheet'}
 					<label class="field">
-						<span class="field-label">Character</span>
+						<span class="field-label">{t('attach.characterField')}</span>
 						<select class="field-select" bind:value={characterId} disabled={projectId === '' || loadingTargets}>
-							<option value="">Select character…</option>
+							<option value="">{t('attach.selectCharacter')}</option>
 							{#each characters as c}
 								<option value={c.id}>{c.name}</option>
 							{/each}
 						</select>
 						{#if projectId !== '' && !loadingTargets && characters.length === 0}
-							<span class="field-hint">No characters in this project yet.</span>
+							<span class="field-hint">{t('attach.noCharacters')}</span>
 						{/if}
 					</label>
 				{:else if target === 'location'}
 					<label class="field">
-						<span class="field-label">Location</span>
+						<span class="field-label">{t('attach.locationField')}</span>
 						<select class="field-select" bind:value={locationId} disabled={projectId === '' || loadingTargets}>
-							<option value="">Select location…</option>
+							<option value="">{t('attach.selectLocation')}</option>
 							{#each locations as loc}
 								<option value={loc.id}>{loc.name}</option>
 							{/each}
 						</select>
 						{#if projectId !== '' && !loadingTargets && locations.length === 0}
-							<span class="field-hint">No locations in this project yet.</span>
+							<span class="field-hint">{t('attach.noLocations')}</span>
 						{/if}
 					</label>
 				{:else}
 					<label class="field">
-						<span class="field-label">Name</span>
+						<span class="field-label">{t('attach.nameField')}</span>
 						<input
 							class="field-input"
 							type="text"
 							bind:value={itemName}
-							placeholder="New misc. item"
+							placeholder={t('attach.newItemPlaceholder')}
 						/>
-						<span class="field-hint">Adds a new misc. item. Existing items are left unchanged.</span>
+						<span class="field-hint">{t('attach.newItemHint')}</span>
 					</label>
 				{/if}
 			{:else}
 				<label class="field">
-					<span class="field-label">Scene</span>
+					<span class="field-label">{t('attach.sceneField')}</span>
 					<select class="field-select" bind:value={sceneId} disabled={projectId === '' || loadingTargets}>
-						<option value="">Select scene…</option>
+						<option value="">{t('attach.selectScene')}</option>
 						{#each scenes as s}
-							<option value={s.id}>#{s.order_index} {s.heading || 'Scene'}</option>
+							<option value={s.id}>#{s.order_index} {s.heading || t('attach.scene')}</option>
 						{/each}
 					</select>
 					{#if projectId !== '' && !loadingTargets && scenes.length === 0}
-						<span class="field-hint">No scenes yet — generate a script first.</span>
+						<span class="field-hint">{t('attach.noScenes')}</span>
 					{/if}
 				</label>
 			{/if}
@@ -245,9 +249,9 @@
 					disabled={projectId === ''}
 					onclick={() => $attachMutation.mutate()}
 				>
-					Add
+					{t('attach.addBtn')}
 				</Button>
-				<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+				<Button variant="ghost" onclick={() => (open = false)}>{t('common.cancel')}</Button>
 			</div>
 			{#if message && $attachMutation.isError}
 				<p class="err" role="alert">{message}</p>

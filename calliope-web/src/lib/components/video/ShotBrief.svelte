@@ -10,6 +10,7 @@
 	 */
 	import type { Clip, Scene } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		clip: Clip;
@@ -69,19 +70,19 @@
 			type="button"
 			class="icon-btn"
 			disabled={!body}
-			title={copied ? 'Copied' : 'Copy shot description'}
-			aria-label="Copy shot description"
+			title={copied ? t('shotBrief.copied') : t('shotBrief.copyTitle')}
+			aria-label={t('shotBrief.copyTitle')}
 			onclick={copyBody}
 		>
 			<Icon name={copied ? 'check' : 'copy'} size={13} />
-			<span class="icon-btn-text">{copied ? 'Copied' : 'Copy'}</span>
+			<span class="icon-btn-text">{copied ? t('shotBrief.copied') : t('shotBrief.copy')}</span>
 		</button>
 		<button
 			type="button"
 			class="icon-btn"
 			class:open
 			aria-expanded={open}
-			title={open ? 'Collapse shot brief' : 'Expand shot brief'}
+			title={open ? t('shotBrief.collapse') : t('shotBrief.expand')}
 			onclick={() => (open = !open)}
 		>
 			<Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
@@ -92,28 +93,29 @@
 		{#if body}
 			{body}
 		{:else}
-			<span class="muted">No shot description — this clip inherited the scene's defaults.</span>
+			<span class="muted">{t('shotBrief.noDesc')}</span>
 		{/if}
 	</p>
 
 	{#if open}
 		{#if sceneLevel}
 			<p class="note">
-				This clip has no per-shot description yet — the text above is the full scene action. Use
-				<span class="mono">Break into shots</span> in the Script stage to split it into coverage.
+				{t('shotBrief.notePre')}
+				<span class="mono">{t('shotBrief.breakIntoShots')}</span>
+				{t('shotBrief.notePost')}
 			</p>
 		{/if}
 
 		{#if coveredLines.length}
 			<div class="block">
-				<span class="k">Dialog in this shot</span>
+				<span class="k">{t('shotBrief.dialogKey')}</span>
 				<pre class="dialog">{coveredLines.join('\n')}</pre>
 			</div>
 		{/if}
 
 		{#if (scene.characters ?? []).length}
 			<div class="block">
-				<span class="k">Characters</span>
+				<span class="k">{t('shotBrief.characters')}</span>
 				<div class="chips">
 					{#each scene.characters as c (c.id)}
 						<span class="chip">{c.name}</span>

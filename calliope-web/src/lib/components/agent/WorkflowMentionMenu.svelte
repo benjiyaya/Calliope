@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { t } from '$lib/i18n.svelte';
+
 	interface MenuItem {
 		id?: number;
 		name: string;
@@ -87,12 +89,12 @@
 			? 'visible'
 			: 'hidden'}"
 		role="listbox"
-		aria-label={skillMode ? 'Skills' : 'Workflows'}
+		aria-label={skillMode ? t('mentionMenu.skills') : t('mentionMenu.workflows')}
 	>
 		{#if lockReason}
 			<div class="empty">{lockReason}</div>
 		{:else if items.length === 0}
-			<div class="empty">{skillMode ? 'No matching skill' : 'No matching workflow'}</div>
+			<div class="empty">{skillMode ? t('mentionMenu.noSkill') : t('mentionMenu.noWorkflow')}</div>
 		{:else}
 			{#each items as item, i (item.id ?? item.name)}
 				<button

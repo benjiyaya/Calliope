@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n.svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
 
@@ -33,11 +34,11 @@
 
 	// Job state (live from the queue) wins over the media-derived state.
 	const chip = $derived.by((): { status: string; label: string } => {
-		if (jobState === 'generating') return { status: 'generating', label: 'Generating' };
-		if (jobState === 'failed') return { status: 'failed', label: 'Failed' };
-		if (available) return { status: 'ready', label: 'Ready' };
-		if (src) return { status: 'missing', label: 'Missing' };
-		return { status: 'pending', label: 'Pending' };
+		if (jobState === 'generating') return { status: 'generating', label: t('common.generating') };
+		if (jobState === 'failed') return { status: 'failed', label: t('common.failed') };
+		if (available) return { status: 'ready', label: t('common.ready') };
+		if (src) return { status: 'missing', label: t('common.missing') };
+		return { status: 'pending', label: t('common.pending') };
 	});
 
 	function open() {

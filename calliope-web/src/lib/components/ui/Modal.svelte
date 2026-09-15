@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import Icon from './Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		open?: boolean;
@@ -102,7 +103,7 @@
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={title ? titleId : undefined}
-			aria-label={title ? undefined : 'Dialog'}
+			aria-label={title ? undefined : t('modal.dialog')}
 			tabindex="-1"
 		>
 			{#if title || dismissible}
@@ -114,7 +115,7 @@
 						<button
 							type="button"
 							class="modal-close"
-							aria-label="Close dialog"
+							aria-label={t('modal.closeDialog')}
 							onclick={requestClose}
 						>
 							<Icon name="close" size={16} />

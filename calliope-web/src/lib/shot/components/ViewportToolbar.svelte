@@ -8,6 +8,7 @@
 	 * the CSS overlay) and passed up through bindable props.
 	 */
 	import { shotStore, type ComposerTool } from '../shotStore.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	let {
 		oncapture,
@@ -31,15 +32,15 @@
 	}
 
 	const TOOLS = $derived<{ id: ComposerTool; label: string; title: string; disabled?: boolean }[]>([
-		{ id: 'select', label: 'Select', title: 'Select (click objects; no gizmo)' },
-		{ id: 'move', label: 'Move', title: 'Move (Translate)' },
-		{ id: 'rotate', label: 'Rotate', title: 'Rotate' },
-		{ id: 'scale', label: 'Scale', title: 'Scale' },
-		{ id: 'pose', label: 'Pose', title: canPose ? 'Pose (drag the joint handles)' : 'Pose applies to mannequins only', disabled: !canPose },
+		{ id: 'select', label: t('shot.toolSelect'), title: t('shot.toolSelectTitle') },
+		{ id: 'move', label: t('shot.toolMove'), title: t('shot.toolMoveTitle') },
+		{ id: 'rotate', label: t('shot.toolRotate'), title: t('shot.toolRotateTitle') },
+		{ id: 'scale', label: t('shot.toolScale'), title: t('shot.toolScaleTitle') },
+		{ id: 'pose', label: t('shot.toolPose'), title: canPose ? t('shot.toolPoseTitle') : t('shot.toolPoseDisabled'), disabled: !canPose },
 	]);
 </script>
 
-<div class="toolbar" role="toolbar" aria-label="Viewport tools">
+<div class="toolbar" role="toolbar" aria-label={t('shot.viewportTools')}>
 	<div class="group">
 		{#each TOOLS as tool (tool.id)}
 			<button
@@ -57,10 +58,10 @@
 	<span class="divider"></span>
 
 	<div class="group">
-		<button class="btn" onclick={() => shotStore.undo()} disabled={!shotStore.canUndo} title="Undo last scene change">
+		<button class="btn" onclick={() => shotStore.undo()} disabled={!shotStore.canUndo} title={t('shot.undoTitle')}>
 			↶
 		</button>
-		<button class="btn" onclick={() => shotStore.redo()} disabled={!shotStore.canRedo} title="Redo the last undone change">
+		<button class="btn" onclick={() => shotStore.redo()} disabled={!shotStore.canRedo} title={t('shot.redoTitle')}>
 			↷
 		</button>
 	</div>
@@ -68,18 +69,18 @@
 	<span class="divider"></span>
 
 	<div class="group">
-		<button class="btn" class:on={showGrid} onclick={() => (showGrid = !showGrid)} title="Toggle grid">
-			Grid
+		<button class="btn" class:on={showGrid} onclick={() => (showGrid = !showGrid)} title={t('shot.gridTitle')}>
+			{t('shot.grid')}
 		</button>
-		<button class="btn" class:on={showComposition} onclick={() => (showComposition = !showComposition)} title="Composition guide (rule of thirds)">
-			Composition
+		<button class="btn" class:on={showComposition} onclick={() => (showComposition = !showComposition)} title={t('shot.compositionTitle')}>
+			{t('shot.composition')}
 		</button>
 	</div>
 
 	<span class="divider"></span>
 
-	<button class="btn capture" onclick={() => oncapture?.()} title="Render the current view to a PNG reference">
-		◎ Capture
+	<button class="btn capture" onclick={() => oncapture?.()} title={t('shot.captureTitle')}>
+		◎ {t('shot.capture')}
 	</button>
 </div>
 

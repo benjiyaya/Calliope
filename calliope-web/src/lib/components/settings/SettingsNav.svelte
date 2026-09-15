@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { t } from '$lib/i18n.svelte';
 
 	const items = [
-		{ id: 'llm', href: '/settings?tab=llm', label: 'LLM', blurb: 'Model endpoints' },
-		{ id: 'comfy', href: '/settings?tab=comfy', label: 'ComfyUI', blurb: 'Render farm' },
-		{ id: 'workflows', href: '/settings?tab=workflows', label: 'Workflows', blurb: 'Library' },
-		{ id: 'agent', href: '/settings?tab=agent', label: 'Agent', blurb: 'Hardening rules' },
-		{ id: 'skills', href: '/settings?tab=skills', label: 'Skills', blurb: 'Agent expertise' },
-		{ id: 'queue', href: '/settings?tab=queue', label: 'Queue', blurb: 'Concurrency' },
-		{ id: 'storage', href: '/settings?tab=storage', label: 'Storage', blurb: 'Paths' },
+		{ id: 'llm', href: '/settings?tab=llm', labelKey: 'nav.llm', blurbKey: 'nav.llmBlurb' },
+		{ id: 'comfy', href: '/settings?tab=comfy', labelKey: 'nav.comfy', blurbKey: 'nav.comfyBlurb' },
+		{ id: 'workflows', href: '/settings?tab=workflows', labelKey: 'nav.workflows', blurbKey: 'nav.workflowsBlurb' },
+		{ id: 'agent', href: '/settings?tab=agent', labelKey: 'nav.agent', blurbKey: 'nav.agentBlurb' },
+		{ id: 'skills', href: '/settings?tab=skills', labelKey: 'nav.skills', blurbKey: 'nav.skillsBlurb' },
+		{ id: 'queue', href: '/settings?tab=queue', labelKey: 'nav.queue', blurbKey: 'nav.queueBlurb' },
+		{ id: 'storage', href: '/settings?tab=storage', labelKey: 'nav.storage', blurbKey: 'nav.storageBlurb' },
 	] as const;
 
 	interface Props {
@@ -22,7 +23,7 @@
 </script>
 
 <aside class="side">
-	<p class="eyebrow">Studio config</p>
+	<p class="eyebrow">{t('nav.eyebrow')}</p>
 	{#each items as item (item.id)}
 		<a
 			class="item"
@@ -31,12 +32,12 @@
 			aria-current={active === item.id ? 'page' : undefined}
 		>
 			<span class="label">
-				{item.label}
+				{t(item.labelKey)}
 				{#if dirty?.has(item.id)}
-					<span class="dirty-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>
+					<span class="dirty-dot" title={t('nav.unsaved')} aria-label={t('nav.unsaved')}></span>
 				{/if}
 			</span>
-			<span class="blurb">{item.blurb}</span>
+			<span class="blurb">{t(item.blurbKey)}</span>
 		</a>
 	{/each}
 </aside>

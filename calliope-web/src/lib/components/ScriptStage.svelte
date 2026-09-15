@@ -7,6 +7,7 @@
 	import { estimateTargetSeconds } from '$lib/durationBudget';
 	import { agentDeepLink } from '$lib/agentTasks';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
@@ -88,10 +89,13 @@
 			expandedIds = [...new Set([...expandedIds, scene.id])];
 			await client.invalidateQueries({ queryKey: ['scenes'] });
 			toast.success(
-				`Scene #${scene.order_index} → ${res.scenes?.[0]?.clip_count ?? '?'} shots`,
+				t('script.toast.breakIntoShots', {
+					num: scene.order_index,
+					clips: res.scenes?.[0]?.clip_count ?? '?',
+				}),
 			);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not break scene into shots');
+			toast.error(err instanceof Error ? err.message : t('script.toast.breakFail'));
 		} finally {
 			expandingIds = expandingIds.filter((id) => id !== scene.id);
 		}
@@ -100,9 +104,7 @@
 	async function breakAllIntoShots() {
 		if (expandingIds.length > 0 || expandingAll) return;
 		if (
-			!window.confirm(
-				`Break ALL ${sceneCount} scenes into shot clips? Existing shots of those scenes are replaced.`,
-			)
+			!window.confirm(t('script.toast.breakAllConfirm', { count: sceneCount }))
 		)
 			return;
 		expandingAll = true;
@@ -110,9 +112,9 @@
 			const res = await projects.expandClips(projectId, { all: true });
 			expandedIds = scenes.map((s) => s.id);
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success(`Board expanded to ${res.total_clips} clips`);
+			toast.success(t('script.toast.boardExpanded', { count: res.total_clips }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not break scenes into shots');
+			toast.error(err instanceof Error ? err.message : t('script.toast.breakAllFail'));
 		} finally {
 			expandingAll = false;
 		}
@@ -122,9 +124,9 @@
 		try {
 			await projects.deleteClip(projectId, clip.id);
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success(`Deleted shot #${scene.order_index}.${clip.order_index}`);
+			toast.success(t('script.toast.deletedShot', { num: `${scene.order_index}.${clip.order_index}` }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not delete clip');
+			toast.error(err instanceof Error ? err.message : t('script.toast.deleteClipFail'));
 		}
 	}
 
@@ -140,10 +142,10 @@
 			editing = null;
 			editOpen = false;
 			client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success('Scene saved');
+			toast.success(t('script.toast.sceneSaved'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not save scene');
+			toast.error(err instanceof Error ? err.message : t('script.toast.saveSceneFail'));
 		},
 	});
 
@@ -158,7 +160,7 @@
 			});
 			await client.invalidateQueries({ queryKey: ['scenes'] });
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not update scene');
+			toast.error(err instanceof Error ? err.message : t('script.toast.updateSceneFail'));
 		} finally {
 			chainPendingId = null;
 		}
@@ -184,13 +186,13 @@
 	function sceneStatus(scene: Scene): { status: string; label: string } {
 		const job = jobForScene(scene.id);
 		if (job && (job.status === 'pending' || job.status === 'running')) {
-			return { status: 'generating', label: 'Rendering' };
+			return { status: 'generating', label: t('script.status.rendering') };
 		}
-		if (job?.status === 'failed') return { status: 'failed', label: 'Render failed' };
+		if (job?.status === 'failed') return { status: 'failed', label: t('script.status.renderFailed') };
 		if (scene.video_path || job?.status === 'done') {
-			return { status: 'ready', label: 'Clip ready' };
+			return { status: 'ready', label: t('script.status.clipReady') };
 		}
-		return { status: 'idle', label: 'No clip' };
+		return { status: 'idle', label: t('script.status.noClip') };
 	}
 
 	function locationName(scene: Scene): string | null {
@@ -273,12 +275,12 @@
 			document
 				.getElementById(`scene-${created.id}`)
 				?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			toast.success(`Scene #${nextIndex} added — edit it below`);
+			toast.success(t('script.toast.sceneAdded', { num: nextIndex }));
 			window.setTimeout(() => {
 				if (highlightId === created.id) highlightId = null;
 			}, 2800);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not add scene');
+			toast.error(err instanceof Error ? err.message : t('script.toast.addSceneFail'));
 		} finally {
 			adding = false;
 		}
@@ -309,9 +311,9 @@
 				await projects.reorderScenes(projectId, remaining);
 			}
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success(`Deleted ${label}`);
+			toast.success(t('script.toast.deleted', { name: label }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not delete scene');
+			toast.error(err instanceof Error ? err.message : t('script.toast.deleteFailed'));
 		} finally {
 			deletingId = null;
 		}
@@ -336,37 +338,37 @@
 	</div>
 	<div class="stage-actions">
 		<Button variant="secondary" disabled={busy} loading={adding} onclick={addScene}>
-			<Icon name="plus" size={14} /> Add Scene
+			<Icon name="plus" size={14} /> {t('script.addScene')}
 		</Button>
 		<Button
 			variant="secondary"
 			disabled={busy || expandingAll || expandingIds.length > 0 || sceneCount === 0}
 			loading={expandingAll}
 			onclick={breakAllIntoShots}
-			title="Break every scene into shot clips (LLM coverage pass)"
+			title={t('script.breakAllTitle')}
 		>
-			<Icon name="film" size={14} /> Break All Into Shots
+			<Icon name="film" size={14} /> {t('script.breakAllIntoShots')}
 		</Button>
 		<Button variant="primary" disabled={busy} onclick={requestRegenerate}>
-			<Icon name="sparkle" size={15} /> Regenerate Script
+			<Icon name="sparkle" size={15} /> {t('script.regenerate')}
 		</Button>
 	</div>
 </header>
 
 <div class="script-panel">
 	{#if $scenesQuery.isLoading}
-		<div class="card">Loading scenes…</div>
+		<div class="card">{t('script.loadingScenes')}</div>
 	{:else if sceneCount === 0}
 		<EmptyState
-			title="No scenes yet"
-			body="Regenerate a full script, or add one scene and write it yourself."
+			title={t('script.noScenesTitle')}
+			body={t('script.noScenesBody')}
 		>
 			{#snippet icon()}
 				<Icon name="script" size={28} />
 			{/snippet}
 			{#snippet action()}
 				<Button variant="secondary" disabled={busy} loading={adding} onclick={addScene}>
-					<Icon name="plus" size={14} /> Add Scene
+					<Icon name="plus" size={14} /> {t('script.addScene')}
 				</Button>
 			{/snippet}
 		</EmptyState>
@@ -384,9 +386,9 @@
 					<div class="scene-title">
 						<span class="grip" aria-hidden="true"><Icon name="drag" size={14} /></span>
 						<span class="num">#{scene.order_index}</span>
-						<strong>{scene.heading || 'Untitled scene'}</strong>
+						<strong>{scene.heading || t('script.untitledScene')}</strong>
 						{#if highlightId === scene.id}
-							<span class="fresh-tag">Just added</span>
+							<span class="fresh-tag">{t('script.justAdded')}</span>
 						{/if}
 						<StatusChip status={st.status} label={st.label} />
 					</div>
@@ -394,8 +396,8 @@
 						<button
 							type="button"
 							class="icon-btn"
-							aria-label="Move scene up"
-							title="Move scene up"
+							aria-label={t('script.moveSceneUp')}
+							title={t('script.moveSceneUp')}
 							disabled={busy || i === 0}
 							onclick={() => move(scene.id, -1)}
 						>
@@ -404,15 +406,15 @@
 						<button
 							type="button"
 							class="icon-btn"
-							aria-label="Move scene down"
-							title="Move scene down"
+							aria-label={t('script.moveSceneDown')}
+							title={t('script.moveSceneDown')}
 							disabled={busy || i === sceneCount - 1}
 							onclick={() => move(scene.id, 1)}
 						>
 							<Icon name="chevron-down" size={15} />
 						</button>
 						<Button variant="secondary" size="sm" disabled={busy} onclick={() => openEdit(scene)}>
-							Edit
+							{t('script.edit')}
 						</Button>
 						<Button
 							variant="danger"
@@ -421,14 +423,14 @@
 							loading={deletingId === scene.id}
 							onclick={() => requestDelete(scene)}
 						>
-							Delete
+							{t('script.delete')}
 						</Button>
 					</div>
 				</div>
 				{#if scene.action}
 					<p class="muted">{scene.action}</p>
 				{:else}
-					<p class="muted empty-line">No action yet — open Edit to write the beat.</p>
+					<p class="muted empty-line">{t('script.noActionYet')}</p>
 				{/if}
 				{#if scene.dialog}
 					<pre class="dialog">{scene.dialog}</pre>
@@ -438,9 +440,9 @@
 						<span class="clip-title">
 							<Icon name="film" size={12} />
 							{(scene.clips ?? []).length}
-							{(scene.clips ?? []).length === 1 ? 'shot clip' : 'shot clips'}
+							{((scene.clips ?? []).length === 1 ? t('script.shotClipSingular') : t('script.shotClipPlural', { n: (scene.clips ?? []).length }))}
 							{#if (scene.clips ?? []).some((c) => c.clip_path)}
-								· {(scene.clips ?? []).filter((c) => c.clip_path).length} rendered
+								· {t('script.renderedCount', { count: (scene.clips ?? []).filter((c) => c.clip_path).length })}
 							{/if}
 						</span>
 						<Button
@@ -449,9 +451,9 @@
 							disabled={busy || expandingIds.length > 0 || expandingAll}
 							loading={expandingIds.includes(scene.id)}
 							onclick={() => breakIntoShots(scene)}
-							title={isExpanded(scene) ? 'Re-break this scene into shots (replaces existing shots)' : 'Break this scene into multiple shot clips via the coverage pass'}
+							title={isExpanded(scene) ? t('script.rebreakTitle') : t('script.breakTitle')}
 						>
-							{isExpanded(scene) ? 'Re-break Into Shots' : 'Break Into Shots'}
+							{isExpanded(scene) ? t('script.rebreak') : t('script.break')}
 						</Button>
 					</div>
 					{#if isExpanded(scene) && (scene.clips ?? []).length > 1}
@@ -462,14 +464,14 @@
 									<span class="clip-num" class:ready={Boolean(clip.clip_path)}>
 										#{scene.order_index}.{clip.order_index}
 									</span>
-									<span class="clip-desc">{clip.description || 'Untitled shot'}</span>
+									<span class="clip-desc">{clip.description || t('script.untitledShot')}</span>
 									{#if clip.shot_size}
 										<span class="chip">{clip.shot_size}</span>
 									{/if}
 									{#if clipJob && (clipJob.status === 'pending' || clipJob.status === 'running')}
-										<span class="chip chip-render">rendering…</span>
+										<span class="chip chip-render">{t('script.rendering')}</span>
 									{:else if clip.clip_path}
-										<span class="chip chip-ok">✓ clip</span>
+										<span class="chip chip-ok">✓ {t('script.clipDone')}</span>
 									{/if}
 									{#if clip.duration_sec}
 										<span class="clip-dur">{clip.duration_sec}s</span>
@@ -477,8 +479,8 @@
 									<button
 										type="button"
 										class="icon-btn"
-										aria-label="Delete shot #{scene.order_index}.{clip.order_index}"
-										title="Delete this shot"
+										aria-label={t('script.deleteShotAria', { id: `${scene.order_index}.${clip.order_index}` })}
+										title={t('script.deleteShotTitle')}
 										onclick={() => deleteClip(clip, scene)}
 									>
 										<Icon name="trash" size={13} />
@@ -513,11 +515,11 @@
 							class="chip chip-toggle"
 							class:chip-on={Boolean(scene.chain_from_prev)}
 							disabled={chainPendingId === scene.id}
-						title="This scene's clip continues from a previous video (Extend-style). Requires a workflow with a video input; pick the source clip in the Video stage."
+						title={t('script.chainTitle')}
 						onclick={() => toggleChain(scene)}
 					>
 						<Icon name="film" size={12} />
-						{Boolean(scene.chain_from_prev) ? 'Continues from previous video' : 'Continue from previous video'}
+						{Boolean(scene.chain_from_prev) ? t('script.chainOn') : t('script.chainOff')}
 						</button>
 					{/if}
 				</div>
@@ -528,56 +530,58 @@
 
 <Modal
 	bind:open={editOpen}
-	title={editing ? `Edit Scene #${editing.order_index}` : 'Edit Scene'}
+	title={editing ? t('script.editSceneNumbered', { n: editing.order_index }) : t('script.editScene')}
 	onclose={() => (editing = null)}
 >
 	{#if editing}
 		<label class="field">
-			<span class="field-label">Heading</span>
-			<input class="field-input" bind:value={editing.heading} placeholder="INT. LOCATION - TIME" />
+			<span class="field-label">{t('script.headingField')}</span>
+			<input class="field-input" bind:value={editing.heading} placeholder={t('script.headingPlaceholder')} />
 		</label>
 		<label class="field">
-			<span class="field-label">Action</span>
+			<span class="field-label">{t('script.actionField')}</span>
 			<textarea
 				class="field-textarea"
 				bind:value={editing.action}
 				rows="4"
-				placeholder="What happens on screen"
+				placeholder={t('script.actionPlaceholder')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Dialog</span>
+			<span class="field-label">{t('script.dialogField')}</span>
 			<textarea
 				class="field-textarea"
 				bind:value={editing.dialog}
 				rows="4"
-				placeholder="CHARACTER&#10;Line…"
+				placeholder={t('script.dialogPlaceholder')}
 			></textarea>
 		</label>
 		<label class="field">
-			<span class="field-label">Duration (sec)</span>
+			<span class="field-label">{t('script.durationField')}</span>
 			<input class="field-input" type="number" bind:value={editing.duration_sec} min="1" />
 		</label>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={() => (editOpen = false)}>Cancel</Button>
+		<Button variant="ghost" onclick={() => (editOpen = false)}>{t('common.cancel')}</Button>
 		<Button
 			variant="primary"
 			loading={$saveMutation.isPending}
 			onclick={() => $saveMutation.mutate()}
 		>
-			Save
+			{t('script.save')}
 		</Button>
 	{/snippet}
 </Modal>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
-	title="Delete scene?"
+	title={t('script.deleteSceneTitle')}
 	message={sceneToDelete
-		? `Delete “${sceneToDelete.heading?.trim() || `Scene #${sceneToDelete.order_index}`}”? This cannot be undone.`
+		? t('script.deleteSceneMessage', {
+				heading: sceneToDelete.heading?.trim() || t('script.sceneNumber', { n: sceneToDelete.order_index }),
+			})
 		: ''}
-	confirmLabel="Delete"
+	confirmLabel={t('script.delete')}
 	danger
 	onconfirm={() => void confirmDeleteScene()}
 	oncancel={() => (sceneToDelete = null)}

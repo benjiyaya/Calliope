@@ -8,6 +8,7 @@
 	 */
 	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import { shotApi } from '$lib/shot/api';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Capture {
 		id: number;
@@ -35,16 +36,16 @@
 </script>
 
 <div class="strip">
-	<span class="label">Captures ({captures.length})</span>
+	<span class="label">{t('shot.captures', { count: captures.length })}</span>
 	<div class="thumbs">
 		{#each captures as c, i (c.id)}
 			{#if c.file_path}
 				<figure class="thumb" title={c.label ?? ''}>
 					<button class="open" onclick={() => (lightboxIndex = i)}>
 						{#if c.kind === 'video'}
-							<span class="video-badge">▶ video</span>
+							<span class="video-badge">▶ {t('shot.videoBadge')}</span>
 						{/if}
-						<img src={srcOf(c)} alt={c.label ?? 'capture'} />
+						<img src={srcOf(c)} alt={c.label ?? t('shot.captureAlt')} />
 					</button>
 					<figcaption>
 						<button
@@ -60,7 +61,7 @@
 				</figure>
 			{/if}
 		{:else}
-			<span class="empty">No captures yet — press Capture or ask the agent.</span>
+			<span class="empty">{t('shot.noCaptures')}</span>
 		{/each}
 	</div>
 </div>
@@ -68,7 +69,7 @@
 {#if current && current.file_path}
 	<ImageLightbox
 		src={srcOf(current)}
-		alt={current.label ?? 'capture'}
+		alt={current.label ?? t('shot.captureAlt')}
 		caption={current.label ?? undefined}
 		kind={currentIsVideo ? 'video' : 'image'}
 		images={captures.filter((c) => c.file_path).map((c) => srcOf(c))}

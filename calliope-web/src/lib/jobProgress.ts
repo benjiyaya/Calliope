@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import type { CalliopeEvent } from './events';
+import { t } from './i18n.svelte';
 
 /**
  * Live per-job render progress, fed by the `/api/events` SSE stream.
@@ -85,7 +86,7 @@ class JobProgressStore {
 				this.cancelCleanup(id);
 				this.map.set(id, {
 					progress: 0,
-					message: str(d.message) || 'Queued',
+					message: str(d.message) || t('common.queued'),
 					final: false,
 					updatedAt: Date.now(),
 				});
@@ -100,7 +101,7 @@ class JobProgressStore {
 				const prev = this.map.get(id);
 				this.map.set(id, {
 					progress: prev?.progress ?? 0,
-					message: str(d.message) || 'Running',
+					message: str(d.message) || t('common.running'),
 					final: false,
 					updatedAt: Date.now(),
 				});

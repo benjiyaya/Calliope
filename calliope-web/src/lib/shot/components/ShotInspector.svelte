@@ -10,6 +10,7 @@
 	import type { ShotParams } from '$lib/shot/calibration/shotSolver';
 	import { SHOT_SIZE_OPTIONS, ANGLE_OPTIONS, ELEVATION_OPTIONS } from '$lib/shot/calibration/shotAxes';
 	import { COMPOSITION_PRESETS } from '$lib/shot/calibration/compositionPresets';
+	import { t } from '$lib/i18n.svelte';
 
 	let { oncapture }: { oncapture?: () => void } = $props();
 
@@ -67,7 +68,7 @@
 
 <aside class="inspector">
 	{#if !selected}
-		<p class="empty">Select an object to edit its transform{isFigure ? ' and pose' : ''}.</p>
+		<p class="empty">{isFigure ? t('shot.selectObjectPose') : t('shot.selectObject')}</p>
 	{:else}
 		<h3 class="name">{selected.name}</h3>
 		<span class="type">{selected.type}</span>
@@ -75,7 +76,7 @@
 		{#if isCamera}
 			<section>
 				<label class="field">
-					<span>FOV {selected.fov ?? 10}°</span>
+					<span>{t('shot.fov')} {selected.fov ?? 10}°</span>
 					<input
 						type="range"
 						min="5"
@@ -89,7 +90,7 @@
 		{/if}
 
 		<section>
-			<h4>Transform</h4>
+			<h4>{t('shot.transform')}</h4>
 			{#each ['position', 'rotation', 'scale'] as key (key)}
 				<div class="vec">
 					<span class="vec-label">{key}</span>
@@ -112,7 +113,7 @@
 		{#if isFigure}
 			<section>
 				<button class="collapse" onclick={() => (jointsOpen = !jointsOpen)}>
-					<h4>Pose {jointsOpen ? '▾' : '▸'}</h4>
+					<h4>{t('shot.pose')} {jointsOpen ? '▾' : '▸'}</h4>
 				</button>
 				{#if jointsOpen}
 					<div class="joints">
@@ -140,9 +141,9 @@
 		{/if}
 
 		<section>
-			<h4>Shot</h4>
+			<h4>{t('shot.shotSection')}</h4>
 			<label class="field">
-				<span>Shot size</span>
+				<span>{t('shot.shotSize')}</span>
 				<select
 					value={shotStore.shotParams?.shotSize ?? ''}
 					onchange={(e) => {
@@ -157,7 +158,7 @@
 				</select>
 			</label>
 			<label class="field">
-				<span>Angle</span>
+				<span>{t('shot.angle')}</span>
 				<select
 					value={shotStore.shotParams?.angle ?? ''}
 					onchange={(e) => {
@@ -172,7 +173,7 @@
 				</select>
 			</label>
 			<label class="field">
-				<span>Elevation</span>
+				<span>{t('shot.elevation')}</span>
 				<select
 					value={shotStore.shotParams?.elevation ?? ''}
 					onchange={(e) => {
@@ -187,12 +188,12 @@
 				</select>
 			</label>
 			<label class="field">
-				<span>Composition</span>
+				<span>{t('shot.composition')}</span>
 				<select
 					value={shotStore.shotParams?.composition ?? ''}
 					onchange={(e) => shotStore.setShotParams({ composition: (e.target as HTMLSelectElement).value || undefined })}
 				>
-					<option value="">Center</option>
+					<option value="">{t('shot.center')}</option>
 					{#each COMPOSITION_PRESETS.slice(1) as p (p.id)}
 						<option value={p.id}>{p.label}</option>
 					{/each}
@@ -200,7 +201,7 @@
 			</label>
 		</section>
 
-		<button class="capture" onclick={() => oncapture?.()}>Capture reference PNG</button>
+		<button class="capture" onclick={() => oncapture?.()}>{t('shot.captureRef')}</button>
 	{/if}
 </aside>
 

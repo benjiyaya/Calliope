@@ -6,6 +6,7 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	const client = useQueryClient();
 	const workflowsQuery = createQuery({
@@ -52,7 +53,7 @@
 				wfName = uploadedFileName.replace(/\.json$/i, '');
 			}
 		} catch (err) {
-			parseError = err instanceof Error ? err.message : 'Invalid JSON';
+			parseError = err instanceof Error ? err.message : t('wf.invalidJson');
 		}
 	}
 
@@ -93,9 +94,9 @@
 			wfKind = 'image';
 			wfProfile = 'prose';
 			client.invalidateQueries({ queryKey: ['workflows'] });
-			toast.success(`Workflow “${name}” saved to library`);
+			toast.success(t('wf.savedToLibrary', { name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not save workflow');
+			toast.error(err instanceof Error ? err.message : t('wf.saveFailed'));
 		} finally {
 			saving = false;
 		}
@@ -117,9 +118,9 @@
 			});
 			editingId = null;
 			client.invalidateQueries({ queryKey: ['workflows'] });
-			toast.success('Workflow updated');
+			toast.success(t('wf.updated'));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not update workflow');
+			toast.error(err instanceof Error ? err.message : t('wf.updateFailed'));
 		}
 	}
 
@@ -127,9 +128,14 @@
 		try {
 			await workflows.update(wf.id, { is_enabled: !wf.is_enabled });
 			client.invalidateQueries({ queryKey: ['workflows'] });
-			toast.success(wf.is_enabled ? `Workflow “${wf.name}” disabled` : `Workflow “${wf.name}” enabled`);
+			toast.success(
+				t('wf.enabledState', {
+					name: wf.name,
+					state: wf.is_enabled ? t('wf.stateDisabled') : t('wf.stateEnabled'),
+				}),
+			);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not update workflow');
+			toast.error(err instanceof Error ? err.message : t('wf.updateFailed'));
 		}
 	}
 
@@ -149,9 +155,9 @@
 			await workflows.delete(wf.id);
 			if (detailsId === wf.id) detailsId = null;
 			client.invalidateQueries({ queryKey: ['workflows'] });
-			toast.success(`Workflow “${wf.name}” deleted`);
+			toast.success(t('wf.deleted', { name: wf.name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not delete workflow');
+			toast.error(err instanceof Error ? err.message : t('wf.deleteFailed'));
 		}
 	}
 
@@ -163,22 +169,18 @@
 <section class="block">
 	<header class="block-head">
 		<div>
-			<h2>ComfyUI Workflows</h2>
-			<p>
-				Register API-format workflow JSONs as a reusable library. In ComfyUI, title editable
-				nodes with role tags such as <code>(Input:prompt)</code>,
-				<code>(Input:width)</code>, <code>(Output:image)</code> — see <code>AGENTS.md</code>.
-			</p>
+			<h2>{t('wf.title')}</h2>
+			<p>{@html t('wf.lead')}</p>
 		</div>
 		<div class="stats">
-			<span class="stat">{list.length} saved</span>
-			<span class="stat image">{imageCount} image</span>
-			<span class="stat video">{videoCount} video</span>
+			<span class="stat">{t('wf.countSaved', { count: list.length })}</span>
+			<span class="stat image">{t('wf.countImage', { count: imageCount })}</span>
+			<span class="stat video">{t('wf.countVideo', { count: videoCount })}</span>
 		</div>
 	</header>
 
 	<div class="register panel">
-		<h3>Analyze &amp; register</h3>
+		<h3>{t('wf.analyzeRegister')}</h3>
 		<div
 			class="drop"
 			class:dragging
@@ -205,8 +207,8 @@
 			/>
 			<div class="drop-icon">JSON</div>
 			<div>
-				<strong>Drop ComfyUI API JSON here</strong>
-				<p class="muted">or click to browse · Save (API Format) from ComfyUI</p>
+				<strong>{t('wf.dropHint')}</strong>
+				<p class="muted">{t('wf.dropSub')}</p>
 			</div>
 		</div>
 
@@ -216,10 +218,10 @@
 
 		{#if jsonText}
 			<label class="field">
-				<span class="field-label">JSON preview</span>
+				<span class="field-label">{t('wf.jsonPreview')}</span>
 				<textarea class="field-textarea mono preview" rows="8" readonly value={jsonText}></textarea>
 			</label>
-			<Button variant="secondary" size="sm" onclick={() => analyzeRaw(jsonText)}>Re-analyze</Button>
+			<Button variant="secondary" size="sm" onclick={() => analyzeRaw(jsonText)}>{t('wf.reanalyze')}</Button>
 		{/if}
 
 		{#if parseError}
@@ -229,9 +231,9 @@
 		{#if analyzed}
 			<div class="io-panel">
 				<div class="io-col">
-					<h4>Detected inputs ({analyzedInputs.length})</h4>
+					<h4>{t('wf.detectedInputs', { count: analyzedInputs.length })}</h4>
 					{#if analyzedInputs.length === 0}
-						<p class="muted">None — add <code>(Input:prompt)</code> etc. to node titles in ComfyUI.</p>
+						<p class="muted">{@html t('wf.noInputs')}</p>
 					{:else}
 						{#each analyzedInputs as inp}
 							<div class="pill input">
@@ -244,9 +246,9 @@
 					{/if}
 				</div>
 				<div class="io-col">
-					<h4>Detected outputs ({analyzedOutputs.length})</h4>
+					<h4>{t('wf.detectedOutputs', { count: analyzedOutputs.length })}</h4>
 					{#if analyzedOutputs.length === 0}
-						<p class="muted">None — add <code>(Output:image)</code> / <code>(Output:video)</code> to node titles.</p>
+						<p class="muted">{@html t('wf.noOutputs')}</p>
 					{:else}
 						{#each analyzedOutputs as out}
 							<div class="pill output">
@@ -262,46 +264,46 @@
 
 			<div class="meta-grid">
 				<label class="field">
-					<span class="field-label">Name</span>
-					<input class="field-input" bind:value={wfName} placeholder="LTX Ref-to-Video" required />
+					<span class="field-label">{t('common.name')}</span>
+					<input class="field-input" bind:value={wfName} placeholder={t('wf.namePlaceholder')} required />
 				</label>
 				<label class="field">
-					<span class="field-label">Kind</span>
+					<span class="field-label">{t('wf.kind')}</span>
 					<select class="field-select" bind:value={wfKind}>
-						<option value="image">Image (Keyframe)</option>
-						<option value="video">Video</option>
+						<option value="image">{t('wf.kindImage')}</option>
+						<option value="video">{t('wf.kindVideo')}</option>
 					</select>
 				</label>
 			</div>
 			<label class="field">
-				<span class="field-label">Prompt format</span>
+				<span class="field-label">{t('wf.promptFormat')}</span>
 				<select class="field-select" bind:value={wfProfile}>
-					<option value="prose">Plain prose (default)</option>
-					<option value="minimax_h3_ref">MiniMax H3 reference (6-section)</option>
+					<option value="prose">{t('wf.profileProse')}</option>
+					<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
 				</select>
 			</label>
 			<label class="field">
-				<span class="field-label">Description</span>
+				<span class="field-label">{t('common.description')}</span>
 				<textarea
 					class="field-textarea"
 					bind:value={wfDescription}
 					rows="2"
-					placeholder="When to use this workflow…"
+					placeholder={t('wf.descPlaceholder')}
 				></textarea>
 			</label>
 			<Button variant="primary" loading={saving} disabled={!wfName.trim()} onclick={saveToLibrary}>
-				Save to library
+				{t('wf.saveToLibrary')}
 			</Button>
 		{/if}
 	</div>
 
 	<div class="library">
 		<div class="library-head">
-			<h3>Saved workflows ({list.length})</h3>
+			<h3>{t('wf.savedWorkflows', { count: list.length })}</h3>
 		</div>
 
 		{#if $workflowsQuery.isLoading}
-			<div class="cards" aria-busy="true" aria-label="Loading workflows">
+			<div class="cards" aria-busy="true" aria-label={t('wf.loadingWorkflows')}>
 				{#each [1, 2, 3] as n (n)}
 					<div class="card skel-card">
 						<Skeleton circle height="40px" />
@@ -314,8 +316,8 @@
 			</div>
 		{:else if list.length === 0}
 			<div class="empty">
-				<strong>No workflows yet</strong>
-				<p class="muted">Register at least one image and one video workflow to run the pipeline.</p>
+				<strong>{t('wf.noWorkflows')}</strong>
+				<p class="muted">{t('wf.noWorkflowsHint')}</p>
 			</div>
 		{:else}
 			<div class="cards">
@@ -323,24 +325,24 @@
 					<article class="card" class:disabled={!wf.is_enabled}>
 						{#if editingId === wf.id}
 							<label class="field">
-								<span class="field-label">Name</span>
+								<span class="field-label">{t('common.name')}</span>
 								<input class="field-input" bind:value={editName} />
 							</label>
 							<label class="field">
-								<span class="field-label">Description</span>
+								<span class="field-label">{t('common.description')}</span>
 								<textarea class="field-textarea" rows="2" bind:value={editDescription}></textarea>
 							</label>
 							<label class="field">
-								<span class="field-label">Prompt format</span>
+								<span class="field-label">{t('wf.promptFormat')}</span>
 								<select class="field-select" bind:value={editProfile}>
-									<option value="prose">Plain prose (default)</option>
-									<option value="minimax_h3_ref">MiniMax H3 reference (6-section)</option>
+									<option value="prose">{t('wf.profileProse')}</option>
+									<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
 								</select>
 							</label>
-							<p class="field-hint">Workflow JSON is locked after registration.</p>
+							<p class="field-hint">{t('wf.jsonLocked')}</p>
 							<div class="row">
-								<Button size="sm" onclick={() => saveEdit(wf.id)}>Save</Button>
-								<Button variant="ghost" size="sm" onclick={() => (editingId = null)}>Cancel</Button>
+								<Button size="sm" onclick={() => saveEdit(wf.id)}>{t('common.save')}</Button>
+								<Button variant="ghost" size="sm" onclick={() => (editingId = null)}>{t('common.cancel')}</Button>
 							</div>
 						{:else}
 							<div class="card-top">
@@ -354,9 +356,9 @@
 										{#if wf.prompt_profile === 'minimax_h3_ref'}
 											<span class="kind-badge h3">H3-ref</span>
 										{/if}
-										<span class="count">{wf.input_schema?.length ?? 0} inputs</span>
-										<span class="count">{wf.output_schema?.length ?? 0} outputs</span>
-										{#if !wf.is_enabled}<StatusChip status="disabled" label="Disabled" />{/if}
+										<span class="count">{t('wf.inputsCount', { count: wf.input_schema?.length ?? 0 })}</span>
+										<span class="count">{t('wf.outputsCount', { count: wf.output_schema?.length ?? 0 })}</span>
+										{#if !wf.is_enabled}<StatusChip status="disabled" label={t('wf.disabled')} />{/if}
 									</div>
 									{#if wf.description}
 										<p class="desc">{wf.description}</p>
@@ -364,23 +366,23 @@
 								</div>
 							</div>
 							<div class="row">
-								<Button variant="ghost" size="sm" onclick={() => startEdit(wf)}>Edit</Button>
+								<Button variant="ghost" size="sm" onclick={() => startEdit(wf)}>{t('common.edit')}</Button>
 								<Button
 									variant="ghost"
 									size="sm"
 									onclick={() => (detailsId = detailsId === wf.id ? null : wf.id)}
 								>
-									{detailsId === wf.id ? 'Hide I/O' : 'View I/O'}
+									{detailsId === wf.id ? t('wf.hideIo') : t('wf.viewIo')}
 								</Button>
 								<Button variant="ghost" size="sm" onclick={() => toggleEnabled(wf)}>
-									{wf.is_enabled ? 'Disable' : 'Enable'}
+									{wf.is_enabled ? t('wf.disable') : t('wf.enable')}
 								</Button>
-								<Button variant="danger" size="sm" onclick={() => askDelete(wf)}>Delete</Button>
+								<Button variant="danger" size="sm" onclick={() => askDelete(wf)}>{t('common.delete')}</Button>
 							</div>
 							{#if detailsId === wf.id}
 								<div class="io-panel nested">
 									<div class="io-col">
-										<h4>Inputs</h4>
+										<h4>{t('wf.inputs')}</h4>
 										{#each wf.input_schema ?? [] as inp}
 											<div class="pill input">
 												<span class="kind">{inp.kind}</span>
@@ -388,18 +390,18 @@
 												<span>{inp.label}</span>
 											</div>
 										{:else}
-											<p class="muted">No inputs cached.</p>
+											<p class="muted">{t('wf.noInputsCached')}</p>
 										{/each}
 									</div>
 									<div class="io-col">
-										<h4>Outputs</h4>
+										<h4>{t('wf.outputs')}</h4>
 										{#each wf.output_schema ?? [] as out}
 											<div class="pill output">
 												<span class="kind">{out.kind}</span>
 												<span>{out.label}</span>
 											</div>
 										{:else}
-											<p class="muted">No outputs cached.</p>
+											<p class="muted">{t('wf.noOutputsCached')}</p>
 										{/each}
 									</div>
 								</div>
@@ -414,11 +416,9 @@
 
 <ConfirmDialog
 	bind:open={deleteOpen}
-	title="Delete workflow?"
-	message={deleteTarget
-		? `This removes “${deleteTarget.name}” from the library. This cannot be undone.`
-		: ''}
-	confirmLabel="Delete"
+	title={t('wf.deleteTitle')}
+	message={deleteTarget ? t('wf.deleteMessage', { name: deleteTarget.name }) : ''}
+	confirmLabel={t('common.delete')}
 	danger
 	onconfirm={confirmDelete}
 	oncancel={() => (deleteTarget = null)}

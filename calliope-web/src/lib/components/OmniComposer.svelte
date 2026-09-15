@@ -20,6 +20,7 @@
 	import type { AssetOption } from '$lib/assetPicker';
 	import { assetUrl } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { t } from '$lib/i18n.svelte';
 	import PillSelect from './omni/PillSelect.svelte';
 	import PillStepper from './omni/PillStepper.svelte';
 	import PillPopover from './omni/PillPopover.svelte';
@@ -71,7 +72,7 @@
 		submitting = false,
 		disabled = false,
 		generateDisabledHint = '',
-		generateLabel = 'Generate',
+		generateLabel = '',
 	}: Props = $props();
 
 	const uploadMgr = createUploadManager();
@@ -229,17 +230,17 @@
 		{#if promptNode}
 			<textarea
 				class="prompt-area"
-				placeholder="Describe the scene you want to generate…"
+				placeholder={t('omni.promptPlaceholder')}
 				rows="3"
 				value={values[promptNode.nodeId] ?? ''}
 				oninput={(e) => setValue(promptNode.nodeId, e.currentTarget.value)}
 				onkeydown={onPromptKeydown}
-				aria-label="Prompt"
+				aria-label={t('omni.promptAria')}
 			></textarea>
 		{:else}
 			<textarea
 				class="prompt-area no-prompt-role"
-				placeholder="This workflow has no (Input:prompt) field. Use the Advanced pill below for raw inputs."
+				placeholder={t('omni.noPromptRole')}
 				rows="2"
 				disabled
 			></textarea>
@@ -250,17 +251,17 @@
 				{#if showNegative}
 					<textarea
 						class="negative-area"
-						placeholder="Negative prompt (what to avoid)…"
+						placeholder={t('omni.negativePlaceholder')}
 						rows="2"
 						value={values[negativeNode.nodeId] ?? ''}
 						oninput={(e) => setValue(negativeNode.nodeId, e.currentTarget.value)}
 						onkeydown={onPromptKeydown}
-						aria-label="Negative prompt"
+						aria-label={t('omni.negativeAria')}
 					></textarea>
 				{/if}
 				<button type="button" class="negative-toggle" onclick={() => (showNegative = !showNegative)}>
 					<Icon name={showNegative ? 'chevron-up' : 'chevron-down'} size={12} />
-					Negative prompt
+					{t('omni.negativeToggle')}
 				</button>
 			</div>
 		{/if}
@@ -283,7 +284,7 @@
 		<!-- Resolution pill (merged width + height) -->
 		{#if resPair}
 			<PillSelect
-				label={currentResLabel ?? 'Resolution'}
+				label={currentResLabel ?? t('omni.resolution')}
 				options={resOptions}
 				value={currentResValue}
 				onchange={onResChange}
@@ -308,11 +309,12 @@
 		{#each classified.control.filter((c) => normalizeInputRole(c.input.role) === 'duration') as ctrl (ctrl.input.nodeId)}
 			{@const nodeId = ctrl.input.nodeId}
 			<PillStepper
-				label="Duration"
+				label={t('omni.duration')}
 				value={values[nodeId] ?? ctrl.input.defaultValue ?? 5}
 				min={1}
 				max={30}
 				step={1}
+				unit="s"
 				onchange={(v) => setValue(nodeId, v)}
 			/>
 		{/each}
@@ -321,7 +323,7 @@
 		{#each classified.control.filter((c) => normalizeInputRole(c.input.role) === 'seed') as ctrl (ctrl.input.nodeId)}
 			{@const nodeId = ctrl.input.nodeId}
 			<PillStepper
-				label="Seed"
+				label={t('omni.seed')}
 				value={values[nodeId] ?? ctrl.input.defaultValue ?? 0}
 				min={0}
 				max={999999999}
@@ -332,7 +334,7 @@
 
 		<!-- Advanced (unknown roles, extra params) -->
 		{#if hasAdvanced}
-			<PillPopover label="Advanced" badge={classified.advanced.length} icon="settings">
+			<PillPopover label={t('omni.advanced')} badge={classified.advanced.length} icon="settings">
 				{#each classified.advanced as ctrl (ctrl.input.nodeId)}
 					{@const nodeId = ctrl.input.nodeId}
 					<label class="adv-field">
@@ -365,10 +367,10 @@
 			disabled={submitting || disabled}
 			title={disabled ? generateDisabledHint : undefined}
 			onclick={() => onSubmit?.()}
-			aria-label="Generate"
+			aria-label={t('omni.generateAria')}
 		>
 			<Icon name="sparkle" size={16} />
-			{submitting ? 'Queuing…' : generateLabel}
+			{submitting ? t('omni.queuing') : generateLabel || t('omni.generate')}
 		</button>
 	</div>
 </div>

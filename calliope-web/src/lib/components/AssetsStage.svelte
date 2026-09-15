@@ -35,6 +35,7 @@
 		locationReferenceTemplate,
 	} from '$lib/promptTemplates';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 
 	interface Props {
 		projectId: number;
@@ -113,10 +114,12 @@
 		onSuccess: async (updated) => {
 			await client.invalidateQueries({ queryKey: ['project'] });
 			await client.invalidateQueries({ queryKey: ['projects'] });
-			toast.success(updated.cover_path ? 'Project cover updated' : 'Project cover removed');
+			toast.success(
+				updated.cover_path ? t('assets.toast.coverUpdated') : t('assets.toast.coverRemoved'),
+			);
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Could not update project cover');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.coverFail'));
 		},
 	});
 
@@ -156,13 +159,17 @@
 			[];
 		for (const c of chars) {
 			if (c.sheet_path) {
-				opts.push({ label: `${c.name} · sheet`, path: c.sheet_path, group: 'character' });
+				opts.push({
+					label: `${c.name} · ${t('assets.optionSheet')}`,
+					path: c.sheet_path,
+					group: 'character',
+				});
 			}
 		}
 		for (const loc of locs) {
 			if (loc.reference_image_path) {
 				opts.push({
-					label: `${loc.name} · environment`,
+					label: `${loc.name} · ${t('assets.optionEnvironment')}`,
 					path: loc.reference_image_path,
 					group: 'location',
 				});
@@ -170,7 +177,11 @@
 		}
 		for (const it of items) {
 			if (it.reference_image_path) {
-				opts.push({ label: `${it.name} · item`, path: it.reference_image_path, group: 'item' });
+				opts.push({
+					label: `${it.name} · ${t('assets.optionItem')}`,
+					path: it.reference_image_path,
+					group: 'item',
+				});
 			}
 		}
 		return opts;
@@ -219,7 +230,7 @@
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['jobs'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
-			toast.success('Jobs queued — progress shows on the cards');
+			toast.success(t('assets.toast.queued'));
 		},
 		onError: (err) => {
 			toast.error(err instanceof Error ? err.message : String(err));
@@ -230,10 +241,10 @@
 		mutationFn: (jobId: number) => jobsApi.retry(jobId),
 		onSuccess: () => {
 			client.invalidateQueries({ queryKey: ['jobs'] });
-			toast.success('Job re-queued');
+			toast.success(t('assets.toast.jobRequeued'));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Retry failed');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.retryFailed'));
 		},
 	});
 
@@ -248,10 +259,10 @@
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
 			await client.invalidateQueries({ queryKey: ['scenes'] });
-			toast.success(`Deleted ${target.name}`);
+			toast.success(t('assets.toast.deleted', { name: target.name }));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Delete failed');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.deleteFailed'));
 		},
 	});
 
@@ -307,9 +318,9 @@
 		drafts = { ...drafts, [key]: value };
 	}
 
-	function requireWorkflow(id: number | '', label: string): number | null {
+	function requireWorkflow(id: number | '', needKey: string): number | null {
 		if (id === '') {
-			toast.error(`Select a ${label} workflow first`);
+			toast.error(t(needKey));
 			return null;
 		}
 		return Number(id);
@@ -318,8 +329,16 @@
 	function requireComplete(missing: string[], markAttempted: () => void): boolean {
 		if (missing.length === 0) return true;
 		markAttempted();
-		toast.error(`Missing required workflow inputs: ${missing.join(', ')}`);
+		toast.error(t('assets.wf.missingInputs', { list: missing.join(', ') }));
 		return false;
+	}
+
+	function kindNoun(kind: DeleteTarget['kind']): string {
+		return kind === 'character'
+			? t('assets.kind.character')
+			: kind === 'location'
+				? t('assets.kind.environment')
+				: t('assets.kind.item');
 	}
 
 	function requestDelete(target: DeleteTarget) {
@@ -337,9 +356,9 @@
 			drafts = rest;
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
-			toast.success(`Saved image prompt for ${c.name}`);
+			toast.success(t('assets.toast.savedPrompt', { name: c.name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not save prompt');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.savePromptFailed'));
 		} finally {
 			savingKey = null;
 		}
@@ -355,9 +374,9 @@
 			drafts = rest;
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
-			toast.success(`Saved image prompt for ${loc.name}`);
+			toast.success(t('assets.toast.savedPrompt', { name: loc.name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not save prompt');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.savePromptFailed'));
 		} finally {
 			savingKey = null;
 		}
@@ -373,16 +392,16 @@
 			drafts = rest;
 			await client.invalidateQueries({ queryKey: ['assets'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
-			toast.success(`Saved image prompt for ${item.name}`);
+			toast.success(t('assets.toast.savedPrompt', { name: item.name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not save prompt');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.savePromptFailed'));
 		} finally {
 			savingKey = null;
 		}
 	}
 
 	async function generateCharacter(c: Character) {
-		const wfId = requireWorkflow(sheetWorkflowId, 'sheet');
+		const wfId = requireWorkflow(sheetWorkflowId, 'assets.wf.needSheet');
 		if (wfId == null) return;
 		if (!requireComplete(sheetMissing, () => (sheetAttempted = true))) return;
 		const prompt = sheetHasPrompt ? promptForChar(c) : '';
@@ -403,7 +422,7 @@
 	}
 
 	async function generateLocation(loc: Location) {
-		const wfId = requireWorkflow(envWorkflowId, 'environment');
+		const wfId = requireWorkflow(envWorkflowId, 'assets.wf.needEnv');
 		if (wfId == null) return;
 		if (!requireComplete(envMissing, () => (envAttempted = true))) return;
 		const prompt = envHasPrompt ? promptForLoc(loc) : '';
@@ -423,7 +442,7 @@
 	}
 
 	async function generateItem(item: Item) {
-		const wfId = requireWorkflow(itemWorkflowId, 'item');
+		const wfId = requireWorkflow(itemWorkflowId, 'assets.wf.needItem');
 		if (wfId == null) return;
 		if (!requireComplete(itemMissing, () => (itemAttempted = true))) return;
 		const prompt = itemHasPrompt ? promptForItem(item) : '';
@@ -452,7 +471,7 @@
 		const itemWf = itemWorkflowId === '' ? null : Number(itemWorkflowId);
 
 		if (sheetWf == null && envWf == null && itemWf == null) {
-			toast.error('Select sheet, environment and/or item workflows first');
+			toast.error(t('assets.wf.needWorkflow'));
 			return;
 		}
 
@@ -494,7 +513,11 @@
 			await client.invalidateQueries({ queryKey: ['jobs'] });
 			await client.invalidateQueries({ queryKey: ['story'] });
 			toast.success(
-				total > 0 ? `Queued ${total} job${total === 1 ? '' : 's'}` : 'Nothing missing to generate',
+				total > 0
+					? total === 1
+						? t('assets.toast.queuedOne')
+						: t('assets.toast.queuedMany', { count: total })
+					: t('assets.toast.nothingMissing'),
 			);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : String(err));
@@ -526,7 +549,7 @@
 		uploadTarget = null;
 		if (!file || !target) return;
 		if (!file.type.startsWith('image/')) {
-			toast.error('Please choose an image file (png, jpg, webp, gif)');
+			toast.error(t('assets.toast.chooseImage'));
 			return;
 		}
 		const key = uploadKey(target.kind, target.id);
@@ -534,7 +557,7 @@
 		try {
 			const uploaded = await playgroundApi.upload(file);
 			if (uploaded.kind !== 'image') {
-				toast.error('That file is not an image');
+				toast.error(t('assets.toast.notImage'));
 				return;
 			}
 			if (target.kind === 'character') {
@@ -549,9 +572,9 @@
 			await client.invalidateQueries({ queryKey: ['assets', projectId] });
 			await client.invalidateQueries({ queryKey: ['project', projectId] });
 			await client.invalidateQueries({ queryKey: ['projects'] });
-			toast.success(`Image added for ${target.name}`);
+			toast.success(t('assets.toast.imageAdded', { name: target.name }));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not add image');
+			toast.error(err instanceof Error ? err.message : t('assets.toast.addImageFailed'));
 		} finally {
 			uploadingKey = null;
 		}
@@ -568,34 +591,30 @@
 
 <header class="stage-header">
 	<div>
-		<h2>2. Characters, Environments &amp; Items</h2>
-		<p class="lead">
-			Pick a workflow below, or upload your own image on any card. Sheet/environment/item
-			prompts use the built-in template by default — expand Edit prompt only if you need to
-			tweak text.
-		</p>
+		<h2>{t('assets.title')}</h2>
+		<p class="lead">{t('assets.lead')}</p>
 	</div>
 	<div class="stage-actions">
 		<Button
 			variant="primary"
 			disabled={busy}
-			title="Queues one generation job per character/environment without an image, using each one's saved Image prompt."
+			title={t('assets.generateMissingTitle')}
 			onclick={generateMissing}
 		>
-			{busy ? 'Queuing…' : 'Generate all missing images'}
+			{busy ? t('assets.queuing') : t('assets.generateMissing')}
 		</Button>
 	</div>
 </header>
 
 <div class="tabs-row">
-	<div class="tabs" role="tablist" aria-label="Asset type">
+	<div class="tabs" role="tablist" aria-label={t('assets.tabAria')}>
 		<button
 			type="button"
 			role="tab"
 			aria-selected={tab === 'characters'}
 			class:active={tab === 'characters'}
 			onclick={() => (tab = 'characters')}
-			>Characters{#if $assetsQuery.data}
+			>{t('assets.tabCharacters')}{#if $assetsQuery.data}
 				· {$assetsQuery.data.characters.length}{/if}</button
 		>
 		<button
@@ -604,7 +623,7 @@
 			aria-selected={tab === 'locations'}
 			class:active={tab === 'locations'}
 			onclick={() => (tab = 'locations')}
-			>Environments{#if $assetsQuery.data}
+			>{t('assets.tabEnvironments')}{#if $assetsQuery.data}
 				· {$assetsQuery.data.locations.length}{/if}</button
 		>
 		<button
@@ -613,7 +632,7 @@
 			aria-selected={tab === 'items'}
 			class:active={tab === 'items'}
 			onclick={() => (tab = 'items')}
-			>Misc. Items{#if $assetsQuery.data}
+			>{t('assets.tabItems')}{#if $assetsQuery.data}
 				· {$assetsQuery.data.items.length}{/if}</button
 		>
 	</div>
@@ -621,26 +640,26 @@
 
 {#if imageWorkflows.length === 0}
 	<p class="hint-warn">
-		Enable an image workflow in <a href="/settings?tab=workflows">Settings → Workflows</a> before
-		generating.
+		{t('assets.noWorkflowPre')} <a href="/settings?tab=workflows">{t('assets.noWorkflowLink')}</a>
+		{t('assets.noWorkflowPost')}
 	</p>
 {/if}
 
 <div class="settings-wrap">
 	<Card>
 	{#snippet header()}
-		<h3 class="card-h">Generation settings</h3>
+		<h3 class="card-h">{t('assets.genSettings')}</h3>
 		<span class="muted small"
 			>{tab === 'characters'
-				? 'Character sheets'
+				? t('assets.charSheets')
 				: tab === 'locations'
-					? 'Environment references'
-					: 'Item references'}</span
+					? t('assets.envRefs')
+					: t('assets.itemRefs')}</span
 		>
 	{/snippet}
 	{#if tab === 'characters'}
 		<label class="wf-field">
-			<span class="field-label">Sheet workflow</span>
+			<span class="field-label">{t('assets.wf.sheet')}</span>
 			<select
 				class="field-select"
 				value={sheetWorkflowId}
@@ -650,7 +669,7 @@
 				}}
 			>
 				{#if imageWorkflows.length === 0}
-					<option value="">No enabled image workflows</option>
+					<option value="">{t('assets.wf.none')}</option>
 				{:else}
 					{#each imageWorkflows as w}
 						<option value={w.id}>{w.name}</option>
@@ -667,11 +686,11 @@
 				onValidityChange={(m) => (sheetMissing = m)}
 			/>
 		{:else}
-			<p class="muted small">Select a sheet workflow.</p>
+			<p class="muted small">{t('assets.wf.selectSheet')}</p>
 		{/if}
 	{:else if tab === 'locations'}
 		<label class="wf-field">
-			<span class="field-label">Environment workflow</span>
+			<span class="field-label">{t('assets.wf.environment')}</span>
 			<select
 				class="field-select"
 				value={envWorkflowId}
@@ -681,7 +700,7 @@
 				}}
 			>
 				{#if imageWorkflows.length === 0}
-					<option value="">No enabled image workflows</option>
+					<option value="">{t('assets.wf.none')}</option>
 				{:else}
 					{#each imageWorkflows as w}
 						<option value={w.id}>{w.name}</option>
@@ -698,11 +717,11 @@
 				onValidityChange={(m) => (envMissing = m)}
 			/>
 		{:else}
-			<p class="muted small">Select an environment workflow.</p>
+			<p class="muted small">{t('assets.wf.selectEnv')}</p>
 		{/if}
 	{:else}
 		<label class="wf-field">
-			<span class="field-label">Item workflow</span>
+			<span class="field-label">{t('assets.wf.item')}</span>
 			<select
 				class="field-select"
 				value={itemWorkflowId}
@@ -712,7 +731,7 @@
 				}}
 			>
 				{#if imageWorkflows.length === 0}
-					<option value="">No enabled image workflows</option>
+					<option value="">{t('assets.wf.none')}</option>
 				{:else}
 					{#each imageWorkflows as w}
 						<option value={w.id}>{w.name}</option>
@@ -729,7 +748,7 @@
 				onValidityChange={(m) => (itemMissing = m)}
 			/>
 		{:else}
-			<p class="muted small">Select an item workflow.</p>
+			<p class="muted small">{t('assets.wf.selectItem')}</p>
 		{/if}
 	{/if}
 	</Card>
@@ -752,14 +771,14 @@
 	{#if tab === 'characters'}
 		{#if $assetsQuery.data.characters.length === 0}
 			<EmptyState
-				title="No characters yet"
-				body="Draft a storyline in Story to extract characters, then come back to generate their sheets."
+				title={t('assets.noCharsTitle')}
+				body={t('assets.noCharsBody')}
 			>
 				{#snippet icon()}
 					<Icon name="assets" size={28} />
 				{/snippet}
 				{#snippet action()}
-					<Button variant="primary" onclick={goToStory}>Go to Story</Button>
+					<Button variant="primary" onclick={goToStory}>{t('assets.goToStory')}</Button>
 				{/snippet}
 			</EmptyState>
 		{:else}
@@ -772,66 +791,67 @@
 						<div class="media">
 							<AssetThumb
 								src={assetUrl(char.sheet_path)}
-								alt="{char.name} sheet"
-								placeholder="No sheet yet"
+								alt={t('assets.charSheetAlt', { name: char.name })}
+								placeholder={t('assets.charSheetPlaceholder')}
 								tall
 								jobState={jstate}
-								onPreview={(url) => openPreview(url, `${char.name} sheet`)}
+								onPreview={(url) => openPreview(url, t('assets.charSheetAlt', { name: char.name }))}
 							/>
 							{#if isCover(char.sheet_path) && jstate !== 'generating'}
-								<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
+								<span class="cover-chip"><Icon name="image" size={11} /> {t('assets.cover')}</span>
 							{/if}
 							<div class="quick-actions">
 								<Button
 									variant="secondary"
 									size="sm"
-									title="View full size"
+									title={t('assets.viewFull')}
 									disabled={!char.sheet_path}
-									onclick={() => openPreview(assetUrl(char.sheet_path), `${char.name} sheet`)}
+									onclick={() =>
+										openPreview(assetUrl(char.sheet_path), t('assets.charSheetAlt', { name: char.name }))}
 								>
 									<Icon name="zoom-in" size={14} /><span class="sr-only"
-										>View {char.name} sheet full size</span
+										>{t('assets.viewCharFull', { name: char.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Regenerate sheet"
+									title={t('assets.regenSheet')}
 									disabled={busy || sheetWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateCharacter(char)}
 								>
 									<Icon name="retry" size={14} /><span class="sr-only"
-										>Regenerate {char.name} sheet</span
+										>{t('assets.regenSheetFor', { name: char.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title={isCover(char.sheet_path) ? 'Remove as project cover' : 'Set as project cover'}
+									title={isCover(char.sheet_path) ? t('assets.removeCover') : t('assets.setCover')}
 									disabled={!char.sheet_path}
 									onclick={() => toggleCover(char.sheet_path)}
 								>
 									<Icon name="image" size={14} /><span class="sr-only"
 										>{isCover(char.sheet_path)
-											? `Remove ${char.name} sheet as project cover`
-											: `Set ${char.name} sheet as project cover`}</span
+											? t('assets.removeCoverChar', { name: char.name })
+											: t('assets.setCoverChar', { name: char.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Delete character"
+									title={t('assets.deleteCharacter')}
 									onclick={() =>
 										requestDelete({ kind: 'character', id: char.id, name: char.name })}
 								>
 									<Icon name="trash" size={14} /><span class="sr-only"
-										>Delete {char.name}</span
+										>{t('assets.deleteFor', { name: char.name })}</span
 									>
 								</Button>
 							</div>
 							{#if jstate === 'generating'}
 								<div class="gen-bar">
-									<ProgressBar indeterminate size="sm" label="Generating" />
+									<ProgressBar indeterminate size="sm" label="{t('assets.generating')}" />
 								</div>
 							{/if}
 						</div>
@@ -849,12 +869,12 @@
 							</div>
 							{#if char.appearance}
 								<p class="facts" title={char.appearance}>
-									<span class="k">Appearance</span> {char.appearance}
+									<span class="k">{t('assets.appearance')}</span> {char.appearance}
 								</p>
 							{/if}
 							{#if char.personality}
 								<p class="facts" title={char.personality}>
-									<span class="k">Personality</span> {char.personality}
+									<span class="k">{t('assets.personality')}</span> {char.personality}
 								</p>
 							{/if}
 							{#if jstate === 'failed' && job}
@@ -871,10 +891,10 @@
 									onclick={() => generateCharacter(char)}
 								>
 									{jstate === 'generating'
-										? 'Generating…'
+										? t('assets.generatingEllipsis')
 										: char.sheet_path
-											? 'Regenerate sheet'
-											: 'Generate sheet'}
+											? t('assets.regenSheet')
+											: t('assets.generateSheet')}
 								</Button>
 								<Button
 									variant="secondary"
@@ -885,7 +905,7 @@
 										openOwnImage({ kind: 'character', id: char.id, name: char.name })}
 								>
 									<Icon name="upload" size={13} />
-									{char.sheet_path ? 'Replace image' : 'Upload image'}
+									{char.sheet_path ? t('assets.replaceImage') : t('assets.uploadImage')}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
@@ -894,16 +914,16 @@
 										loading={$retryJobMutation.isPending}
 										onclick={() => $retryJobMutation.mutate(job.id)}
 									>
-										<Icon name="retry" size={13} /> Retry
+										<Icon name="retry" size={13} /> {t('common.retry')}
 									</Button>
 								{/if}
 							</div>
 
 							{#if showCharPrompt}
 								<details class="prompt-fold">
-									<summary>Edit image prompt</summary>
+									<summary>{t('assets.editPrompt')}</summary>
 									<label class="prompt-field">
-										<span class="field-label">Sent to ComfyUI on generate</span>
+										<span class="field-label">{t('assets.sentToComfy')}</span>
 										<textarea
 											class="field-textarea prompt-area"
 											rows="8"
@@ -917,7 +937,7 @@
 											size="sm"
 											onclick={() => setDraft(key, characterSheetTemplate(char))}
 										>
-											Reset to sheet template
+											{t('assets.resetSheetTemplate')}
 										</Button>
 										<Button
 											variant="secondary"
@@ -925,15 +945,14 @@
 											loading={savingKey === key}
 											onclick={() => saveCharacterPrompt(char)}
 										>
-											Save prompt
+											{t('assets.savePrompt')}
 										</Button>
 									</div>
 								</details>
 							{:else}
 								<p class="muted small prompt-note">
-									Selected workflow has no <code>(Input:prompt)</code> — add that role
-									tag in ComfyUI (see AGENTS.md), or use the Generation settings above.
-								</p>
+		{t('assets.wf.noPromptPre')} <code>(Input:prompt)</code>{t('assets.wf.noPromptPost')}
+	</p>
 							{/if}
 						</div>
 					</article>
@@ -943,14 +962,14 @@
 	{:else if tab === 'locations'}
 		{#if $assetsQuery.data.locations.length === 0}
 			<EmptyState
-				title="No environments yet"
-				body="Draft a storyline in Story to extract locations, then come back to generate reference images."
+				title={t('assets.noEnvsTitle')}
+				body={t('assets.noEnvsBody')}
 			>
 				{#snippet icon()}
 					<Icon name="folder" size={28} />
 				{/snippet}
 				{#snippet action()}
-					<Button variant="primary" onclick={goToStory}>Go to Story</Button>
+					<Button variant="primary" onclick={goToStory}>{t('assets.goToStory')}</Button>
 				{/snippet}
 			</EmptyState>
 		{:else}
@@ -964,63 +983,63 @@
 							<AssetThumb
 								src={assetUrl(loc.reference_image_path)}
 								alt={loc.name}
-								placeholder="No reference yet"
+								placeholder={t('assets.refPlaceholder')}
 								tall
 								jobState={jstate}
 								onPreview={(url) => openPreview(url, loc.name)}
 							/>
 							{#if isCover(loc.reference_image_path) && jstate !== 'generating'}
-								<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
+								<span class="cover-chip"><Icon name="image" size={11} /> {t('assets.cover')}</span>
 							{/if}
 							<div class="quick-actions">
 								<Button
 									variant="secondary"
 									size="sm"
-									title="View full size"
+									title={t('assets.viewFull')}
 									disabled={!loc.reference_image_path}
 									onclick={() => openPreview(assetUrl(loc.reference_image_path), loc.name)}
 								>
 									<Icon name="zoom-in" size={14} /><span class="sr-only"
-										>View {loc.name} full size</span
+										>{t('assets.viewRefFull', { name: loc.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Regenerate image"
+									title={t('assets.regenImage')}
 									disabled={busy || envWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateLocation(loc)}
 								>
 									<Icon name="retry" size={14} /><span class="sr-only"
-										>Regenerate {loc.name} image</span
+										>{t('assets.regenImageFor', { name: loc.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title={isCover(loc.reference_image_path) ? 'Remove as project cover' : 'Set as project cover'}
+									title={isCover(loc.reference_image_path) ? t('assets.removeCover') : t('assets.setCover')}
 									disabled={!loc.reference_image_path}
 									onclick={() => toggleCover(loc.reference_image_path)}
 								>
 									<Icon name="image" size={14} /><span class="sr-only"
 										>{isCover(loc.reference_image_path)
-											? `Remove ${loc.name} image as project cover`
-											: `Set ${loc.name} image as project cover`}</span
+											? t('assets.removeCoverRef', { name: loc.name })
+											: t('assets.setCoverRef', { name: loc.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Delete environment"
+									title={t('assets.deleteEnvironment')}
 									onclick={() =>
 										requestDelete({ kind: 'location', id: loc.id, name: loc.name })}
 								>
-									<Icon name="trash" size={14} /><span class="sr-only">Delete {loc.name}</span>
+									<Icon name="trash" size={14} /><span class="sr-only">{t('assets.deleteFor', { name: loc.name })}</span>
 								</Button>
 							</div>
 							{#if jstate === 'generating'}
 								<div class="gen-bar">
-									<ProgressBar indeterminate size="sm" label="Generating" />
+									<ProgressBar indeterminate size="sm" label="{t('assets.generating')}" />
 								</div>
 							{/if}
 						</div>
@@ -1031,7 +1050,7 @@
 							</div>
 							{#if loc.description}
 								<p class="facts" title={loc.description}>
-									<span class="k">Description</span> {loc.description}
+									<span class="k">{t('assets.description')}</span> {loc.description}
 								</p>
 							{/if}
 							{#if jstate === 'failed' && job}
@@ -1048,10 +1067,10 @@
 									onclick={() => generateLocation(loc)}
 								>
 									{jstate === 'generating'
-										? 'Generating…'
+										? t('assets.generatingEllipsis')
 										: loc.reference_image_path
-											? 'Regenerate image'
-											: 'Generate image'}
+											? t('assets.regenImage')
+											: t('assets.generateImage')}
 								</Button>
 								<Button
 									variant="secondary"
@@ -1062,7 +1081,7 @@
 										openOwnImage({ kind: 'location', id: loc.id, name: loc.name })}
 								>
 									<Icon name="upload" size={13} />
-									{loc.reference_image_path ? 'Replace image' : 'Upload image'}
+									{loc.reference_image_path ? t('assets.replaceImage') : t('assets.uploadImage')}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
@@ -1071,16 +1090,16 @@
 										loading={$retryJobMutation.isPending}
 										onclick={() => $retryJobMutation.mutate(job.id)}
 									>
-										<Icon name="retry" size={13} /> Retry
+										<Icon name="retry" size={13} /> {t('common.retry')}
 									</Button>
 								{/if}
 							</div>
 
 							{#if envHasPrompt}
 								<details class="prompt-fold">
-									<summary>Edit image prompt</summary>
+									<summary>{t('assets.editPrompt')}</summary>
 									<label class="prompt-field">
-										<span class="field-label">Sent to ComfyUI on generate</span>
+										<span class="field-label">{t('assets.sentToComfy')}</span>
 										<textarea
 											class="field-textarea prompt-area"
 											rows="7"
@@ -1094,7 +1113,7 @@
 											size="sm"
 											onclick={() => setDraft(key, locationReferenceTemplate(loc))}
 										>
-											Reset to environment template
+											{t('assets.resetEnvTemplate')}
 										</Button>
 										<Button
 											variant="secondary"
@@ -1102,15 +1121,14 @@
 											loading={savingKey === key}
 											onclick={() => saveLocationPrompt(loc)}
 										>
-											Save prompt
+											{t('assets.savePrompt')}
 										</Button>
 									</div>
 								</details>
 							{:else}
 								<p class="muted small prompt-note">
-									Selected workflow has no <code>(Input:prompt)</code> — add that role
-									tag in ComfyUI (see AGENTS.md), or use the Generation settings above.
-								</p>
+		{t('assets.wf.noPromptPre')} <code>(Input:prompt)</code>{t('assets.wf.noPromptPost')}
+	</p>
 							{/if}
 						</div>
 					</article>
@@ -1120,14 +1138,14 @@
 	{:else}
 		{#if $assetsQuery.data.items.length === 0}
 			<EmptyState
-				title="No misc. items yet"
-				body="Draft a storyline in Story to extract props, weapons and objects, then come back to generate reference images."
+				title={t('assets.noItemsTitle')}
+				body={t('assets.noItemsBody')}
 			>
 				{#snippet icon()}
 					<Icon name="folder" size={28} />
 				{/snippet}
 				{#snippet action()}
-					<Button variant="primary" onclick={goToStory}>Go to Story</Button>
+					<Button variant="primary" onclick={goToStory}>{t('assets.goToStory')}</Button>
 				{/snippet}
 			</EmptyState>
 		{:else}
@@ -1141,63 +1159,63 @@
 							<AssetThumb
 								src={assetUrl(item.reference_image_path)}
 								alt={item.name}
-								placeholder="No reference yet"
+								placeholder={t('assets.refPlaceholder')}
 								tall
 								jobState={jstate}
 								onPreview={(url) => openPreview(url, item.name)}
 							/>
 							{#if isCover(item.reference_image_path) && jstate !== 'generating'}
-								<span class="cover-chip"><Icon name="image" size={11} /> Cover</span>
+								<span class="cover-chip"><Icon name="image" size={11} /> {t('assets.cover')}</span>
 							{/if}
 							<div class="quick-actions">
 								<Button
 									variant="secondary"
 									size="sm"
-									title="View full size"
+									title={t('assets.viewFull')}
 									disabled={!item.reference_image_path}
 									onclick={() => openPreview(assetUrl(item.reference_image_path), item.name)}
 								>
 									<Icon name="zoom-in" size={14} /><span class="sr-only"
-										>View {item.name} full size</span
+										>{t('assets.viewRefFull', { name: item.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Regenerate image"
+									title={t('assets.regenImage')}
 									disabled={busy || itemWorkflowId === '' || jstate === 'generating'}
 									onclick={() => generateItem(item)}
 								>
 									<Icon name="retry" size={14} /><span class="sr-only"
-										>Regenerate {item.name} image</span
+										>{t('assets.regenImageFor', { name: item.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title={isCover(item.reference_image_path) ? 'Remove as project cover' : 'Set as project cover'}
+									title={isCover(item.reference_image_path) ? t('assets.removeCover') : t('assets.setCover')}
 									disabled={!item.reference_image_path}
 									onclick={() => toggleCover(item.reference_image_path)}
 								>
 									<Icon name="image" size={14} /><span class="sr-only"
 										>{isCover(item.reference_image_path)
-											? `Remove ${item.name} image as project cover`
-											: `Set ${item.name} image as project cover`}</span
+											? t('assets.removeCoverRef', { name: item.name })
+											: t('assets.setCoverRef', { name: item.name })}</span
 									>
 								</Button>
 								<Button
 									variant="secondary"
 									size="sm"
-									title="Delete item"
+									title={t('assets.deleteItem')}
 									onclick={() =>
 										requestDelete({ kind: 'item', id: item.id, name: item.name })}
 								>
-									<Icon name="trash" size={14} /><span class="sr-only">Delete {item.name}</span>
+									<Icon name="trash" size={14} /><span class="sr-only">{t('assets.deleteFor', { name: item.name })}</span>
 								</Button>
 							</div>
 							{#if jstate === 'generating'}
 								<div class="gen-bar">
-									<ProgressBar indeterminate size="sm" label="Generating" />
+									<ProgressBar indeterminate size="sm" label="{t('assets.generating')}" />
 								</div>
 							{/if}
 						</div>
@@ -1208,7 +1226,7 @@
 							</div>
 							{#if item.description}
 								<p class="facts" title={item.description}>
-									<span class="k">Description</span> {item.description}
+									<span class="k">{t('assets.description')}</span> {item.description}
 								</p>
 							{/if}
 							{#if jstate === 'failed' && job}
@@ -1225,10 +1243,10 @@
 									onclick={() => generateItem(item)}
 								>
 									{jstate === 'generating'
-										? 'Generating…'
+										? t('assets.generatingEllipsis')
 										: item.reference_image_path
-											? 'Regenerate image'
-											: 'Generate image'}
+											? t('assets.regenImage')
+											: t('assets.generateImage')}
 								</Button>
 								<Button
 									variant="secondary"
@@ -1239,7 +1257,7 @@
 										openOwnImage({ kind: 'item', id: item.id, name: item.name })}
 								>
 									<Icon name="upload" size={13} />
-									{item.reference_image_path ? 'Replace image' : 'Upload image'}
+									{item.reference_image_path ? t('assets.replaceImage') : t('assets.uploadImage')}
 								</Button>
 								{#if jstate === 'failed' && job}
 									<Button
@@ -1248,16 +1266,16 @@
 										loading={$retryJobMutation.isPending}
 										onclick={() => $retryJobMutation.mutate(job.id)}
 									>
-										<Icon name="retry" size={13} /> Retry
+										<Icon name="retry" size={13} /> {t('common.retry')}
 									</Button>
 								{/if}
 							</div>
 
 							{#if itemHasPrompt}
 								<details class="prompt-fold">
-									<summary>Edit image prompt</summary>
+									<summary>{t('assets.editPrompt')}</summary>
 									<label class="prompt-field">
-										<span class="field-label">Sent to ComfyUI on generate</span>
+										<span class="field-label">{t('assets.sentToComfy')}</span>
 										<textarea
 											class="field-textarea prompt-area"
 											rows="7"
@@ -1271,7 +1289,7 @@
 											size="sm"
 											onclick={() => setDraft(key, itemReferenceTemplate(item))}
 										>
-											Reset to item template
+											{t('assets.resetItemTemplate')}
 										</Button>
 										<Button
 											variant="secondary"
@@ -1279,15 +1297,14 @@
 											loading={savingKey === key}
 											onclick={() => saveItemPrompt(item)}
 										>
-											Save prompt
+											{t('assets.savePrompt')}
 										</Button>
 									</div>
 								</details>
 							{:else}
 								<p class="muted small prompt-note">
-									Selected workflow has no <code>(Input:prompt)</code> — add that role
-									tag in ComfyUI (see AGENTS.md), or use the Generation settings above.
-								</p>
+		{t('assets.wf.noPromptPre')} <code>(Input:prompt)</code>{t('assets.wf.noPromptPost')}
+	</p>
 							{/if}
 						</div>
 					</article>
@@ -1308,11 +1325,11 @@
 
 <ConfirmDialog
 	bind:open={deleteOpen}
-	title={deleteTarget ? `Delete ${deleteTarget.kind}?` : 'Delete?'}
+	title={deleteTarget ? t('assets.confirmDeleteTitle', { kind: kindNoun(deleteTarget.kind) }) : t('assets.confirmDeleteFallback')}
 	message={deleteTarget
-		? `Delete ${deleteTarget.kind} “${deleteTarget.name}”? This removes the ${deleteTarget.kind} from the project and cannot be undone.`
+		? t('assets.confirmDeleteBody', { kind: kindNoun(deleteTarget.kind), name: deleteTarget.name })
 		: ''}
-	confirmLabel="Delete"
+	confirmLabel={t('assets.confirmDeleteLabel')}
 	danger
 	onconfirm={() => {
 		const target = deleteTarget;

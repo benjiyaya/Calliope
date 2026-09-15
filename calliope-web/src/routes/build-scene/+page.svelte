@@ -9,6 +9,7 @@
 	import type { AgentComposerPayload, SkillOption, WorkflowOption } from '$lib/agentComposer';
 	import { connectEvents } from '$lib/events';
 	import { toast } from '$lib/toast';
+	import { t } from '$lib/i18n.svelte';
 	import { shotStore } from '$lib/shot/shotStore.svelte';
 	import { shotApi, type Capture } from '$lib/shot/api';
 	import ShotViewport from '$lib/shot/components/ShotViewport.svelte';
@@ -83,7 +84,7 @@ function toggleChat() {
 			await refreshCaptures();
 			compositionReady = true;
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not open the composition');
+			toast.error(err instanceof Error ? err.message : t('buildScene.openCompositionFailed'));
 			compositionReady = true;
 		} finally {
 			switching = false;
@@ -112,7 +113,7 @@ function toggleChat() {
 				}
 				compositionReady = true;
 			} catch (err) {
-				toast.error(err instanceof Error ? err.message : 'Could not open the composition');
+				toast.error(err instanceof Error ? err.message : t('buildScene.openCompositionFailed'));
 				compositionReady = true;
 			}
 		})();
@@ -125,7 +126,7 @@ function toggleChat() {
 			await activateSession(session.id);
 			await client.invalidateQueries({ queryKey: ['agent-sessions', 'scene'] });
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not create a new scene');
+			toast.error(err instanceof Error ? err.message : t('buildScene.createSceneFailed'));
 		}
 	}
 
@@ -150,7 +151,7 @@ function toggleChat() {
 				await handleNewScene();
 			}
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not delete the scene');
+			toast.error(err instanceof Error ? err.message : t('buildScene.deleteSceneFailed'));
 		}
 	}
 
@@ -163,7 +164,7 @@ function toggleChat() {
 		const saved = await shotApi.uploadCapture(shotStore.compositionId, dataUrl, 'viewport capture');
 		if (saved) {
 			await refreshCaptures();
-			toast.success('Capture saved');
+			toast.success(t('buildScene.captureSaved'));
 		}
 	}
 
@@ -188,12 +189,12 @@ function toggleChat() {
 			const saved = await shotApi.uploadCapture(comp, dataUrl, 'camera track export');
 			if (saved) {
 				await refreshCaptures();
-				toast.success('Video exported');
+				toast.success(t('buildScene.videoExported'));
 			} else {
-				toast.error('Upload failed — the clip may exceed the size limit');
+				toast.error(t('buildScene.uploadSizeFail'));
 			}
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Video export failed');
+			toast.error(err instanceof Error ? err.message : t('buildScene.videoExportFailed'));
 		} finally {
 			exportingVideo = false;
 		}
@@ -254,11 +255,14 @@ function toggleChat() {
 	);
 
 	const SHOT_SUGGESTIONS = [
-		{ label: 'Two-person scene', prompt: 'Add a male and a female character facing each other, then frame a medium two-shot from the left.' },
-		{ label: 'Posed hero', prompt: 'Add a character in a hero pose — arms wide — with a low-angle close-up.' },
-		{ label: 'Blockout a room', prompt: 'Blockout a simple room: floor plane, two walls, and put a character inside.' },
-		{ label: 'Capture a reference', prompt: 'Frame this as a medium close-up and capture a reference image.' },
+		{ labelKey: 'buildScene.suggestionTwoPerson', prompt: 'Add a male and a female character facing each other, then frame a medium two-shot from the left.' },
+		{ labelKey: 'buildScene.suggestionHeroPose', prompt: 'Add a character in a hero pose — arms wide — with a low-angle close-up.' },
+		{ labelKey: 'buildScene.suggestionBlockout', prompt: 'Blockout a simple room: floor plane, two walls, and put a character inside.' },
+		{ labelKey: 'buildScene.suggestionCapture', prompt: 'Frame this as a medium close-up and capture a reference image.' },
 	];
+	const suggestionOptions = $derived(
+		SHOT_SUGGESTIONS.map((s) => ({ label: t(s.labelKey), prompt: s.prompt })),
+	);
 
 	const sendMutation = createMutation({
 		mutationFn: (payload: AgentComposerPayload) => agentApi.postMessage(sessionId!, payload),
@@ -274,13 +278,13 @@ function toggleChat() {
 			await client.invalidateQueries({ queryKey: ['agent-sessions', 'scene'] });
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Failed to send');
+			toast.error(err instanceof Error ? err.message : t('buildScene.sendFailed'));
 		},
 	});
 
 	async function handleSend(payload: AgentComposerPayload) {
 		if (sessionId == null) {
-			toast.error('Still loading — try again in a second');
+			toast.error(t('buildScene.stillLoading'));
 			return;
 		}
 		$sendMutation.mutate(payload);
@@ -297,9 +301,9 @@ function toggleChat() {
 			await agentApi.cancel(sessionId);
 			await client.invalidateQueries({ queryKey: ['agent-sessions', 'scene'] });
 			await client.invalidateQueries({ queryKey: ['agent-session', sessionId] });
-			toast.info('Run cancelled');
+			toast.info(t('buildScene.runCancelled'));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Cancel failed');
+			toast.error(err instanceof Error ? err.message : t('buildScene.cancelFailed'));
 		}
 	}
 
@@ -491,22 +495,22 @@ function toggleChat() {
 				<TimelineStrip onExportVideo={handleExportVideo} />
 				<CaptureStrip {captures} compositionId={shotStore.compositionId} />
 			{:else}
-				<div class="loading">Preparing composition…</div>
+				<div class="loading">{t('buildScene.preparing')}</div>
 			{/if}
 		</main>
 
 		<aside class="chat-panel" class:collapsed={chatCollapsed}>
 			<header class="chat-head">
 				{#if chatCollapsed}
-					<span class="chat-title-vert">Build Scene</span>
+					<span class="chat-title-vert">{t('buildScene.title')}</span>
 				{:else}
-					<span class="chat-title">{activeSession?.title ?? 'Build Scene'}</span>
-					<span class="badge">3D Builder</span>
+					<span class="chat-title">{activeSession?.title ?? t('buildScene.title')}</span>
+					<span class="badge">{t('buildScene.builderBadge')}</span>
 				{/if}
 				<button
 					class="chat-toggle"
 					onclick={toggleChat}
-					title={chatCollapsed ? 'Expand the agent chat' : 'Collapse the agent chat'}
+					title={chatCollapsed ? t('buildScene.expandChat') : t('buildScene.collapseChat')}
 					aria-expanded={!chatCollapsed}
 				>
 					{chatCollapsed ? '‹' : '›'}
@@ -521,7 +525,7 @@ function toggleChat() {
 					jobs={[]}
 					{running}
 					loading={sessionId != null && $sessionQuery.isLoading}
-					suggestions={SHOT_SUGGESTIONS}
+					suggestions={suggestionOptions}
 					onSuggestion={(text) => {
 						composerDraft = text;
 						composerNonce++;
