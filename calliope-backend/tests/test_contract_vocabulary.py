@@ -22,6 +22,11 @@ CONTRACTS = json.loads((BACKEND / "contracts.json").read_text(encoding="utf-8"))
 
 # SSE event names quoted in the web bundle, e.g. onEvent("job.completed", …)
 _SSE_RE = re.compile(r'["\']((?:agent|job|canvas|asset|story|queue|session)\.[a-z_.]+)["\']')
+# i18n dictionary entries (`'canvas.tidy': 'Tidy'`, `lib/i18n/{en,zh}.ts`). UI labels
+# share the dotted namespaces with SSE events, so `t('canvas.running')` is
+# indistinguishable from an event reference by shape alone — a name that resolves
+# to a dictionary key is a label, not a contract name.
+_I18N_KEY_RE = re.compile(r"^\s*['\"]([^'\"]+)['\"]\s*:", re.M)
 # Guard codes consumed in web code or asserted in harness strings
 _GUARD_RE = re.compile(r'["\'](guard_[a-z_]+)["\']')
 # Role-chip literals: "Input:prompt" style hints in web canvas code
@@ -38,13 +43,23 @@ def _web_sources() -> list[Path]:
     return [p for p in WEB.rglob("*") if p.suffix in (".ts", ".svelte", ".js") and p.is_file()]
 
 
+def _i18n_keys() -> set[str]:
+    """Keys of the web dictionary (both languages — parity is a separate concern)."""
+    keys: set[str] = set()
+    for path in (WEB / "lib" / "i18n").glob("*.ts"):
+        keys.update(_I18N_KEY_RE.findall(path.read_text(encoding="utf-8", errors="replace")))
+    return keys
+
+
 def test_web_references_only_known_sse_events():
+    i18n_keys = _i18n_keys()
     unknown: list[str] = []
     for path in _web_sources():
         text = path.read_text(encoding="utf-8", errors="replace")
         for name in _SSE_RE.findall(text):
-            if name not in CONTRACTS["sse_events"]:
-                unknown.append(f"{path.relative_to(WEB)}: {name}")
+            if name in CONTRACTS["sse_events"] or name in i18n_keys:
+                continue
+            unknown.append(f"{path.relative_to(WEB)}: {name}")
     assert not unknown, "SSE events referenced in calliope-web but not published by the backend:\n" + "\n".join(unknown)
 
 
