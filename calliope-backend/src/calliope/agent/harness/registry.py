@@ -12,6 +12,7 @@ Key invariants kept from the previous registry:
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -40,6 +41,19 @@ _SCENE_ALLOWED_TOOLS = {
     "list_memories",
     "forget_memory",
 }
+
+# Invented agent tool — there is no export_video; Cut + UI Export video instead.
+GUARD_NO_EXPORT_VIDEO_TOOL = "guard_no_export_video_tool"
+EXPORT_VIDEO_DENIED_NAMES = frozenset({"export_video", "exportVideo"})
+
+
+def _tool_timeout_sec() -> float:
+    """Per-tool wall-clock cap from Settings; 0 = disabled."""
+    try:
+        t = float(settings.agent_tool_timeout_sec)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+    return max(0.0, t)
 
 
 def _scene_scoped(t: "ToolDefinition") -> bool:
@@ -77,6 +91,9 @@ class ToolDefinition:
     category: str = "general"
     destructive: bool = False  # flagged in descriptions; pre-execute guard uses it
     requires_approval: bool = False  # HITL: blocked unless the user explicitly asked
+    # True → exempt from the per-tool wall-clock timeout (agent_tool_timeout_sec);
+    # the tool owns its own wait contract (e.g. wait_for_jobs → queue_poll_timeout_sec).
+    long_running: bool = False
 
 
 # Hook results — the vocabulary of the execution pipeline.
@@ -130,6 +147,14 @@ class ToolRegistry:
     tools: dict[str, ToolDefinition] = field(default_factory=dict)
     pre_execute: list[PreExecuteHook] = field(default_factory=list)
     post_execute: list[PostExecuteHook] = field(default_factory=list)
+
+    async def _execute_with_timeout(
+        self, t: "ToolDefinition", ctx: ToolContext, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        timeout = _tool_timeout_sec()
+        if timeout <= 0 or t.long_running:
+            return await t.executor(ctx, args)
+        return await asyncio.wait_for(t.executor(ctx, args), timeout=timeout)
 
     def register(self, definition: ToolDefinition) -> None:
         if definition.name in self.tools:
@@ -188,6 +213,21 @@ class ToolRegistry:
         """Run one tool through the guarded pipeline. Returns a JSON-serializable dict."""
         t = self.tools.get(name)
         if t is None:
+            if name in EXPORT_VIDEO_DENIED_NAMES:
+                return {
+                    "ok": False,
+                    "reason_code": GUARD_NO_EXPORT_VIDEO_TOOL,
+                    "error": (
+                        "There is no tool named export_video. Build Scene "
+                        "export is human-gated: ask_user Cut approval → "
+                        "record_build_scene_gate(gate='cut') → tell the user to "
+                        "click **Export video** in the Build Scene UI. "
+                        "For stills only use request_capture. Do not invent "
+                        "export_video; do not call enqueue_video_jobs or follow "
+                        "scene-to-video — that lane is Comfy closed for origin=scene. "
+                        "Prefer read_skill(\"shot-composer-blockout\")."
+                    ),
+                }
             return {"ok": False, "error": f"Unknown tool: {name}"}
         if t.requires_project and ctx.project_id is None:
             return {
@@ -203,16 +243,27 @@ class ToolRegistry:
                 ),
             }
         if ctx.origin == "scene" and not _scene_scoped(t):
+            extra = ""
+            if name in {"enqueue_video_jobs", "enqueue_asset_jobs", "run_workflow"} or name.startswith(
+                ("enqueue_", "comfy_")
+            ):
+                extra = (
+                    " scene-to-video / enqueue_video_jobs is the WRONG skill/lane "
+                    "for Build Scene — use read_skill(\"shot-composer-blockout\") "
+                    "and Cut → user clicks Export video."
+                )
             return {
                 "ok": False,
                 "reason_code": GUARD_SCENE_TOOL_SCOPE,
                 "error": (
-                    "This is a Build Scene session: only the 3D blockout tools "
-                    "(get_scene, add_object, set_transform, set_joint, add_keyframe, "
-                    "set_shot, …) are available here. Build and pose the scene, then "
-                    "use Capture / Export video — the blockout clip is picked as a "
-                    "reference input from the Playground media library, not generated "
+                    "This is a Build Scene session: "
+                    "only shot_* tools plus ask_user / skills / memory are available. "
+                    "ComfyUI and workflow tools (run_workflow, list_workflows, "
+                    "enqueue_*, comfy_*) are banned here. Build with shot_* "
+                    "recipes, then Capture / Export video (Cut-gated) — "
+                    "pick the clip from Playground later; do not generate via Comfy "
                     "from this chat."
+                    + extra
                 ),
             }
 
@@ -228,7 +279,16 @@ class ToolRegistry:
                     denied["reason_code"] = decision.reason_code
                 return denied
         try:
-            result = await t.executor(ctx, args)
+            result = await self._execute_with_timeout(t, ctx, args)
+        except TimeoutError:
+            # Per-tool wall-clock cap (0 = disabled): a hung tool must stall
+            # its step, not the session. CancelledError passes through so the
+            # Stop button keeps working.
+            return {
+                "ok": False,
+                "error": f"{name} timed out after {_tool_timeout_sec():.0f}s",
+                "timeout": True,
+            }
         except Exception as exc:  # noqa: BLE001 — tool errors are loop-feedback, not crashes
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         if isinstance(result, dict):

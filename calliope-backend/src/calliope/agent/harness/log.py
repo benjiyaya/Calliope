@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,8 @@ from typing import Any
 
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
+
+logger = logging.getLogger("calliope.harness.log")
 
 
 # Event types (a closed vocabulary; new types may be added, readers ignore
@@ -46,6 +49,11 @@ QUESTION_ANSWERED = "question/answered"
 # use_count bumps are statistics, not session history).
 MEMORY_SAVED = "memory/saved"
 MEMORY_FORGOTTEN = "memory/forgotten"
+# Mid-run steering: the user course-corrects WHILE a turn is executing.
+# Deliberately NOT user/message — policy derives render/destructive approval
+# from the latest user/message, so steering must never grant or void
+# permissions. Loops drain these between steps and inject them as context.
+STEERING_MESSAGE = "steering/message"
 
 TOOL_RESULT_TRUNCATE = 4000
 # Appended wherever a tool result is cut for the LLM. Must TEACH the way out —
@@ -340,9 +348,9 @@ _VISION_MIME_BY_EXT = {
 def _image_attachment_data_url(path: str) -> str | None:
     """Read an attachment image under assets_dir as a downscaled data URL.
 
-    Returns None (silently — the text appendix still names the file) when the
-    path is missing/outside assets_dir, not a known image type, or too large
-    after decoding.
+    Returns None (logging the reason — the text appendix still names the
+    file) when the path is missing/outside assets_dir, not a known image
+    type, or too large after decoding.
     """
     raw = str(path or "").strip()
     if not raw:
@@ -355,10 +363,10 @@ def _image_attachment_data_url(path: str) -> str | None:
     mime = _VISION_MIME_BY_EXT.get(target.suffix.lower())
     if mime is None or not target.is_file():
         return None
-    try:
-        data = _downscale_image(target, mime)
-    except Exception:
+    data = _downscale_image(target, mime)
+    if data is None:
         return None
+    data, mime = data
     if not data or len(data) > _MAX_VISION_IMAGE_BYTES:
         return None
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
@@ -535,26 +543,54 @@ def _document_attachment_text(path: str, name: str = "") -> str | None:
     return f"[Script document: {label}]\n{text}\n[/Script document]"
 
 
-def _downscale_image(target: Path, mime: str) -> bytes | None:
-    """Re-encode large images at reduced width; passes small ones through."""
+def _downscale_image(target: Path, mime: str) -> tuple[bytes, str] | None:
+    """Re-encode large images at reduced width; passes small ones through.
+
+    Returns (data, mime) — the mime is the source extension's for pass-through
+    and ``image/jpeg`` for re-encoded output (the caller must not keep
+    labeling JPEG bytes as image/png). None when the image cannot be read or
+    re-encoded small enough.
+    """
     data = target.read_bytes()
     if len(data) <= _MAX_VISION_IMAGE_BYTES:
-        return data
+        return data, mime
     try:
         from PIL import Image
-
+    except ImportError:
+        logger.error(
+            "Vision: cannot downscale %s (%d bytes > %d budget) — Pillow is "
+            "not installed. Attachment degrades to a text path line; add the "
+            "`pillow` dependency to fix.",
+            target.name,
+            len(data),
+            _MAX_VISION_IMAGE_BYTES,
+        )
+        return None
+    try:
         with Image.open(target) as img:
             img = img.convert("RGB")
-            width = 1024
-            height = max(1, round(img.height * width / img.width))
-            img = img.resize((width, height))
+            # Adaptive ladder: step quality down, then width, until the
+            # re-encode fits the budget — dense screenshots can exceed it
+            # even at q82/1024px.
             import io
 
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=82)
-            return buf.getvalue()
+            for width, quality in ((1024, 82), (1024, 60), (768, 50), (640, 40)):
+                height = max(1, round(img.height * width / img.width))
+                resized = img.resize((width, height))
+                buf = io.BytesIO()
+                resized.save(buf, format="JPEG", quality=quality)
+                if len(buf.getvalue()) <= _MAX_VISION_IMAGE_BYTES:
+                    return buf.getvalue(), "image/jpeg"
     except Exception:
+        logger.exception("Vision: failed to decode/downscale %s", target)
         return None
+    logger.error(
+        "Vision: %s still over the %d budget after the full re-encode ladder "
+        "— degrading to text path line",
+        target.name,
+        _MAX_VISION_IMAGE_BYTES,
+    )
+    return None
 
 
 def max_turn_number(session_id: int) -> int:
@@ -582,12 +618,80 @@ def max_turn_number(session_id: int) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Mid-run steering
+# ─────────────────────────────────────────────────────────────────────────
+
+STEERING_INJECT_HEADER = "[STEERING — user message sent while you work]"
+
+
+def steering_user_content(d: dict[str, Any]) -> Any:
+    """Projected steering content with the [STEERING] header.
+
+    Same shape rules as a user message (string, or multimodal parts when
+    attachments are present) — the header is prepended to the text so both
+    the live injection (loop drains between steps) and the replayed history
+    projection show identical text.
+    """
+    projected = project_user_content(
+        d.get("content") or "",
+        d.get("mentions"),
+        d.get("attachments"),
+    )
+    if isinstance(projected, list):
+        for part in projected:
+            if part.get("type") == "text":
+                part["text"] = f"{STEERING_INJECT_HEADER}\n{part.get('text') or ''}"
+                return projected
+        return [{"type": "text", "text": STEERING_INJECT_HEADER}, *projected]
+    return f"{STEERING_INJECT_HEADER}\n{projected}" if projected else STEERING_INJECT_HEADER
+
+
+def drain_steering(session_id: int, after_seq: int) -> list[SessionEvent]:
+    """Unconsumed steering events with seq > after_seq, oldest first.
+
+    Loops keep a per-turn watermark: steering drained once is never re-drained
+    (injection appends the text to the in-flight `messages` list directly, so
+    it lives on in that request history without a re-read)."""
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM agent_events WHERE session_id = ? AND type = ? AND seq > ? ORDER BY seq",
+            (session_id, STEERING_MESSAGE, after_seq),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: list[SessionEvent] = []
+    for r in rows:
+        try:
+            data = json.loads(r["data_json"])
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        out.append(SessionEvent(seq=r["seq"], type=r["type"], data=data))
+    return out
+
+
+def steering_max_seq(session_id: int) -> int:
+    """Highest steering/message seq for the session (watermark seed)."""
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT MAX(seq) AS m FROM agent_events WHERE session_id = ? AND type = ?",
+            (session_id, STEERING_MESSAGE),
+        ).fetchone()
+        return int(row["m"]) if row and row["m"] is not None else 0
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Derivations
 # ─────────────────────────────────────────────────────────────────────────
 
 
 def derive_llm_history(
-    events: list[SessionEvent], max_user_turns: int | None = None
+    events: list[SessionEvent],
+    max_user_turns: int | None = None,
+    max_chars: int | None = None,
 ) -> list[dict[str, Any]]:
     """Project OpenAI-format LLM history from the event log.
 
@@ -602,13 +706,39 @@ def derive_llm_history(
     `max_user_turns` bounds the projection to the last N user messages (and
     everything after each, so tool-call/result pairs always stay complete —
     exchanges never span user turns). None = unbounded (legacy behavior).
+
+    `max_chars` is a secondary character budget over the assembled history:
+    when over budget, oldest WHOLE turns drop (never mid-turn — pairs stay
+    intact) until it fits or only the latest turn remains. None = unbounded.
+
+    `steering/message` events (mid-run course corrections) project as user
+    messages so the correction stays in the conversation record — but NEVER
+    inside an open tool exchange: a user message between an assistant
+    tool_calls message and its tool results is an invalid request sequence
+    (OpenAI-compatible servers 400 the whole next turn), so steering that
+    landed mid-exchange buffers until the exchange closes. Steering never
+    opens a user-turn boundary: it belongs to the turn it interrupted, and
+    `policy.latest_user_message` reads only user/message events — steering
+    cannot grant or void render/destructive approval.
     """
     history: list[dict[str, Any]] = []
     user_turn_boundaries: list[int] = []
     tool_call_by_id: dict[str, dict[str, Any]] = {}
+    # Open tool exchange: call ids of the latest assistant tool_calls batch
+    # whose results have not all landed. Steering that arrives mid-exchange
+    # buffers here (a user message inside the pair is an invalid request).
+    pending_call_ids: set[str] = set()
+    steer_buffer: list[dict[str, Any]] = []
+
+    def _flush_steering() -> None:
+        for d in steer_buffer:
+            history.append({"role": "user", "content": steering_user_content(d)})
+        steer_buffer.clear()
+
     for e in events:
         d = e.data
         if e.type == USER_MESSAGE:
+            _flush_steering()  # never reorder steering after a later user turn
             user_turn_boundaries.append(len(history))
             history.append(
                 {
@@ -620,6 +750,9 @@ def derive_llm_history(
                     ),
                 }
             )
+        elif e.type == STEERING_MESSAGE:
+            if (d.get("content") or "").strip() or d.get("attachments"):
+                steer_buffer.append(d)
         elif e.type == ASSISTANT_MESSAGE:
             msg: dict[str, Any] = {"role": "assistant"}
             name = d.get("agent_name")
@@ -631,6 +764,10 @@ def derive_llm_history(
             tool_calls = d.get("tool_calls") or []
             if tool_calls:
                 msg["tool_calls"] = tool_calls
+                for tc in tool_calls:
+                    cid = tc.get("id")
+                    if cid:
+                        pending_call_ids.add(cid)
             history.append(msg)
         elif e.type == TOOL_CALL:
             tool_call_by_id[d.get("call_id", "")] = d
@@ -646,6 +783,11 @@ def derive_llm_history(
                     "content": f"[{tool_name}] {digest}",
                 }
             )
+            pending_call_ids.discard(d.get("call_id", ""))
+            if not pending_call_ids:
+                _flush_steering()  # exchange closed — safe injection point
+    # Steering that never saw its exchange close (crashed turn) still projects.
+    _flush_steering()
     if max_user_turns is not None and user_turn_boundaries:
         # Keep the last N user turns (and everything after each boundary —
         # tool exchanges never span user turns, so pairs stay intact).
@@ -657,7 +799,35 @@ def derive_llm_history(
             start = user_turn_boundaries[-min(max_user_turns, len(user_turn_boundaries))]
         if start > 0:
             history = history[start:]
+            user_turn_boundaries = [b - start for b in user_turn_boundaries if b >= start]
+    if max_chars is not None and max_chars > 0:
+        history = _trim_history_to_char_budget(history, user_turn_boundaries, max_chars)
     return history
+
+
+def _history_len(history: list[dict[str, Any]]) -> int:
+    return sum(len(m.get("content") or "") for m in history)
+
+
+def _trim_history_to_char_budget(
+    history: list[dict[str, Any]],
+    user_turn_boundaries: list[int],
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    """Drop oldest WHOLE user turns until the history fits the budget.
+
+    Never drops mid-turn (tool_call/result pairs stay intact by construction)
+    and never drops the latest turn — an over-budget single turn passes
+    through rather than producing an empty request.
+    """
+    if _history_len(history) <= max_chars or len(user_turn_boundaries) <= 1:
+        return history
+    # boundaries are positions in `history`; find the smallest start that
+    # fits, keeping at least the last turn.
+    for start in user_turn_boundaries[1:]:
+        if _history_len(history[start:]) <= max_chars:
+            return history[start:]
+    return history[user_turn_boundaries[-1]:]
 
 
 def _truncate_result(result: Any) -> str:
@@ -678,6 +848,13 @@ def derive_chat_rows(events: list[SessionEvent]) -> list[dict[str, Any]]:
         d = e.data
         if e.type == USER_MESSAGE:
             row = {"role": "user", "content": d.get("content", "")}
+            if d.get("mentions"):
+                row["mentions"] = d["mentions"]
+            if d.get("attachments"):
+                row["attachments"] = d["attachments"]
+            rows.append(row)
+        elif e.type == STEERING_MESSAGE:
+            row = {"role": "user", "content": d.get("content", ""), "status": "steering"}
             if d.get("mentions"):
                 row["mentions"] = d["mentions"]
             if d.get("attachments"):

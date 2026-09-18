@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -372,9 +373,14 @@ def test_set_playback_updates_and_validates():
 # ── captures ───────────────────────────────────────────────────────────────
 
 
-def test_capture_request_poll_and_fulfill(client):
+def test_capture_request_poll_and_fulfill(client, monkeypatch):
     sid = _mk_session()
     comp_id = _run(sid, "get_scene")["shot_id"]
+
+    # request_capture asks the UI Three.js viewport to render the PNG: it
+    # stamps capture_request_json, then polls until the router clears it and
+    # a capture row lands (the UI POST /captures path, which this fulfills
+    # directly in the DB below).
 
     # Fulfillment races the poll: post the capture in a background task
     import threading
@@ -405,6 +411,21 @@ def test_capture_request_poll_and_fulfill(client):
     out = _run(sid, "request_capture", {"label": "pose ref"})
     assert out["ok"] is True
     assert out["file_path"] == "x.png"
+
+
+def test_capture_timeout_is_failure_not_false_success(monkeypatch):
+    """When the Build Scene page never lands the PNG, the tool must report
+    failure — an ok:True with no file_path invited the agent to fabricate a
+    reference path (and fed no signal to the fail-streak guard)."""
+    from calliope.agent.harness.plugins import shot_builder
+
+    monkeypatch.setattr(shot_builder, "CAPTURE_POLL_TIMEOUT_S", 0.2)
+    sid = _mk_session()
+    out = _run(sid, "request_capture", {"label": "nobody home"})
+    assert out["ok"] is False
+    assert out.get("capture_pending") is True
+    assert "file_path" not in out
+    assert "do NOT reference a file path" in out["error"]
 
 
 def test_capture_upload_via_router(client):
@@ -529,28 +550,94 @@ def test_set_joint_no_empty_arrays_regression():
 
 
 def _video_data_url() -> str:
-    # Not a real codec payload — the router only validates the MIME + base64.
+    # Not a real codec payload — used where only the MIME + base64 matter
+    # (the ffmpeg-missing 503 path never reaches the encoder).
     raw = b"\x1aE\xdf\xa3fake-ebml-header" + b"0" * 256
     return "data:video/webm;base64," + base64.b64encode(raw).decode()
 
 
-def test_video_capture_upload_via_router(client):
+def _mp4_data_url() -> str:
+    # Fake MP4 header — the passthrough path stores it without ffmpeg.
+    raw = b"\x00\x00\x00\x18ftypmp42" + b"0" * 256
+    return "data:video/mp4;base64," + base64.b64encode(raw).decode()
+
+
+def _mov_data_url() -> str:
+    """A real 1-frame QuickTime clip (native mpeg4 codec, no external libs) —
+    the transcode path needs a decodable video, unlike the fake-byte MIME
+    checks above."""
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "tiny.mov"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=0.5:size=64x64:rate=10",
+                "-c:v",
+                "mpeg4",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        raw = out.read_bytes()
+    return "data:video/quicktime;base64," + base64.b64encode(raw).decode()
+
+
+def test_video_capture_mp4_passthrough(client):
+    # Chromium MediaRecorder already emits MP4 — store it untouched (no ffmpeg).
+    sid = _mk_session()
+    comp_id = _run(sid, "get_scene")["shot_id"]
+    resp = client.post(
+        f"/api/shots/{comp_id}/captures",
+        json={"data_url": _mp4_data_url(), "label": "camera export"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "video"
+    assert Path(body["file_path"]).exists()
+    assert Path(body["file_path"]).suffix == ".mp4"
+    assert Path(body["file_path"]).resolve().is_relative_to(Path(settings.assets_dir).resolve())
+
+    listing = client.get(f"/api/shots/{comp_id}/captures").json()
+    mine = next(c for c in listing if c["id"] == body["id"])
+    assert mine["kind"] == "video"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_video_capture_transcoded_to_mp4(client):
+    # Firefox/WebM (or mov) must land in the picker as a real MP4.
+    sid = _mk_session()
+    comp_id = _run(sid, "get_scene")["shot_id"]
+    resp = client.post(
+        f"/api/shots/{comp_id}/captures",
+        json={"data_url": _mov_data_url(), "label": "camera export"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "video"
+    p = Path(body["file_path"])
+    assert p.suffix == ".mp4"
+    assert p.exists()
+    # Real MP4: starts with an ftyp box, not a passthrough fake header.
+    assert b"ftyp" in p.read_bytes()[:64]
+
+
+def test_video_capture_webm_without_ffmpeg_503(client, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
     sid = _mk_session()
     comp_id = _run(sid, "get_scene")["shot_id"]
     resp = client.post(
         f"/api/shots/{comp_id}/captures",
         json={"data_url": _video_data_url(), "label": "camera export"},
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["kind"] == "video"
-    assert Path(body["file_path"]).exists()
-    assert Path(body["file_path"]).suffix == ".webm"
-    assert Path(body["file_path"]).resolve().is_relative_to(Path(settings.assets_dir).resolve())
-
-    listing = client.get(f"/api/shots/{comp_id}/captures").json()
-    mine = next(c for c in listing if c["id"] == body["id"])
-    assert mine["kind"] == "video"
+    assert resp.status_code == 503
 
 
 def test_capture_rejects_unknown_mime(client):

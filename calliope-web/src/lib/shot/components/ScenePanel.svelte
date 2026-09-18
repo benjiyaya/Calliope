@@ -90,12 +90,12 @@
 					<button class="icon danger" onclick={() => shotStore.deleteObject(o.id)} title={t('common.delete')}>✕</button>
 				</div>
 			</li>
-		{:else}
-			<li class="empty">{t('shot.emptyScene')}</li>
-		{/each}
-	</ul>
+	{:else}
+		<li class="empty">{t('shot.emptyScene')}</li>
+	{/each}
+</ul>
 
-	<footer class="hint">{t('shot.hint')}</footer>
+<footer class="hint">{t('shot.hint')}</footer>
 </div>
 
 <style>

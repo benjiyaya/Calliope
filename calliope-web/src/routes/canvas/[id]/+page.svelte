@@ -268,6 +268,62 @@
 		}
 	}
 
+	// ---- node deletion (Backspace/Delete on selection) ----------------------
+	// Svelte Flow removes deleted nodes from the local store on its own; the
+	// handlers below make the removal real (persist + file cleanup) or veto it.
+
+	function nodeServerId(node: Node): number | null {
+		const id = (node.data as { canvasNodeId?: number }).canvasNodeId;
+		return typeof id === 'number' ? id : null;
+	}
+
+	async function onBeforeDeleteCanvas({ nodes }: { nodes: Node[] }): Promise<boolean> {
+		const blocked = nodes.filter(
+			(n) =>
+				n.type === 'entity' ||
+				(n.data as { status?: string }).status === 'running' ||
+				(n.data as { status?: string }).status === 'queued',
+		);
+		if (blocked.length > 0) {
+			toast.error(
+				t('canvas.deleteBlocked', { count: blocked.length }),
+			);
+			return false;
+		}
+		return true;
+	}
+
+	async function onDeleteCanvas({ nodes }: { nodes: Node[] }) {
+		const ids = nodes
+			.map(nodeServerId)
+			.filter((id): id is number => id != null);
+		if (ids.length === 0) return;
+		let fileDeletedCount = 0;
+		let keptCount = 0;
+		const results = await Promise.allSettled(
+			ids.map((id) => canvasApi.deleteNode(canvasId, id)),
+		);
+		for (const r of results) {
+			if (r.status === 'fulfilled') {
+				if (r.value.file_deleted) fileDeletedCount++;
+				else keptCount++;
+			}
+		}
+		await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+		const failed = results.filter((r) => r.status === 'rejected').length;
+		if (failed > 0) {
+			toast.error(t('canvas.deleteFailed'));
+			return;
+		}
+		if (fileDeletedCount > 0 && keptCount > 0) {
+			toast.success(t('canvas.deletedMixed', { files: fileDeletedCount, kept: keptCount }));
+		} else if (fileDeletedCount > 0) {
+			toast.success(t('canvas.deletedWithFile', { count: fileDeletedCount }));
+		} else {
+			toast.success(t('canvas.deletedCardOnly', { count: keptCount }));
+		}
+	}
+
 	// ---- viewport persistence --------------------------------------------
 	// Zoom/pan must survive reload, session switches (the {#key} layout
 	// remounts this page on canvas id change), and navigation away/back.
@@ -578,16 +634,20 @@
 	const sendMutation = createMutation({
 		mutationFn: (payload: AgentComposerPayload) => agentApi.postMessage(activeId!, payload),
 		onMutate: () => {
-			streaming = '';
-			streamingReasoning = '';
-			thinkingAgent = null;
-			liveTools = [];
-			livePlan = null;
 			if (activeId != null) {
-				client.setQueryData<AgentSession & { messages: AgentMessage[]; plan?: AgentPlan | null }>(
-					['agent-session', activeId],
-					(old) => (old ? { ...old, plan: null } : old),
-				);
+				const s = sessions.find((x) => x.id === activeId);
+				const steering = Boolean(s?.running || s?.status === 'running');
+				if (!steering) {
+					streaming = '';
+					streamingReasoning = '';
+					thinkingAgent = null;
+					liveTools = [];
+					livePlan = null;
+					client.setQueryData<AgentSession & { messages: AgentMessage[]; plan?: AgentPlan | null }>(
+						['agent-session', activeId],
+						(old) => (old ? { ...old, plan: null } : old),
+					);
+				}
 			}
 		},
 		onSuccess: async () => {
@@ -1056,6 +1116,8 @@ title={running
 					fitView={initialViewport === undefined}
 					onnodedragstart={onNodeDragStart}
 					onnodedragstop={onNodeDragStop}
+					onbeforedelete={onBeforeDeleteCanvas}
+					ondelete={onDeleteCanvas}
 					onmoveend={(_event, vp) => scheduleViewportSave(vp)}
 					oninit={assertViewportOnInit}
 				>

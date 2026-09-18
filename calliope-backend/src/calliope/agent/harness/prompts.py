@@ -86,6 +86,24 @@ async def _mode_section(ctx: ToolContext) -> str | None:
 
 
 def _mode_text(ctx: ToolContext) -> str:
+    if getattr(ctx, "origin", "chat") == "scene":
+        return (
+            "SESSION MODE: BUILD SCENE — this chat drives the 3D composition.\n"
+            "- One surface: the Three.js viewport (the 3D editor) + TimelineStrip "
+            "+ Export video. The viewport is the ONLY preview and the ONLY "
+            "export/capture source — there is no separate render preview.\n"
+            "- Tools here are shot_* + ask_user + skills/memory ONLY. "
+            "ComfyUI / run_workflow / list_workflows / enqueue_* are "
+            "unavailable and must not be attempted.\n"
+            "- Export video / stills come from the 3D editor viewport (the user "
+            "clicks Capture / Export video). There are no camera-beat tools.\n"
+            "- NEVER call a tool named export_video (it does not exist). After "
+            "Cut (ask_user → record_build_scene_gate), tell the user to click "
+            "**Export video** in the UI. Stills: request_capture only.\n"
+            "- Prefer read_skill(\"shot-composer-blockout\"); do NOT follow "
+            "scene-to-video / enqueue_video_jobs for Build Scene.\n"
+            "- Do not create_project just to animate — stay on this composition."
+        )
     if ctx.project_id is None:
         return (
             "SESSION MODE: SANDBOX — no project is linked yet.\n"
@@ -266,6 +284,14 @@ async def _tool_discipline_section(ctx: ToolContext) -> str | None:
 
 
 async def _mentions_section(ctx: ToolContext) -> str | None:
+    if getattr(ctx, "origin", "chat") == "scene":
+        return (
+            "Build Scene sessions ignore workflow tags for generation. "
+            "Do not call run_workflow / ComfyUI from this chat. A tagged "
+            "workflow_id= appendix is context only — the 3D editor viewport "
+            "and shot_* tools own this surface. ComfyUI belongs to explicit "
+            "image/video gen asks outside Build Scene."
+        )
     if ctx.project_id is None:
         return (
             "Tagged workflows: a [Calliope context] appendix with workflow_id= "
@@ -304,9 +330,49 @@ async def _hardening_section(ctx: ToolContext) -> str | None:
     return hardening_text()
 
 
+
+async def _build_scene_section(ctx: ToolContext) -> str | None:
+    """Build Scene policy — single 3D-editor surface, no camera-beat lane."""
+    if getattr(ctx, "origin", "chat") != "scene":
+        return None
+    return (
+        "BUILD SCENE POLICY (shot-composer-blockout — CoS):\n"
+        "1. TOOL ALLOWLIST: only shot_* tools, ask_user, list_skills/read_skill "
+        "(shot-composer-blockout), and memory tools. Ban ComfyUI / workflow "
+        "tool calls in this mode (run_workflow, list_workflows, enqueue_*, "
+        "comfy_*) — they are mechanically denied for Build Scene sessions; "
+        "if the user wants image/video generation, tell them to open "
+        "Playground / AI Canvas and tag a workflow there.\n"
+        "2. BRIEF GATE: before any mutate (add_object, set_transform, "
+        "keyframes, poses), ask_user Lock brief → on affirmative "
+        "record_build_scene_gate(gate='brief'). Soft 'maybe' = hard stop.\n"
+        "3. CUT GATE: before export / shipping to pickers, ask_user Approve "
+        "cut → record_build_scene_gate(gate='cut'). Soft maybe = hard stop.\n"
+        "4. MOTION: stage→add_keyframe recipes only (read_skill "
+        "shot-composer-blockout motion-recipes). There are NO camera-beat "
+        "tools — do not invent set_camera_beats / apply_clip_v4_beats / "
+        "apply_push_in_beats. Camera framing is the user's job in the "
+        "TimelineStrip; do not try to drive the camera.\n"
+        "5. PREVIEW: Build Scene = the Three.js viewport. It is the ONLY "
+        "preview and the ONLY export/capture source — no separate render "
+        "preview or export path.\n"
+        "6. Never read/follow scene-to-video for this surface — that skill "
+        "targets Comfy enqueue_video_jobs (closed lane here).\n"
+        "7. NEVER invent or call export_video. There is no such tool. After "
+        "Cut approval (ask_user → record_build_scene_gate(gate='cut')), tell "
+        "the user to click **Export video** in Build Scene UI. Stills only: "
+        "request_capture.\n"
+        "8. Characters are blockout proxies (not limb walk cycles). "
+        "Walk-across = sparse root keyframes; do not claim full locomotion "
+        "until motion recipes land."
+    )
+
+
+
 def register_builtin_sections(service: SystemPromptService) -> None:
     service.register("persona", 10, _persona_section)
     service.register("mode", 20, _mode_section)
+    service.register("build_scene", 25, _build_scene_section)
     service.register("workspace", 30, _workspace_digest_section)
     # Memory recall (order 35): usage-ranked preferences from harness.plugins.memory.
     # Imported lazily so composing prompts alone never composes the registry.

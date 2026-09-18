@@ -69,7 +69,7 @@ let {
 	const uploads = createUploadManager();
 	const mentionItems = $derived(filterWorkflows(workflows, mentionQuery));
 	const slashItems = $derived(filterSkills(skills, slashQuery));
-	const busy = $derived(running || uploadingNames.length > 0);
+	const busy = $derived(uploadingNames.length > 0);
 	const sendable = $derived(!busy && (!editorEmpty || attachments.length > 0));
 
 	$effect(() => {
@@ -508,16 +508,15 @@ let {
 							<Icon name={a.kind === 'audio' ? 'music' : 'video'} size={16} />
 						</span>
 					{/if}
-					<span class="tile-name" title={a.name}>{truncateMiddle(a.name, 18)}</span>
-					<button
-						type="button"
-						class="tile-x"
-						title={t('agentComposer.remove')}
-						onclick={() => removeAttachment(i)}
-						disabled={running}
-					>
-						<Icon name="close" size={10} />
-					</button>
+				<span class="tile-name" title={a.name}>{truncateMiddle(a.name, 18)}</span>
+				<button
+					type="button"
+					class="tile-x"
+					title={t('agentComposer.remove')}
+					onclick={() => removeAttachment(i)}
+				>
+					<Icon name="close" size={10} />
+				</button>
 				</div>
 			{/each}
 			{#each uploadingNames as name (name)}
@@ -538,7 +537,7 @@ let {
 			tabindex="0"
 			aria-multiline="true"
 			aria-label={t('agentComposer.message')}
-			data-placeholder={running ? t('agentComposer.working') : t('agentComposer.placeholder')}
+			data-placeholder={running ? t('agentComposer.steerPlaceholder') : t('agentComposer.placeholder')}
 			onkeydown={onKeydown}
 			oninput={onEditorInput}
 			onpaste={onPaste}
@@ -566,18 +565,18 @@ let {
 					<Icon name="stop" size={14} />
 					{t('common.stop')}
 				</button>
-			{:else}
-				<button
-					type="button"
-					class="send"
-					onclick={submit}
-					disabled={!sendable}
-					title={t('agentComposer.sendTitle')}
-				>
-					{t('common.send')}
-					<Icon name="chevron-right" size={14} />
-				</button>
 			{/if}
+			<button
+				type="button"
+				class="send"
+				class:steer={running}
+				onclick={submit}
+				disabled={!sendable}
+				title={running ? t('agentComposer.steerTitle') : t('agentComposer.sendTitle')}
+			>
+				{running ? t('agentComposer.steer') : t('common.send')}
+				<Icon name="chevron-right" size={14} />
+			</button>
 		</div>
 	</div>
 </div>
@@ -787,6 +786,10 @@ let {
 		background: transparent;
 		color: var(--error);
 		border-color: rgba(239, 68, 68, 0.5);
+	}
+	.send.steer {
+		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 50%, transparent);
 	}
 	.send:focus-visible {
 		outline: 2px solid var(--accent);

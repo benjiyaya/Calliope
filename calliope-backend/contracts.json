@@ -46,6 +46,7 @@
     "plan/created",
     "question/answered",
     "question/asked",
+    "steering/message",
     "step/end",
     "step/start",
     "task/end",
@@ -89,6 +90,7 @@
     "forget_memory",
     "generate_script",
     "generate_story",
+    "get_build_scene_gates",
     "get_job_status",
     "get_scene",
     "get_story",
@@ -106,6 +108,7 @@
     "move_keyframe_time",
     "post_artifact_to_canvas",
     "read_skill",
+    "record_build_scene_gate",
     "rename_object",
     "reorder_scenes",
     "request_capture",
@@ -159,6 +162,7 @@
   ],
   "guard_codes": [
     "guard_destructive_replace",
+    "guard_no_export_video_tool",
     "guard_render_approval",
     "guard_scene_tool_scope"
   ]

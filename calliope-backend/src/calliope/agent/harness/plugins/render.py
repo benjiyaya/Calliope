@@ -308,6 +308,10 @@ def register(registry: ToolRegistry) -> None:
             executor=t_wait_for_jobs,
             category="video",
             requires_project=False,
+            # Owns its own wait contract (timeout_sec → queue_poll_timeout_sec):
+            # exempt from the per-tool wall-clock cap, which would otherwise
+            # cut a legitimate long render wait short.
+            long_running=True,
         )
     )
     registry.register(
@@ -1202,6 +1206,10 @@ async def t_wait_for_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
     timeout = _resolve_wait_timeout(args)
     deadline = None if timeout <= 0 else asyncio.get_event_loop().time() + timeout
     queue_pid = _queue_project_id(ctx)
+    # Progress heartbeat: a long wait must not read as a dead "Working…" in
+    # the chat — publish a thinking line roughly every 30s while jobs run.
+    _PROGRESS_INTERVAL_S = 30.0
+    next_progress = asyncio.get_event_loop().time() + _PROGRESS_INTERVAL_S
     while True:
         jobs: list[dict[str, Any]] = []
         invalid: list[int] = []
@@ -1235,6 +1243,22 @@ async def t_wait_for_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 "error": f"Timed out after {timeout}s waiting for {len(active)} job(s)",
                 "jobs": [_sc_job_dict_lite(j) for j in active],
             }
+        now = asyncio.get_event_loop().time()
+        if now >= next_progress:
+            from calliope.events.bus import event_bus
+
+            await event_bus.publish(
+                "agent.thinking",
+                {
+                    "session_id": ctx.session_id,
+                    "content": (
+                        f"Still waiting on {len(active)} render job(s) "
+                        f"(#{', #'.join(str(j['id']) for j in active[:5])}"
+                        f"{'…' if len(active) > 5 else ''})…"
+                    ),
+                },
+            )
+            next_progress = now + _PROGRESS_INTERVAL_S
         await asyncio.sleep(3)
 
 

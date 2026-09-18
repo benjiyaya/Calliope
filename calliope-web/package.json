@@ -1,6 +1,6 @@
 {
 	"name": "calliope-web",
-	"version": "1.5.3",
+	"version": "1.5.4",
 	"private": true,
 	"scripts": {
 		"dev": "vite dev",
@@ -30,10 +30,10 @@
 	},
 	"dependencies": {
 		"@tanstack/svelte-query": "^5.66.0",
+		"@types/three": "0.185.0",
 		"@xyflow/svelte": "^1.6.5",
 		"mannequin-js": "5.2.3",
-		"three": "0.185.1",
-		"@types/three": "0.185.0"
+		"three": "0.185.1"
 	},
 	"type": "module"
 }

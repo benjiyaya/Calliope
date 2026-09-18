@@ -54,11 +54,12 @@ the same beat — the eye reads simultaneous motion as intentional.
 
 ## Camera vs objects
 
-Object tracks are viewport preview for framing; the **camera track is what
-export renders**. To feature object motion in an exported clip, keep motion
-within the framed area and let the camera track hold (or slowly push) while
-the action plays. Keys for the camera come from the timeline UI (◉), not
-from `shot_*` tools.
+The export renders **both** object tracks and the camera track — the viewport
+samples every tracked object at the playhead, so keyframed object motion
+(walk-across, jump, head turn) appears in the exported clip. The camera track
+adds camera moves on top (or holds static). Keys for the camera come from the
+timeline UI (◉), not from `shot_*` tools — the agent animates objects; the
+user frames the camera.
 
 ## Timing vocabulary (rule of thumb)
 

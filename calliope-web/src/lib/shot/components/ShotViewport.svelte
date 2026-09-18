@@ -5,9 +5,11 @@
 	 * mannequin figures + primitives on a ground grid, OrbitControls camera,
 	 * TransformControls gizmo mapped to the active tool, and a capture
 	 * renderer (PNG dataURL) used by the Capture button and the agent's
-	 * request_capture SSE.
+	 * request_capture SSE. This canvas is also the source for video export —
+	 * one deterministic MediaRecorder pass of the camera track + object
+	 * keyframes (Timeline → Export video).
 	 */
-import { onMount, onDestroy, untrack } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -24,7 +26,13 @@ import { sampleTrack } from '../motion/sampleTrack';
 import { t } from '$lib/i18n.svelte';
 import '../types/mannequin-js.d';
 
-let { oncapture, onselectionchange }: { oncapture?: (dataUrl: string) => void; onselectionchange?: () => void } = $props();
+	let {
+		oncapture,
+		onselectionchange,
+	}: {
+		oncapture?: (dataUrl: string) => void;
+		onselectionchange?: () => void;
+	} = $props();
 
 let container: HTMLDivElement;
 let renderer: THREE.WebGLRenderer;
@@ -36,6 +44,9 @@ let gizmoHelper: THREE.Object3D;
 let raf = 0;
 let resizeObserver: ResizeObserver;
 let cleanupPointerUp: (() => void) | null = null;
+
+// Video export frame rate — 24 fps (film standard) for the blockout clip.
+const EXPORT_FPS = 24;
 
 // toolbar-owned view state (the grid mesh + a CSS rule-of-thirds overlay)
 let showGrid = $state(true);
@@ -398,8 +409,11 @@ let gizmoDragging = false;
 		return { position: pos, target: tgt, fov: a.fov + (b.fov - a.fov) * k };
 	}
 
-	let playbackClockPrev = 0;
-	let playbackWasPlaying = false;
+let playbackClockPrev = 0;
+let playbackWasPlaying = false;
+// true while a video export pass is rendering — tick() idles so the fixed-step
+// export clock owns the playhead/renders and never fights the recorder.
+let exporting = false;
 
 	function applyCameraAt(time: number) {
 		const sample = sampleCameraTrack(time);
@@ -444,10 +458,11 @@ let gizmoDragging = false;
 		// upload it. The store never sees this; the page wires oncapture.
 		fetch(`/api/shots/${shotStore.compositionId}`)
 			.then((r) => (r.ok ? r.json() : null))
-			.then((comp) => {
-				if (!comp?.capture_request_json || !oncapture) return;
+			.then(async (comp) => {
+				if (!comp?.capture_request_json) return;
 				if (comp.capture_requested_at && comp.capture_requested_at <= captureRequestedAt) return;
 				captureRequestedAt = Date.now();
+				if (!oncapture) return;
 				const dataUrl = captureShot();
 				oncapture(dataUrl);
 			})
@@ -458,6 +473,7 @@ let gizmoDragging = false;
 
 	function tick() {
 		raf = requestAnimationFrame(tick);
+		if (exporting) return; // export drives the scene on its own fixed clock
 		const now = performance.now() / 1000;
 		advancePlayback(now);
 		// While playing (or scrubbed onto the track) the camera track owns the
@@ -662,10 +678,15 @@ let gizmoDragging = false;
 	async function exportVideo(): Promise<{ dataUrl: string; ext: string }> {
 		const mime = pickVideoMime();
 		if (!mime) throw new Error(t('shot.errRecorder'));
-		if (shotStore.cameraTrack.length < 2) {
-			throw new Error(t('shot.errExportKeyframes'));
+		// A camera track (≥2 keys) drives camera motion, but a scene of
+		// keyframed objects still animates with a static camera — the 3D
+		// editor content is what we export, so only demand SOME renderable
+		// scene, not a camera track specifically.
+		const hasObjects = shotStore.objects.some((o) => o.type !== 'camera');
+		if (shotStore.cameraTrack.length < 2 && !hasObjects) {
+			throw new Error(t('shot.errNoData'));
 		}
-		const stream = renderer.domElement.captureStream(30);
+		const stream = renderer.domElement.captureStream(EXPORT_FPS);
 		const chunks: Blob[] = [];
 		const recorder = new MediaRecorder(stream, { mimeType: mime });
 		recorder.ondataavailable = (e) => {
@@ -676,27 +697,40 @@ let gizmoDragging = false;
 		});
 
 		const duration = shotStore.playback.duration;
-		// Drive the camera manually across one deterministic pass: pause store
-		// playback (the tick loop would fight us), sample per frame with a
-		// fixed-step clock so export duration matches the timeline exactly.
+		// Record in REAL TIME: captureStream(N) stamps frames on the wall clock,
+		// so the playhead must advance one N fps tick per real-time frame. The
+		// old requestAnimationFrame loop ran at the display refresh (60 Hz+),
+		// scrubbing 0→duration twice as fast and halving the exported clip.
+		// A fixed timestep with drift compensation keeps the output exactly
+		// `duration` seconds regardless of monitor refresh or frame jitter.
+		const fps = EXPORT_FPS;
+		const frameMs = 1000 / fps;
+		const totalFrames = Math.max(1, Math.round(duration * fps));
+
 		shotStore.setPlaying(false);
-		const fps = 30;
-		const steps = Math.max(2, Math.round(duration * fps));
+		exporting = true;
 		recorder.start();
-		for (let i = 0; i <= steps; i++) {
-			const t = (i / steps) * duration;
-			shotStore.setElapsed(t);
-			applyCameraAt(t);
-			syncScene();
-			renderFrame();
-			await new Promise((r) => requestAnimationFrame(r));
+		try {
+			const start = performance.now();
+			for (let i = 0; i <= totalFrames; i++) {
+				const t = Math.min(i / fps, duration);
+				shotStore.setElapsed(t);
+				applyCameraAt(t);
+				syncScene();
+				renderFrame();
+				const target = start + (i + 1) * frameMs;
+				const wait = target - performance.now();
+				if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+			}
+			// One frame of tail so the recorder flushes the last presented frame.
+			await new Promise((r) => setTimeout(r, frameMs));
+		} finally {
+			exporting = false;
+			shotStore.setElapsed(0);
 		}
-		// Hold the final frame briefly so the recorder flushes it.
-		await new Promise((r) => setTimeout(r, 120));
 		recorder.stop();
 		await done;
 		stream.getTracks().forEach((tr) => tr.stop());
-		shotStore.setElapsed(0);
 
 		const ext = mime.includes('mp4') ? 'mp4' : 'webm';
 		const blob = new Blob(chunks, { type: mime });

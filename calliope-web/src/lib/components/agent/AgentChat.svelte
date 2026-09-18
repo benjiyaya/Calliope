@@ -213,7 +213,10 @@
 	{#each messages as m (m.id)}
 		{#if m.role === 'user'}
 			<div class="row user">
-				<div class="bubble user-bubble">
+				<div class="bubble user-bubble" class:steering={m.status === 'steering'}>
+					{#if m.status === 'steering'}
+						<span class="steer-tag">{t('agentChat.steering')}</span>
+					{/if}
 					{#if (m.attachments ?? []).length > 0}
 						<div class="user-thumbs">
 							{#each (m.attachments ?? []) as a (a.path)}
@@ -469,6 +472,18 @@
 		background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
 		border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 		color: var(--text-primary);
+	}
+	.user-bubble.steering {
+		border-style: dashed;
+	}
+	.steer-tag {
+		display: inline-block;
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--accent);
+		margin-bottom: 4px;
 	}
 	.user-thumbs {
 		display: flex;

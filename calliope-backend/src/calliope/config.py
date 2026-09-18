@@ -125,6 +125,14 @@ class Settings(BaseSettings):
     queue_max_retries: int = 2
     agent_max_steps: int = 24
     agent_hardening_prompt: str = DEFAULT_AGENT_HARDENING_PROMPT
+    # Wall-clock cap on ONE tool execution inside the agent loop. Guards
+    # against a hung tool stalling a session indefinitely; 0 = disabled.
+    # Long-by-contract tools (wait_for_jobs) opt out via long_running=True.
+    agent_tool_timeout_sec: float = 600.0
+    # Character budget (~4 chars/token) for the derived LLM history — the
+    # 40-turn cap alone can still overflow a context window with heavy
+    # multi-step turns. Oldest whole turns drop first; 0 = disabled.
+    agent_history_char_budget: int = 400_000
     # Extra OpenAI-compatible request fields merged into the MiniMax H3 prompt
     # rewrite call only (the `minimax_h3_ref` profile). The rewrite is a
     # formatting task: on a thinking model it can burn 10k+ reasoning tokens per
@@ -321,6 +329,8 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
+            "agent_tool_timeout_sec": self.agent_tool_timeout_sec,
+            "agent_history_char_budget": self.agent_history_char_budget,
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }
@@ -404,6 +414,8 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
+            "agent_tool_timeout_sec": self.agent_tool_timeout_sec,
+            "agent_history_char_budget": self.agent_history_char_budget,
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }

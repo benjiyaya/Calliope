@@ -6,7 +6,18 @@ export interface Capture {
 	kind: 'image' | 'video';
 	label: string | null;
 	file_path: string | null;
+	meta_json?: string | null;
+	meta?: Record<string, unknown> | null;
 	created_at: string;
+}
+
+export interface GateRecordResult {
+	ok: boolean;
+	gate: 'brief' | 'cut';
+	gates: {
+		brief?: { approved_at: string; source?: string; note?: string | null } | null;
+		cut?: { approved_at: string; source?: string; note?: string | null } | null;
+	};
 }
 
 export const shotApi = {
@@ -52,4 +63,36 @@ export const shotApi = {
 		const resp = await fetch(`/api/shots/${compositionId}`, { method: 'DELETE' });
 		return resp.ok;
 	},
+
+	/** Record Brief/Cut gate from the UI (source: 'ui'). Human at keyboard — no ask_user. */
+	async recordGate(
+		compositionId: number,
+		gate: 'brief' | 'cut',
+		opts: { note?: string; source?: string } = {},
+	): Promise<GateRecordResult> {
+		const resp = await fetch(`/api/shots/${compositionId}/gates`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				gate,
+				note: opts.note ?? null,
+				source: opts.source ?? 'ui',
+			}),
+		});
+		if (!resp.ok) {
+			let detail = `Gate record failed (${resp.status})`;
+			try {
+				const body = await resp.json();
+				detail =
+					typeof body?.detail === 'string'
+						? body.detail
+						: body?.detail?.message || body?.status || detail;
+			} catch {
+				/* ignore */
+			}
+			throw new Error(detail);
+		}
+		return resp.json();
+	},
+
 };

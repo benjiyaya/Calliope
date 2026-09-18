@@ -52,6 +52,97 @@ def _llm_for_role(role: str) -> LLMClient:
         return for_role(role)
     return factory()
 
+
+# ── Shared safety nets (main loop AND swarm sub-agents) ────────────────
+# Extracted so orchestrator._run_sub_agent uses the exact same guards as
+# run_turn — any future net added here applies to both loops for free.
+
+REPEAT_EXECUTE_LIMIT = 2
+FAIL_STREAK_LIMIT = 2
+
+FINAL_STEP_NUDGE = (
+    "[SYSTEM] This is your FINAL step of this turn. "
+    "Do not start new tool work. Either (a) if the "
+    "goal is already met, reply with a concise "
+    "summary, or (b) reply with exactly what is "
+    "blocked and why, and what you need to proceed. "
+    "The user can continue the task in their next "
+    "message."
+)
+
+
+class RepeatGuard:
+    """Identical (tool, args) calls within one turn/loop.
+
+    Read-like repeats execute normally (results may legitimately change);
+    after REPEAT_EXECUTE_LIMIT the call is NOT re-executed — the cached real
+    result is returned with an escalating instruction, so a stuck model gets
+    its own data back plus a way out instead of burning the step budget.
+    """
+
+    def __init__(self) -> None:
+        self.cache: dict[str, dict[str, Any]] = {}
+        self.counts: dict[str, int] = {}
+
+    def key(self, name: str, args: dict[str, Any]) -> str:
+        return f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+
+    def bumped(self, name: str, args: dict[str, Any]) -> int:
+        k = self.key(name, args)
+        self.counts[k] = self.counts.get(k, 0) + 1
+        return self.counts[k]
+
+    def cached(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        return self.cache.get(self.key(name, args))
+
+    def intercept(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the cached-result-plus-directive payload when over the
+        limit, else None (caller should execute for real)."""
+        count = self.bumped(name, args)
+        if count > REPEAT_EXECUTE_LIMIT and self.key(name, args) in self.cache:
+            cached = self.cache[self.key(name, args)]
+            return {
+                **cached,
+                "repeat_guard": {
+                    "calls_so_far": count,
+                    "limit": REPEAT_EXECUTE_LIMIT,
+                    "message": (
+                        f"You have already called {name} with these exact "
+                        f"{count} times this turn. This call was NOT executed "
+                        "again — the result above is the real one from the last "
+                        "execution. Do not repeat it again. If the goal is not "
+                        "met, call a DIFFERENT tool, change the arguments "
+                        "meaningfully, or end your turn with a summary/question "
+                        "for the user."
+                    ),
+                },
+            }
+        return None
+
+    def record(self, name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
+        if isinstance(result, dict) and result.get("ok") is not False:
+            self.cache[self.key(name, args)] = result
+
+
+def fail_directive_text(streak: int) -> str:
+    """The [SYSTEM DIRECTIVE] appended after FAIL_STREAK_LIMIT failures in a
+    row — forces a DIFFERENT action or an explicit hand-back. Never a third
+    blind try."""
+    return (
+        f"\n\n[SYSTEM DIRECTIVE] That is {streak} failed calls in a row on this "
+        "goal. STOP retrying the same tool. Now either (a) call a DIFFERENT "
+        "tool with corrected arguments, or (b) end your turn with a clear "
+        "plain-text report of what is blocked and why, and what you need from "
+        "the user. Do not call any tool again with the same arguments."
+    )
+
+
+def apply_fail_streak(result: dict[str, Any], streak: int) -> str:
+    """Suffix builder: returns the directive only at/after the limit."""
+    if streak >= FAIL_STREAK_LIMIT and isinstance(result, dict) and result.get("ok") is False:
+        return fail_directive_text(streak)
+    return ""
+
 # Async callback that persists + broadcasts one harness message.
 MessageSink = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -96,15 +187,25 @@ async def run_turn(
     # REPEAT_EXECUTE_LIMIT the call is NOT re-executed — the cached real result
     # is returned with an escalating instruction, so a stuck model gets its
     # own data back plus a way out instead of burning the step budget.
-    repeat_cache: dict[str, dict[str, Any]] = {}
-    repeat_counts: dict[str, int] = {}
-    REPEAT_EXECUTE_LIMIT = 2
+    repeat = RepeatGuard()
     # Failure thrash guard (canvas/70): an agent that keeps getting errors
     # (guard denials, bad args) must CHANGE COURSE, not grind. After this
     # many not-ok results in a row, a directive is injected that forces a
     # different action or an explicit hand-back to the user.
-    FAIL_STREAK_LIMIT = 2
     fail_streak = 0
+    # Steering watermark: mid-run user course corrections appended after this
+    # seq are drained into `messages` at step boundaries (never between an
+    # assistant tool_calls message and its results — that would be an invalid
+    # request sequence). Next turn's derivation replays the same events.
+    steer_watermark = session_log.steering_max_seq(ctx.session_id)
+
+    def drain_steering_into_messages() -> None:
+        nonlocal steer_watermark
+        for s in session_log.drain_steering(ctx.session_id, steer_watermark):
+            steer_watermark = max(steer_watermark, s.seq)
+            messages.append(
+                {"role": "user", "content": session_log.steering_user_content(s.data)}
+            )
 
     client = _llm_for_role("main")
     final_text = ""
@@ -114,6 +215,7 @@ async def run_turn(
         messages = [m for m in history if m.get("role") != "system"]
         for iteration in range(1, max_iterations + 1):
             # ── step boundary ────────────────────────────────────
+            drain_steering_into_messages()
             log_append(session_log.STEP_START, {"turn": turn_no, "step": iteration})
             # Rebuilt per step: linking mid-run flips tool visibility and the
             # workspace digest changes after each tool.
@@ -128,15 +230,7 @@ async def run_turn(
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "[SYSTEM] This is your FINAL step of this turn. "
-                            "Do not start new tool work. Either (a) if the "
-                            "goal is already met, reply with a concise "
-                            "summary, or (b) reply with exactly what is "
-                            "blocked and why, and what you need to proceed. "
-                            "The user can continue the task in their next "
-                            "message."
-                        ),
+                        "content": FINAL_STEP_NUDGE,
                     }
                 )
             tools = registry.openai_payload(ctx)
@@ -269,34 +363,12 @@ async def run_turn(
                         ),
                     }
                 else:
-                    repeat_key = f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
-                    repeat_counts[repeat_key] = repeat_counts.get(repeat_key, 0) + 1
-                    count = repeat_counts[repeat_key]
-                    if count > REPEAT_EXECUTE_LIMIT and repeat_key in repeat_cache:
-                        cached = repeat_cache[repeat_key]
-                        result = {
-                            **cached,
-                            "repeat_guard": {
-                                "calls_so_far": count,
-                                "limit": REPEAT_EXECUTE_LIMIT,
-                                "message": (
-                                    f"You have already called {name} with these exact "
-                                    f"{count} times this turn. This call was NOT executed "
-                                    "again — the result above is the real one from the last "
-                                    "execution. Do not repeat it again. If the goal is not "
-                                    "met, call a DIFFERENT tool, change the arguments "
-                                    "meaningfully, or end your turn with a summary/question "
-                                    "for the user."
-                                ),
-                            },
-                        }
+                    intercepted = repeat.intercept(name, args)
+                    if intercepted is not None:
+                        result = intercepted
                     else:
                         result = await registry.execute(ctx, name, args)
-                        if (
-                            isinstance(result, dict)
-                            and result.get("ok") is not False
-                        ):
-                            repeat_cache[repeat_key] = result
+                        repeat.record(name, args, result)
                 # Log + emit the result FIRST. The ask_user card and the
                 # tool-row spinner both read these; ending the turn before
                 # them left the UI with no question and a stuck "working…"
@@ -332,16 +404,7 @@ async def run_turn(
                     fail_streak += 1
                 elif isinstance(result, dict):
                     fail_streak = 0
-                if fail_streak >= FAIL_STREAK_LIMIT:
-                    result_text += (
-                        "\n\n[SYSTEM DIRECTIVE] That is "
-                        f"{fail_streak} failed calls in a row on this goal. "
-                        "STOP retrying the same tool. Now either (a) call a "
-                        "DIFFERENT tool with corrected arguments, or (b) end "
-                        "your turn with a clear plain-text report of what is "
-                        "blocked and why, and what you need from the user. "
-                        "Do not call any tool again with the same arguments."
-                    )
+                result_text += apply_fail_streak(result, fail_streak)
                 messages.append(
                     {
                         "role": "tool",

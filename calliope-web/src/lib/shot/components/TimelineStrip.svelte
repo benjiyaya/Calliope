@@ -19,8 +19,15 @@
 	const playing = $derived(shotStore.playback.playing);
 	const elapsed = $derived(shotStore.playback.elapsed);
 	const track = $derived(shotStore.cameraTrack);
+	const objects = $derived(shotStore.objects);
 	const selectedObject = $derived(shotStore.selectedObject);
 	const selectedKeyframeId = $derived(shotStore.selectedKeyframeId);
+
+	/** Export needs a camera track (≥2 keys) or any scene object to frame. */
+	const canExport = $derived(track.length >= 2 || objects.some((o) => o.type !== 'camera'));
+	const exportDisabledReason = $derived(
+		canExport ? '' : track.length < 2 ? t('shot.exportHintNeedBeats') : t('shot.exportHint'),
+	);
 
 	const pct = $derived(duration > 0 ? (elapsed / duration) * 100 : 0);
 
@@ -170,7 +177,12 @@
 				</button>
 			</span>
 		{/if}
-		<button class="export" onclick={onExportVideo} disabled={exporting || track.length < 2} title={track.length < 2 ? t('shot.exportHint') : t('shot.exportTitle')}>
+		<button
+			class="export"
+			onclick={onExportVideo}
+			disabled={exporting || !canExport}
+			title={canExport ? t('shot.exportTitle') : exportDisabledReason}
+		>
 			{t('shot.exportVideo')}
 		</button>
 	</div>

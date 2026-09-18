@@ -168,10 +168,11 @@ function toggleChat() {
 		}
 	}
 
+	let exportStatus = $state<string | null>(null);
+
 	async function captureFromUi() {
-		// The viewport exports its own canvas render.
-		const comp = shotStore.compositionId;
-		if (comp == null || !viewportRef) return;
+		// The Three.js viewport renders the still directly.
+		if (!viewportRef) return;
 		const dataUrl = (viewportRef as unknown as { captureNow: () => string }).captureNow();
 		await handleCaptureDataUrl(dataUrl);
 	}
@@ -180,13 +181,15 @@ function toggleChat() {
 
 	async function handleExportVideo() {
 		const comp = shotStore.compositionId;
-		if (comp == null || !viewportRef || exportingVideo) return;
+		if (comp == null || exportingVideo) return;
 		exportingVideo = true;
+		exportStatus = t('buildScene.videoExported');
 		try {
+			if (!viewportRef) throw new Error(t('buildScene.legacyNeedsViewport'));
 			const { dataUrl } = await (viewportRef as unknown as {
 				exportVideoClip: () => Promise<{ dataUrl: string; ext: string }>;
 			}).exportVideoClip();
-			const saved = await shotApi.uploadCapture(comp, dataUrl, 'camera track export');
+			const saved = await shotApi.uploadCapture(comp, dataUrl, 'viewport video export');
 			if (saved) {
 				await refreshCaptures();
 				toast.success(t('buildScene.videoExported'));
@@ -194,6 +197,7 @@ function toggleChat() {
 				toast.error(t('buildScene.uploadSizeFail'));
 			}
 		} catch (err) {
+			exportStatus = null;
 			toast.error(err instanceof Error ? err.message : t('buildScene.videoExportFailed'));
 		} finally {
 			exportingVideo = false;
@@ -267,11 +271,15 @@ function toggleChat() {
 	const sendMutation = createMutation({
 		mutationFn: (payload: AgentComposerPayload) => agentApi.postMessage(sessionId!, payload),
 		onMutate: () => {
-			streaming = '';
-			streamingReasoning = '';
-			thinkingAgent = null;
-			liveTools = [];
-			livePlan = null;
+			const s = sessions.find((x) => x.id === sessionId);
+			const steering = Boolean(s?.running || s?.status === 'running');
+			if (!steering) {
+				streaming = '';
+				streamingReasoning = '';
+				thinkingAgent = null;
+				liveTools = [];
+				livePlan = null;
+			}
 		},
 		onSuccess: async () => {
 			await client.invalidateQueries({ queryKey: ['agent-session', sessionId] });
@@ -358,7 +366,7 @@ function toggleChat() {
 			}
 			switch (ev.type) {
 				case 'shot.updated':
-					shotStore.handleShotUpdated(ev.data as { shot_id?: number });
+					shotStore.handleShotUpdated(ev.data as { shot_id?: number; reason?: string });
 					// A pending agent capture request rides the same event: the
 					// viewport checks capture_request_json, renders the PNG, and
 					// posts it (the router clears the request, which is the
@@ -493,6 +501,11 @@ function toggleChat() {
 					<ShotViewport bind:this={viewportRef} oncapture={handleCaptureDataUrl} />
 				</div>
 				<TimelineStrip onExportVideo={handleExportVideo} />
+				{#if exportStatus}
+					<p class="export-status" data-export-status>
+						{exportStatus}
+					</p>
+				{/if}
 				<CaptureStrip {captures} compositionId={shotStore.compositionId} />
 			{:else}
 				<div class="loading">{t('buildScene.preparing')}</div>
@@ -585,6 +598,9 @@ function toggleChat() {
 		flex: 1;
 		min-height: 0;
 		position: relative;
+		display: flex;
+		overflow: hidden;
+		background: #0b1220;
 	}
 	.loading {
 		flex: 1;
@@ -665,5 +681,11 @@ function toggleChat() {
 		border-radius: 999px;
 		padding: 2px 8px;
 		opacity: 0.7;
+	}
+	.export-status {
+		margin: 0;
+		padding: 4px 12px;
+		font-size: 12px;
+		color: var(--muted, #9aa3b5);
 	}
 </style>

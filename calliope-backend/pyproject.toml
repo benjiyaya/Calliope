@@ -15,6 +15,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "comfy-mcp>=0.10.0",
     "mcp>=2.0.0",
+    "pillow>=12.3.0",
 ]
 
 [project.optional-dependencies]

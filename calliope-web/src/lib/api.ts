@@ -393,6 +393,32 @@ export const playgroundApi = {
 		),
 };
 
+// ── Asset Library (unlinked Playground media) ───────────────────────────
+
+export interface LibraryMediaItem {
+	path: string;
+	name: string;
+	kind: 'image' | 'video';
+	size: number;
+	mtime: string;
+}
+
+export interface LibraryDeleteResult {
+	path: string;
+	status: 'deleted' | 'kept';
+	reason?: string;
+}
+
+export const libraryApi = {
+	list: () => api<LibraryMediaItem[]>('/api/library/media'),
+	deleteMany: (paths: string[]) =>
+		api<{
+			ok: boolean;
+			deleted: string[];
+			results: LibraryDeleteResult[];
+		}>('/api/library/media', { method: 'DELETE', body: JSON.stringify({ paths }) }),
+};
+
 // ── Agents (agentic harness) ────────────────────────────────────────────
 
 export interface AgentSession {
@@ -427,7 +453,7 @@ export interface AgentMessage {
 export interface AgentTask {
 	role: string;
 	goal: string;
-	status: 'pending' | 'running' | 'done' | 'failed';
+	status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 	index?: number;
 }
 
@@ -468,7 +494,7 @@ export const agentApi = {
 			typeof payload === 'string'
 				? { content: payload, mentions: [], attachments: [] }
 				: payload;
-		return api<{ ok: boolean; message: AgentMessage }>(`/api/agent/sessions/${id}/messages`, {
+		return api<{ ok: boolean; steered?: boolean; message: AgentMessage }>(`/api/agent/sessions/${id}/messages`, {
 			method: 'POST',
 			body: JSON.stringify(body),
 		});
@@ -616,7 +642,10 @@ export const canvasApi = {
 			body: JSON.stringify(payload),
 		}),
 	deleteNode: (canvasId: number, nodeId: number) =>
-		api<{ ok: boolean }>(`/api/canvas/${canvasId}/nodes/${nodeId}`, { method: 'DELETE' }),
+		api<{ ok: boolean; file_deleted?: boolean; reason?: string | null }>(
+			`/api/canvas/${canvasId}/nodes/${nodeId}`,
+			{ method: 'DELETE' },
+		),
 	tidy: (canvasId: number) =>
 		api<{ ok: boolean; moved: number }>(`/api/canvas/${canvasId}/tidy`, { method: 'POST' }),
 	createEdge: (

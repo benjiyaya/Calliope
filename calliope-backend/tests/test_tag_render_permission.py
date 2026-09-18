@@ -87,6 +87,53 @@ def test_assets_role_scope_includes_canvas_posting():
             assert registry.get(name) is not None, f"{role} names unknown tool {name}"
 
 
+def test_swarm_roles_cover_pipeline_categories():
+    """Drift guard (both directions): every registered tool in a pipeline
+    category must appear in its ROLE_TOOLS role — the clip tools drifted out
+    of the script/video roles while the dead-name check above stayed green,
+    because nothing checked the orphan direction.
+
+    Deliberately role-less categories are excluded: canvas / interaction /
+    memory / skills / shot / workspace / project / system are main-loop-only
+    or shared base reads.
+    """
+    from calliope.agent.harness import build_harness
+
+    registry, _ = build_harness()
+    category_roles = {
+        "story": {"story"},
+        "script": {"script"},
+        "assets": {"assets"},
+        "video": {"video"},
+    }
+    # Story-category ENTITY CRUD is planner-routed to the assets role (the
+    # standard EDIT pipeline: story → script → "add/update assets text") —
+    # only beats stay with the story role.
+    overrides = {
+        name: {"assets"}
+        for name in (
+            "add_character",
+            "update_character",
+            "delete_character",
+            "add_location",
+            "update_location",
+            "delete_location",
+            "add_item",
+            "update_item",
+            "delete_item",
+        )
+    }
+    for t in registry.tools.values():
+        roles = overrides.get(t.name) or category_roles.get(t.category)
+        if not roles:
+            continue
+        for role in roles:
+            assert t.name in orchestrator.ROLE_TOOLS[role], (
+                f"{t.category}-category tool '{t.name}' is missing from the "
+                f"'{role}' swarm role — sub-agents cannot perform it"
+            )
+
+
 def test_unscoped_enqueue_refused_when_many_missing():
     """Mechanical scope: an unscoped enqueue_asset_jobs that would touch
     more than 3 entities is refused with the count, so '2 characters' can

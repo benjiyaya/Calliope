@@ -2,13 +2,13 @@
 	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
 	import { t } from '$lib/i18n.svelte';
 
-	interface Props {
-		active?: 'projects' | 'canvas' | 'build-scene' | 'settings';
-		crumb?: string;
-		/** Optional status content rendered between the crumb and the nav. */
-		status?: import('svelte').Snippet;
-		children?: import('svelte').Snippet;
-	}
+interface Props {
+	active?: 'projects' | 'canvas' | 'build-scene' | 'library' | 'settings';
+	crumb?: string;
+	/** Optional status content rendered between the crumb and the nav. */
+	status?: import('svelte').Snippet;
+	children?: import('svelte').Snippet;
+}
 
 	let { active, crumb, status, children }: Props = $props();
 </script>
@@ -30,6 +30,7 @@
 			<a class="nav-link" class:active={active === 'canvas'} href="/canvas">{t('nav.canvas')}</a>
 			<a class="nav-link" class:active={active === 'projects'} href="/projects">{t('nav.projects')}</a>
 			<a class="nav-link" class:active={active === 'build-scene'} href="/build-scene">{t('nav.buildScene')}</a>
+			<a class="nav-link" class:active={active === 'library'} href="/library">{t('nav.library')}</a>
 			<a class="nav-link" class:active={active === 'settings'} href="/settings">{t('nav.settings')}</a>
 		</nav>
 	</div>

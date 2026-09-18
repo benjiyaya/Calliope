@@ -5,7 +5,9 @@
  * bracketing.
  *
  * Differences from the reference:
- * - No `objectInstances` Map — the viewport keeps its own three.js registry.
+ * - No `objectInstances` Map — the Three.js viewport keeps a *view* registry
+ *   (meshes/handles), not a second scene store. Adapters read SceneData via
+ *   toSceneData() only.
  * - `scene_json` on the server is the source of truth: local edits autosave
  *   (debounced), and `shot.updated` SSE events reload the composition unless
  *   a drag/gesture is in progress (`dragInProgress` defers, matching the
@@ -64,6 +66,8 @@ export interface ShotComposition {
 	id: number;
 	title: string;
 	scene: SceneData;
+	/** Server clock — used for optimistic concurrency on PATCH. */
+	updated_at?: string;
 }
 
 export interface CameraKeyframe {
@@ -74,12 +78,26 @@ export interface CameraKeyframe {
 	fov: number;
 }
 
+/** Brief/Cut human gates — live on scene_json.gates. */
+export interface BuildSceneGateApproval {
+	approved_at: string;
+	source?: string;
+	note?: string | null;
+}
+
+export interface BuildSceneGates {
+	brief?: BuildSceneGateApproval | null;
+	cut?: BuildSceneGateApproval | null;
+}
+
 export interface SceneData {
 	objects: SceneObject[];
 	selectedObjectId?: string | null;
 	shotParams?: Partial<Omit<ShotParams, 'composition'>> & { composition?: string };
 	playback?: PlaybackState;
 	cameraTrack?: CameraKeyframe[];
+	/** Brief/Cut approvals — must round-trip so client autosave does not wipe them. */
+	gates?: BuildSceneGates;
 }
 
 /** Hard cap: exported blockout videos stay under a minute. */
@@ -183,6 +201,7 @@ function createStore() {
 	let shotParams = $state<SceneData['shotParams']>({});
 	let playback = $state<PlaybackState>({ playing: false, elapsed: 0, speed: 1, duration: 6 });
 	let cameraTrack = $state<CameraKeyframe[]>([]);
+	let gates = $state<BuildSceneGates>({});
 	let loaded = $state(false);
 
 	let history = $state<SceneObject[][]>([]);
@@ -194,6 +213,8 @@ function createStore() {
 	let dragInProgress = $state(false);
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastServerVersion = 0;
+	/** Last known server updated_at — sent as base_updated_at on PATCH. */
+	let serverUpdatedAt: string | null = null;
 
 	function withoutHistory<T>(fn: () => T): T {
 		suppressHistory = true;
@@ -232,8 +253,14 @@ function createStore() {
 	}
 
 	function applyServerScene(comp: ShotComposition) {
+		// Cancel pending autosave so a stale local payload cannot clobber agent writes.
+		if (saveTimer) {
+			clearTimeout(saveTimer);
+			saveTimer = null;
+		}
 		compositionId = comp.id;
 		title = comp.title;
+		serverUpdatedAt = comp.updated_at ?? serverUpdatedAt;
 		const scene = comp.scene ?? {};
 		objects = (scene.objects ?? []).map((o) => ({
 			...o,
@@ -245,9 +272,11 @@ function createStore() {
 		shotParams = normalizeShotParams(scene.shotParams);
 		if (scene.playback) playback = scene.playback;
 		cameraTrack = (scene.cameraTrack ?? []).map((k) => ({ ...k }));
+		gates = scene.gates ? { ...scene.gates } : {};
 		loaded = true;
 		history = [];
 		future = [];
+		lastServerVersion = Date.now();
 	}
 
 	function scheduleSave() {
@@ -261,11 +290,24 @@ function createStore() {
 		const payload = JSON.stringify(toSceneData());
 		lastServerVersion = Date.now();
 		try {
-			await fetch(`/api/shots/${compositionId}`, {
+			const resp = await fetch(`/api/shots/${compositionId}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ scene_json: payload }),
+				body: JSON.stringify({
+					scene_json: payload,
+					...(serverUpdatedAt ? { base_updated_at: serverUpdatedAt } : {}),
+				}),
 			});
+			if (resp.status === 409) {
+				// Stale vs agent write — reload authoritative scene.
+				const fresh = await fetch(`/api/shots/${compositionId}`);
+				if (fresh.ok) applyServerScene((await fresh.json()) as ShotComposition);
+				return;
+			}
+			if (resp.ok) {
+				const body = (await resp.json()) as ShotComposition;
+				if (body.updated_at) serverUpdatedAt = body.updated_at;
+			}
 		} catch {
 			/* offline — next edit retries */
 		}
@@ -278,15 +320,21 @@ function createStore() {
 			shotParams,
 			playback,
 			cameraTrack,
-		};
+			gates,
+		} as SceneData;
 	}
 
-	/** SSE: the agent mutated the scene server-side. Ignore our own echo. */
+	/** SSE: the agent mutated the scene server-side. Ignore our own PATCH echo. */
 	function handleShotUpdated(data: { shot_id?: number; reason?: string }) {
 		if (data.shot_id !== compositionId) return;
 		if (dragInProgress) return; // a gizmo drag wins; the refetch happens on dragstop
-		if (Date.now() - lastServerVersion < 1500) return; // our own autosave echo
 		if (compositionId === null) return;
+		const reason = data.reason ?? '';
+		// Our own PATCH publishes reason=patched — skip that echo. Always apply
+		// agent/tool reasons (object_*, gate_*, …) so remote edits land even
+		// when an autosave just ran.
+		if (reason === 'patched' || reason === 'created') return;
+		if (!reason && Date.now() - lastServerVersion < 1500) return;
 		void (async () => {
 			const resp = await fetch(`/api/shots/${compositionId}`);
 			if (!resp.ok) return;
@@ -340,6 +388,8 @@ function createStore() {
 		activeTool = 'move';
 		playback = { ...playback, playing: false, elapsed: 0 };
 		cameraTrack = [];
+		// Keep Brief/Cut gates — approvals survive wipe unless operator revises.
+		scheduleSave();
 	}
 
 	function selectObject(id: string) {
@@ -610,6 +660,21 @@ function createStore() {
 		cameraKeyframeRequest = { time: Math.min(Math.max(time, 0), playback.duration), nonce: Date.now() };
 	}
 
+	function setGates(next: BuildSceneGates) {
+		gates = {
+			...(next.brief ? { brief: { ...next.brief } } : gates.brief ? { brief: gates.brief } : {}),
+			...(next.cut ? { cut: { ...next.cut } } : gates.cut ? { cut: gates.cut } : {}),
+		};
+		scheduleSave();
+	}
+
+	function applyGatesSnapshot(next: BuildSceneGates) {
+		gates = {
+			...(next.brief ? { brief: { ...next.brief } } : {}),
+			...(next.cut ? { cut: { ...next.cut } } : {}),
+		};
+	}
+
 	function undo() {
 		if (history.length === 0) return;
 		const previous = history[history.length - 1];
@@ -674,6 +739,9 @@ function createStore() {
 		get cameraTrack() {
 			return cameraTrack;
 		},
+		get gates() {
+			return gates;
+		},
 		get cameraKeyframeRequest() {
 			return cameraKeyframeRequest;
 		},
@@ -700,6 +768,8 @@ function createStore() {
 		applyServerScene,
 		handleShotUpdated,
 		flushSave: saveScene,
+		/** Sole mutable graph snapshot for adapters (viewport sampling, export). */
+		toSceneData,
 		// actions
 		addObject,
 		deleteObject,
@@ -723,6 +793,8 @@ function createStore() {
 		removeCameraKeyframe,
 		removeCameraKeyframeAt,
 		requestCameraKeyframeAt,
+		setGates,
+		applyGatesSnapshot,
 		addKeyframe,
 		commitLiveKeyframe,
 		deleteKeyframe,

@@ -9,11 +9,15 @@ PNG renders posted as data URLs and saved under <assets_dir>/shots/ (served by
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
+import shutil
+import tempfile
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -65,6 +69,8 @@ class ShotPatch(BaseModel):
     title: str | None = None
     scene_json: str | None = None
     capture_request_json: str | None = None
+    # Optimistic concurrency: reject stale autosaves that would clobber agent writes.
+    base_updated_at: str | None = None
 
     @field_validator("title")
     @classmethod
@@ -85,6 +91,37 @@ class CaptureCreate(BaseModel):
         if v is not None and len(v) > 200:
             raise ValueError("Label too long (max 200 characters)")
         return v
+
+
+
+def scene_gates(scene: dict[str, Any]) -> dict[str, Any]:
+    """Public Brief/Cut gate view from scene_json.gates (Phase 5)."""
+    raw = scene.get("gates") if isinstance(scene, dict) else None
+    gates = raw if isinstance(raw, dict) else {}
+    out: dict[str, Any] = {"brief": None, "cut": None}
+    for name in ("brief", "cut"):
+        entry = gates.get(name)
+        if isinstance(entry, dict) and entry.get("approved_at"):
+            out[name] = {
+                "approved_at": entry.get("approved_at"),
+                "source": entry.get("source") or "agent",
+                "note": entry.get("note"),
+            }
+    return out
+
+
+def merge_preserved_gates(incoming: dict[str, Any], existing_raw: str | None) -> dict[str, Any]:
+    """If a client omits gates on PATCH, keep the server copy."""
+    if "gates" in incoming:
+        return incoming
+    try:
+        existing = json.loads(existing_raw or "{}")
+    except json.JSONDecodeError:
+        return incoming
+    if isinstance(existing, dict) and isinstance(existing.get("gates"), dict):
+        incoming = dict(incoming)
+        incoming["gates"] = existing["gates"]
+    return incoming
 
 
 def validate_scene_json(raw: str) -> dict[str, Any]:
@@ -134,12 +171,21 @@ def _composition_out(row: Any, *, include_scene: bool = False) -> dict[str, Any]
 
 
 def _capture_out(row: Any) -> dict[str, Any]:
+    meta = None
+    raw_meta = row["meta_json"] if "meta_json" in row.keys() else None
+    if raw_meta:
+        try:
+            meta = json.loads(raw_meta)
+        except (TypeError, json.JSONDecodeError):
+            meta = {"raw": raw_meta}
     return {
         "id": row["id"],
         "composition_id": row["composition_id"],
         "kind": row["kind"],
         "label": row["label"],
         "file_path": row["file_path"],
+        "meta_json": raw_meta,
+        "meta": meta,
         "created_at": row["created_at"],
     }
 
@@ -269,10 +315,20 @@ async def patch_shot(shot_id: int, payload: ShotPatch) -> dict[str, Any]:
         if payload.title is not None:
             sets.append("title = ?")
             params.append(payload.title.strip()[:300] or "Untitled composition")
+        if payload.base_updated_at is not None and payload.base_updated_at != row["updated_at"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "stale_scene",
+                    "message": "Composition changed on the server (agent or another tab). Reload and retry.",
+                    "updated_at": row["updated_at"],
+                },
+            )
         if payload.scene_json is not None:
-            validate_scene_json(payload.scene_json)
+            incoming = validate_scene_json(payload.scene_json)
+            incoming = merge_preserved_gates(incoming, row["scene_json"])
             sets.append("scene_json = ?")
-            params.append(payload.scene_json)
+            params.append(json.dumps(incoming))
         if payload.capture_request_json is not None:
             if payload.capture_request_json == "":
                 sets.append("capture_request_json = NULL")
@@ -371,9 +427,63 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str, str]:
     return raw, ext, kind
 
 
+async def _transcode_video_to_mp4(raw: bytes, src_ext: str) -> bytes:
+    """Normalize a MediaRecorder capture to H.264 MP4 via ffmpeg.
+
+    MediaRecorder's container/codec is browser-dependent: Chromium emits MP4,
+    Firefox emits WebM/VP8 (and older Safari a .mov). The Playground "From
+    Build Scene" picker feeds the video stage, so every non-MP4 capture is
+    re-encoded to libx264 + yuv420p + faststart here — a guaranteed MP4 no
+    matter which browser recorded the clip. Runs as an async subprocess so the
+    event loop stays free while ffmpeg encodes.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(
+            status_code=503,
+            detail="ffmpeg not found on PATH — install ffmpeg to export MP4 clips.",
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"in.{src_ext}"
+        dst = Path(tmp) / "out.mp4"
+        src.write_bytes(raw)
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-nostdin",
+            "-y",
+            "-i",
+            str(src),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-an",
+            str(dst),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            tail = err.decode("utf-8", "replace")[-800:]
+            raise HTTPException(
+                status_code=500,
+                detail=f"ffmpeg could not encode the capture as MP4: {tail}",
+            )
+        return dst.read_bytes()
+
+
 @router.post("/{shot_id}/captures")
 async def create_capture(shot_id: int, payload: CaptureCreate) -> dict[str, Any]:
     raw, ext, kind = _decode_data_url(payload.data_url)
+    if kind == "video" and ext != "mp4":
+        raw = await _transcode_video_to_mp4(raw, ext)
+        ext = "mp4"
     conn = get_db(settings.db_path)
     try:
         if not conn.execute(
@@ -432,3 +542,115 @@ async def delete_capture(shot_id: int, capture_id: int) -> dict[str, bool]:
     finally:
         conn.close()
     return {"ok": True}
+
+# ---- gates ----------------------------------------------------------------
+
+
+class GateRecordRequest(BaseModel):
+    """UI / agent-equivalent Brief or Cut approval (Phase 5 + P0 UX)."""
+
+    gate: str
+    note: str | None = None
+    source: str = "ui"
+
+    @field_validator("gate")
+    @classmethod
+    def _gate_name(cls, v: str) -> str:
+        g = (v or "").strip().lower()
+        if g not in ("brief", "cut"):
+            raise ValueError("gate must be 'brief' or 'cut'")
+        return g
+
+    @field_validator("source")
+    @classmethod
+    def _source(cls, v: str) -> str:
+        s = (v or "ui").strip()[:64] or "ui"
+        return s
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        n = str(v).strip()[:500]
+        return n or None
+
+
+def _load_composition_scene(conn: Any, shot_id: int) -> tuple[Any, dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM shot_composition WHERE id = ?", (shot_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Composition not found")
+    try:
+        scene = json.loads(row["scene_json"] or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"scene_json invalid: {exc}") from exc
+    if not isinstance(scene, dict):
+        raise HTTPException(status_code=422, detail="scene_json must be an object")
+    return row, scene
+
+
+def _insert_capture_file(
+    conn: Any,
+    shot_id: int,
+    *,
+    kind: str,
+    label: str | None,
+    file_path: Path,
+    meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    meta_json = json.dumps(meta) if meta is not None else None
+    cur = conn.execute(
+        """
+        INSERT INTO shot_capture (composition_id, kind, label, file_path, meta_json, created_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (shot_id, kind, label, str(file_path), meta_json),
+    )
+    conn.execute(
+        "UPDATE shot_composition SET capture_request_json = NULL, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (shot_id,),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM shot_capture WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+    return _capture_out(row)
+
+
+@router.post("/{shot_id}/gates")
+async def record_scene_gate(shot_id: int, payload: GateRecordRequest) -> dict[str, Any]:
+    """Record Brief or Cut approval from the Build Scene UI (source defaults to ui).
+
+    Mirrors agent ``record_build_scene_gate`` so a human at the keyboard can
+    Approve Cut without an ask_user turn.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        row, scene = _load_composition_scene(conn, shot_id)
+        gates = scene.get("gates") if isinstance(scene.get("gates"), dict) else {}
+        gates = dict(gates)
+        gates[payload.gate] = {
+            "approved_at": _now(),
+            "source": payload.source or "ui",
+            "note": payload.note,
+        }
+        scene["gates"] = gates
+        conn.execute(
+            "UPDATE shot_composition SET scene_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (json.dumps(scene), shot_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    await event_bus.publish(
+        "shot.updated",
+        {"shot_id": shot_id, "reason": f"gate_{payload.gate}"},
+    )
+    return {
+        "ok": True,
+        "gate": payload.gate,
+        "gates": scene_gates(scene),
+    }

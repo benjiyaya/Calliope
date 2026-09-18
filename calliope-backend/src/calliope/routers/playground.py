@@ -292,6 +292,14 @@ async def list_uploaded_media() -> list[dict[str, Any]]:
         if kind is None:
             continue
         stat = f.stat()
+        tags = None
+        sidecar = Path(str(f) + ".meta.json")
+        if sidecar.is_file():
+            try:
+                meta = json.loads(sidecar.read_text(encoding="utf-8"))
+                tags = meta.get("tags") if isinstance(meta, dict) else None
+            except (OSError, json.JSONDecodeError):
+                tags = None
         entries.append(
             (
                 stat.st_mtime,
@@ -301,6 +309,7 @@ async def list_uploaded_media() -> list[dict[str, Any]]:
                     "kind": kind,
                     "size": stat.st_size,
                     "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "tags": tags,
                 },
             )
         )

@@ -25,6 +25,7 @@
 		if (status === 'running') return t('job.status.running');
 		if (status === 'done') return t('job.status.done');
 		if (status === 'failed') return t('job.status.failed');
+		if (status === 'skipped') return t('agentPlan.skipped');
 		return t('queue.queued');
 	}
 </script>

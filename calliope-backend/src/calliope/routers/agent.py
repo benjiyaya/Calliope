@@ -369,9 +369,38 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
             answer_to=payload.answer_to,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Session mid-turn: the message becomes steering, not a rejection.
+        # The running loop drains steering/message events between steps and
+        # injects them into its request history — the user course-corrects
+        # without killing the run (Stop stays available for a hard stop).
+        # Answering a question card while running stays a 409: the answer
+        # belongs to the NEXT turn, which starts when this one ends.
+        if payload.answer_to is not None:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        steered = await runner.steer(
+            session_id,
+            content,
+            mentions=mentions or None,
+            attachments=attachments or None,
+        )
+        if steered is None:
+            # Lost the running race (turn ended between the two checks) —
+            # fall through to a normal turn so the message is never lost.
+            try:
+                user_msg = await runner.start_turn(
+                    session_id,
+                    content,
+                    mentions=mentions or None,
+                    attachments=attachments or None,
+                )
+            except RuntimeError as re_exc:
+                raise HTTPException(status_code=409, detail=str(re_exc)) from re_exc
+            except ValueError as ve:
+                raise HTTPException(status_code=404, detail=str(ve)) from ve
+            return {"ok": True, "message": user_msg}
+        return {"ok": True, "steered": True, "message": steered}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Session not found") from exc
     return {"ok": True, "message": user_msg}
 
 

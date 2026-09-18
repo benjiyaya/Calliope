@@ -39,6 +39,8 @@ GUARD_DESTRUCTIVE_REPLACE = "guard_destructive_replace"
 # contracts exporter reads guard codes from THIS module, so re-export here.
 from calliope.agent.harness.registry import (  # noqa: E402
     GUARD_SCENE_TOOL_SCOPE,
+    GUARD_NO_EXPORT_VIDEO_TOOL,
+    EXPORT_VIDEO_DENIED_NAMES,
     _scene_scoped,
 )
 

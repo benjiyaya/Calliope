@@ -22,6 +22,7 @@ from calliope.routers import (
     canvas,
     events,
     jobs,
+    library,
     playground,
     projects,
     scenes,
@@ -134,6 +135,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
     app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
     app.include_router(playground.router, prefix="/api/playground", tags=["playground"])
+    app.include_router(library.router, prefix="/api/library", tags=["library"])
     app.include_router(canvas.router, prefix="/api/canvas", tags=["canvas"])
     app.include_router(shots.router, prefix="/api/shots", tags=["shots"])
     app.include_router(agent.router, prefix="/api/agent", tags=["agent"])

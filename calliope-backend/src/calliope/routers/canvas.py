@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -18,6 +19,7 @@ from pydantic import BaseModel, field_validator
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
+from calliope.routers.playground import PLAYGROUND_STATUS
 
 router = APIRouter()
 
@@ -825,12 +827,98 @@ async def delete_edge(canvas_id: int, edge_id: int) -> dict[str, bool]:
     return {"ok": True}
 
 
+_PATH_REFERENCE_QUERIES = [
+    ("characters", "portrait_path"),
+    ("characters", "sheet_path"),
+    ("locations", "reference_image_path"),
+    ("items", "reference_image_path"),
+    ("scenes", "video_path"),
+    ("scenes", "env_image_path"),
+    ("clips", "clip_path"),
+    ("shot_capture", "file_path"),
+]
+
+
+def _norm_media_path(path: str) -> str:
+    return path.replace("\\", "/").replace("'", "''")
+
+
+def _project_path_referenced(conn, path: str) -> bool:
+    """True when any project-data row (entity images, scene/clip videos) points at path."""
+    norm = _norm_media_path(path)
+    for table, column in _PATH_REFERENCE_QUERIES:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE replace({column}, '\\', '/') = ? LIMIT 1",
+            (norm,),
+        ).fetchone()
+        if row:
+            return True
+    return False
+
+
+def _path_on_canvas(conn, path: str, *, exclude_canvas_node_id: int | None = None) -> bool:
+    """True when a live canvas node card points at path."""
+    sql = (
+        "SELECT 1 FROM canvas_node WHERE deleted = 0 "
+        "AND replace(artifact_path, '\\', '/') = ? AND id != ? LIMIT 1"
+    )
+    row = conn.execute(
+        sql, (_norm_media_path(path), exclude_canvas_node_id if exclude_canvas_node_id is not None else -1)
+    ).fetchone()
+    return row is not None
+
+
+def _path_is_referenced(conn, path: str, *, exclude_canvas_node_id: int | None = None) -> bool:
+    """True when project data OR another live canvas node references path.
+
+    Path comparisons normalize separators (\\ → /) so both spellings match.
+    """
+    return _project_path_referenced(conn, path) or _path_on_canvas(
+        conn, path, exclude_canvas_node_id=exclude_canvas_node_id
+    )
+
+
+def _playground_file_roots(conn) -> list[Path]:
+    """Folders whose files are safe to hard-delete: the uploads library and
+    the playground scratch project's output folders. Anything else under
+    assets_dir is project-owned data."""
+    roots = [Path(settings.assets_dir) / "uploads"]
+    row = conn.execute(
+        "SELECT id FROM projects WHERE status = ? ORDER BY id ASC LIMIT 1",
+        (PLAYGROUND_STATUS,),
+    ).fetchone()
+    if row:
+        scratch = Path(settings.assets_dir) / str(row["id"])
+        roots.extend([scratch / "image", scratch / "video"])
+    return roots
+
+
+def _file_deletable(conn, path: str, roots: list[Path]) -> tuple[bool, str | None]:
+    """Decide whether an artifact file may be unlinked. Returns (allowed, reason)."""
+    try:
+        target = Path(path).resolve()
+        target.relative_to(Path(settings.assets_dir).resolve())
+    except (ValueError, OSError):
+        return False, "outside_assets"
+    if not target.is_file():
+        return True, None  # already gone — nothing to do
+    resolved_roots = [r.resolve() for r in roots]
+    if not any(
+        target == root or root in target.parents for root in resolved_roots
+    ):
+        return False, "project_owned"
+    return True, None
+
+
 @router.delete("/{canvas_id}/nodes/{node_id}")
-async def delete_node(canvas_id: int, node_id: int) -> dict[str, bool]:
+async def delete_node(canvas_id: int, node_id: int) -> dict[str, Any]:
     conn = get_db(settings.db_path)
+    file_deleted = False
+    reason: str | None = None
     try:
         row = conn.execute(
-            "SELECT id, entity_type, entity_id FROM canvas_node WHERE id = ? AND canvas_id = ?",
+            "SELECT id, type, artifact_path, entity_type, entity_id FROM canvas_node "
+            "WHERE id = ? AND canvas_id = ?",
             (node_id, canvas_id),
         ).fetchone()
         if not row:
@@ -843,8 +931,38 @@ async def delete_node(canvas_id: int, node_id: int) -> dict[str, bool]:
                 (_now(), node_id),
             )
         else:
+            artifact_path = row["artifact_path"]
             conn.execute("DELETE FROM canvas_node WHERE id = ?", (node_id,))
+            if artifact_path:
+                norm_path = artifact_path.replace("\\", "/")
+                referenced = _path_is_referenced(
+                    conn, artifact_path, exclude_canvas_node_id=node_id
+                )
+                allowed, deny_reason = _file_deletable(
+                    conn, artifact_path, _playground_file_roots(conn)
+                )
+                if referenced:
+                    reason = "referenced"
+                elif not allowed:
+                    reason = deny_reason
+                else:
+                    target = Path(norm_path)
+                    try:
+                        target.unlink()
+                        file_deleted = True
+                    except OSError:
+                        # Already gone counts as deleted; a real failure (lock,
+                        # permission) leaves the file but still reports the card removal.
+                        file_deleted = not target.exists()
+                        if not file_deleted:
+                            reason = "unlink_failed"
+                    except Exception:
+                        reason = "unlink_failed"
         conn.commit()
     finally:
         conn.close()
-    return {"ok": True}
+    await event_bus.publish(
+        "canvas.updated",
+        {"canvas_id": canvas_id, "reason": "node_deleted", "node_id": node_id},
+    )
+    return {"ok": True, "file_deleted": file_deleted, "reason": reason}

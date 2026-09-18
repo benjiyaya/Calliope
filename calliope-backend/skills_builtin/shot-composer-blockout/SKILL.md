@@ -1,7 +1,7 @@
 ---
 name: shot-composer-blockout
 description: "Use when the user asks to build, pose, frame, or ANIMATE a 3D scene in Build Scene — characters, primitives, shot framing, keyframe motion, or exporting a blockout as a generation reference."
-version: 1.0.0
+version: 1.0.2
 license: MIT
 metadata:
   author: Calliope
@@ -56,6 +56,28 @@ Adapted from open-media's agent guide, with motion-recipe judgment folded in.
   with `update_keyframe`, not `set_transform`.
 - **Duration ≤ 60s.** `set_playback(duration)` caps there; keep keyframe times
   within the duration. Preview loops.
+
+
+## Camera, gates, and export
+
+Build Scene has a **single** surface: the Three.js viewport. It is the only
+preview and the only export/capture source — there is no separate render path
+and no Remotion.
+
+- **Camera framing is the user's job.** The viewport camera is keyed from the
+  TimelineStrip (`◉`). Do not drive the camera from `shot_*` tools, and do not
+  invent camera-beat tools — none exist.
+- **Object motion is your job.** Stage → `add_keyframe` recipes animate objects;
+  that motion is what the exported clip renders (the viewport samples every
+  tracked object at the playhead, so object keyframes appear in the export even
+  with a static camera).
+- **Brief/Cut gates.** Before mutating, `ask_user` the Brief; before export,
+  `ask_user` the Cut and `record_build_scene_gate(gate='cut')`. Soft maybe =
+  hard stop. The user clicks **Export video** — there is no `export_video`
+  tool.
+- **ComfyUI / workflows** only when the user explicitly asks image/video gen,
+  or for stills that need Comfy after Capture — never as part of the Build
+  Scene loop.
 
 ## When a capability seems missing
 

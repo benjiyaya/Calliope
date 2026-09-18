@@ -200,6 +200,62 @@ def test_derive_llm_history_user_turn_trim(client):
     assert session_log.derive_llm_history(events, max_user_turns=0) == []
 
 
+def test_derive_llm_history_char_budget_drops_oldest_whole_turns(client):
+    """max_chars drops oldest WHOLE turns — never mid-turn, and the latest
+    turn always survives even if alone it exceeds the budget."""
+    conn = get_db(settings.db_path)
+    sid = _mk_session(conn)
+    conn.close()
+
+    fat = "x" * 500
+    for t in range(1, 4):  # three turns, each ~1500+ chars
+        session_log.append_event(sid, session_log.USER_MESSAGE, {"content": f"q{t} {fat}"})
+        session_log.append_event(
+            sid,
+            session_log.ASSISTANT_MESSAGE,
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{t}",
+                        "type": "function",
+                        "function": {"name": "get_workspace", "arguments": "{}"},
+                    }
+                ],
+            },
+        )
+        session_log.append_event(
+            sid, session_log.TOOL_RESULT, {"call_id": f"c{t}", "tool_name": "get_workspace", "result": {"ok": True, "blob": fat}}
+        )
+        session_log.append_event(sid, session_log.ASSISTANT_MESSAGE, {"content": f"a{t}"})
+
+    events = session_log.read_events(sid)
+
+    # Budget fitting only the last two turns → q1 dropped whole.
+    two = session_log.derive_llm_history(events, max_chars=2600)
+    users = [m["content"] for m in two if m["role"] == "user"]
+    assert [u.split()[0] for u in users] == ["q2", "q3"]
+    # Pairs intact in what survives.
+    call_ids = {
+        tc["id"] for m in two if m["role"] == "assistant" for tc in m.get("tool_calls", [])
+    }
+    assert {m["tool_call_id"] for m in two if m["role"] == "tool"} == call_ids
+
+    # Budget fitting only the last turn → q1, q2 dropped.
+    one = session_log.derive_llm_history(events, max_chars=1300)
+    users = [m["content"] for m in one if m["role"] == "user"]
+    assert [u.split()[0] for u in users] == ["q3"]
+
+    # Budget smaller than any single turn → latest turn passes through
+    # (an empty request would be worse than an over-budget one).
+    keep = session_log.derive_llm_history(events, max_chars=10)
+    assert [m["content"].split()[0] for m in keep if m["role"] == "user"] == ["q3"]
+
+    # Budget disabled / oversized → unbounded.
+    full = session_log.derive_llm_history(events, max_chars=None)
+    assert len([m for m in full if m["role"] == "user"]) == 3
+
+
 def test_derive_llm_history_max_turns_exceeds_turn_count(client):
     """max_user_turns larger than the number of user turns must not raise.
 
@@ -581,6 +637,67 @@ def test_project_user_content_image_attachment_becomes_image_part(tmp_path, monk
         attachments=[{"path": str(outside), "name": "elsewhere.png", "kind": "image"}],
     )
     assert isinstance(degraded, str)
+
+
+def test_project_user_content_large_image_attachment_still_becomes_image_part(
+    tmp_path, monkeypatch
+):
+    """Regression: a >512 KB PNG must still project as an image_url part.
+
+    The 1x1-PNG test above passes through _downscale_image under the budget;
+    real screenshots exceed _MAX_VISION_IMAGE_BYTES and take the re-encode
+    branch, which used to swallow its own ImportError (no Pillow installed)
+    and silently degrade the attachment to a path-only text line — the model
+    then claimed it could only see a file path.
+    """
+    # Hand-build a valid ~1.2 MB truecolor PNG (no PIL in the test env).
+    # Seeded pseudo-random rows keep zlib from collapsing the file.
+    import random
+    import struct
+    import zlib
+
+    from calliope.config import settings as cfg
+
+    width, height = 512, 512
+    rng = random.Random(1234)
+    raw = b"".join(
+        b"\x00" + rng.randbytes(width * 3) for _ in range(height)
+    )
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", zlib.compress(raw))
+        + _chunk(b"IEND", b"")
+    )
+    assert len(png) > 512_000
+
+    img = tmp_path / "big-screenshot.png"
+    img.write_bytes(png)
+    monkeypatch.setattr(cfg, "assets_dir", tmp_path)
+
+    content = session_log.project_user_content(
+        "look at this stupid",
+        attachments=[{"path": str(img), "name": "file.png", "kind": "image"}],
+    )
+    assert isinstance(content, list), (
+        "large image degraded to a text-only path line — downscale failed "
+        "silently (is Pillow installed?)"
+    )
+    image_parts = [p for p in content if p.get("type") == "image_url"]
+    assert image_parts, "no image_url part projected for a large PNG"
+    url = image_parts[0]["image_url"]["url"]
+    assert url.startswith("data:image/"), url[:60]
+    assert len(url) <= 700_000  # ~512 KB budget + base64 overhead
 
 
 def test_project_user_content_document_attachment_becomes_script_text(tmp_path, monkeypatch):

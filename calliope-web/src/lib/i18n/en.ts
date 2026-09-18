@@ -28,6 +28,7 @@ export const en = {
 
 	// --- App shell / nav ---
 	'nav.canvas': 'AI Canvas',
+	'nav.library': 'Asset Library',
 	'nav.projects': 'Projects',
 	'nav.buildScene': 'Build Scene',
 	'nav.settings': 'Settings',
@@ -262,6 +263,11 @@ export const en = {
 	'canvas.noChatYet': 'No chat on this canvas yet',
 	'canvas.collapseChat': 'Collapse chat',
 	'canvas.expandChat': 'Expand chat',
+	'canvas.deleteBlocked': 'Project assets and running jobs can’t be deleted here — replace them from Project Assets',
+	'canvas.deleteFailed': 'Could not delete {count} card(s)',
+	'canvas.deletedWithFile': 'Deleted {count} card(s) and file(s) from the Asset Library',
+	'canvas.deletedCardOnly': 'Removed {count} card(s) — file kept (project data)',
+	'canvas.deletedMixed': 'Deleted {files} file(s), kept {kept} (project data)',
 	'global.somethingWentWrong': 'Something went wrong.',
 
 	// --- Memory ---
@@ -337,7 +343,12 @@ export const en = {
 	'agentComposer.sendTitle': 'Send message',
 	'agentComposer.stopTitle': 'Stop agent',
 	'agentComposer.working': 'Sending…',
+	'agentComposer.steer': 'Steer',
+	'agentComposer.steerTitle': 'Send a course correction while the agent works',
+	'agentComposer.steerPlaceholder': 'Steer the agent while it works…',
+	'agentChat.steering': 'Steering',
 	'agentPlan.planner': 'Plan',
+	'agentPlan.skipped': 'Skipped',
 	'agentTool.args': 'Arguments',
 	'agentTool.done': 'Done',
 	'agentTool.failed': 'Failed',
@@ -528,6 +539,7 @@ export const en = {
 	'buildScene.expandChat': 'Expand chat',
 	'buildScene.collapseChat': 'Collapse chat',
 	'buildScene.videoExported': 'Video exported',
+	'buildScene.legacyNeedsViewport': 'Viewport not ready for export',
 	'buildScene.videoExportFailed': 'Video export failed',
 	'buildScene.captureSaved': 'Capture saved',
 	'buildScene.createSceneFailed': 'Could not create scene',
@@ -927,6 +939,27 @@ export const en = {
 	'attach.projectFallback': 'Untitled project',
 	'attach.scene': 'Scene',
 
+	// --- Asset Library ---
+	'library.selectAll': 'Select all',
+	'library.deselectAll': 'Deselect all',
+	'library.itemCount': '{count} item(s)',
+	'library.deleteSelected': 'Delete ({count})',
+	'library.addToProject': 'Add to Project',
+	'library.filterLabel': 'Filter by kind',
+	'library.filterAll': 'All',
+	'library.filterImage': 'Images',
+	'library.filterVideo': 'Videos',
+	'library.loadMore': 'Load more ({count} remaining)',
+	'library.loadingMore': 'Loading…',
+	'library.confirmDelete': 'Delete {count} selected file(s) from the Asset Library? This cannot be undone.',
+	'library.deleted': 'Deleted {count} file(s)',
+	'library.deletedPartial': '{kept} file(s) kept — still referenced by project data',
+	'library.deleteFailed': 'Could not delete',
+	'library.emptyTitle': 'Nothing in the Asset Library',
+	'library.emptyBody': 'Images and videos that are not linked to a project land here — upload on a canvas or generate in a sandbox chat.',
+	'library.emptyFilterTitle': 'No {kind} in the library',
+	'library.emptyFilterBody': 'Nothing matches this filter yet — try All or generate something new.',
+
 	// --- Settings ---
 	'settings.loading': 'Loading settings',
 	'settings.allSaved': 'All changes saved',
@@ -1047,8 +1080,10 @@ export const en = {
 	'shot.keyframeObjAdd': 'Add keyframe for {name}',
 	'shot.keyframeObjDelete': 'Delete keyframe',
 	'shot.keyframeObjSelectFirst': 'Select an object first',
-	'shot.exportHint': 'Export the timeline as a video.',
+	'shot.exportHint': 'Need scene objects or at least 2 camera keyframes (captures not required).',
+	'shot.exportHintNeedBeats': 'Add scene objects or ≥2 camera keyframes to export. Captures are not required.',
 	'shot.exportTitle': 'Export timeline',
+		'shot.exportImage': 'Export image',
 	'shot.exportVideo': 'Export video',
 	'shot.viewportTools': 'Tools',
 	'shot.toolSelect': 'Select',
@@ -1071,7 +1106,6 @@ export const en = {
 	'shot.capture': 'Capture',
 	'shot.errBlob': 'Could not read the captured frame',
 	'shot.errRecorder': 'Could not start recorder',
-	'shot.errExportKeyframes': 'No keyframes to export',
 	'shot.errNoData': 'No scene data to export',
 };
 

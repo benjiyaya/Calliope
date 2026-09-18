@@ -11,7 +11,10 @@ import pytest
 
 from calliope.config import settings
 from calliope.db import get_db, migrate_db
-from calliope.agent.harness.registry import GUARD_SCENE_TOOL_SCOPE, ToolContext
+from calliope.agent.harness.registry import (
+    GUARD_SCENE_TOOL_SCOPE,
+    ToolContext,
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -190,3 +193,33 @@ def test_recover_orphaned_running_sessions(client):
             assert row["status"] == expected, sid
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Build Scene harness prompts (Video Scene Build guardrails)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_scene_system_prompt_bans_comfy_and_enforces_gates(client):
+    """origin=scene prompt must reinforce Build Scene policy in harness
+    (not only SKILL.md): shot_* only, no ComfyUI, Brief/Cut, recipes."""
+    from calliope.agent.harness import get_prompts
+
+    prompt = asyncio.run(get_prompts().assemble(_scene_ctx()))
+    assert "BUILD SCENE POLICY" in prompt
+    assert "Three.js viewport" in prompt
+    assert "ComfyUI" in prompt or "comfy_*" in prompt
+    assert "run_workflow" in prompt
+    assert "Brief" in prompt or "brief" in prompt
+    assert "Cut" in prompt or "cut" in prompt
+    assert "per-frame" in prompt or "recipes" in prompt.lower()
+    # Scene mode must not push sandbox Comfy generation paths
+    assert "GENERATING IN SANDBOX" not in prompt
+
+
+def test_chat_system_prompt_skips_build_scene_policy(client):
+    from calliope.agent.harness import get_prompts
+
+    chat_ctx = ToolContext(session_id=1, project_id=None, origin="chat")
+    prompt = asyncio.run(get_prompts().assemble(chat_ctx))
+    assert "BUILD SCENE POLICY" not in prompt

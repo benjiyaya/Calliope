@@ -102,6 +102,94 @@ CAPTURE_POLL_TIMEOUT_S = 10.0
 CAPTURE_POLL_INTERVAL_S = 0.5
 
 
+# ---- Build Scene human gates (Brief / Cut) — Phase 5 --------------------
+# Persisted on scene_json.gates so they ride shot.updated SSE with the graph.
+# shotStore round-trips `gates`; PATCH merges gates if a client omits them.
+
+_GATE_NAMES = ("brief", "cut")
+
+_BRIEF_SOFT_WARNING = (
+    "brief_gate: Brief is not locked. Call ask_user with question "
+    "'Lock the Build Scene brief?' and options ['Brief locked', 'Revise brief'] "
+    "(lead with 'Nothing mutates until this is locked.'), then "
+    "record_build_scene_gate(gate='brief') before treating edits as approved."
+)
+
+_BRIEF_SOFT_INSTRUCTION = (
+    "Stop and obtain Brief via ask_user + record_build_scene_gate(gate='brief') "
+    "before continuing Build Scene / shot-composer-blockout. Soft 'maybe' = hard "
+    "stop. Do not call ComfyUI/workflows from this surface; export only after Cut."
+)
+
+_MUTATE_TOOLS_SOFT_BRIEF = frozenset({
+    "add_object",
+    "delete_object",
+    "rename_object",
+    "set_transform",
+    "reset_transform",
+    "clear_scene",
+    "set_joint",
+    "set_posture",
+    "apply_pose",
+    "reset_pose",
+    "set_shot",
+    "add_keyframe",
+    "update_keyframe",
+    "delete_keyframe",
+    "move_keyframe_time",
+    "set_playback",
+})
+
+
+def _gates_of(scene: dict[str, Any]) -> dict[str, Any]:
+    raw = scene.get("gates")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _public_gates(scene: dict[str, Any]) -> dict[str, Any]:
+    """Normalize gates for tool / API responses."""
+    out: dict[str, Any] = {"brief": None, "cut": None}
+    for name in _GATE_NAMES:
+        entry = _gates_of(scene).get(name)
+        if isinstance(entry, dict) and entry.get("approved_at"):
+            out[name] = {
+                "approved_at": entry.get("approved_at"),
+                "source": entry.get("source") or "agent",
+                "note": entry.get("note"),
+            }
+    return out
+
+
+def _gate_approved(scene: dict[str, Any], gate: str) -> bool:
+    entry = _gates_of(scene).get(gate)
+    return isinstance(entry, dict) and bool(entry.get("approved_at"))
+
+
+def _brief_soft_fields(scene: dict[str, Any]) -> dict[str, Any]:
+    if _gate_approved(scene, "brief"):
+        return {}
+    return {
+        "warning": _BRIEF_SOFT_WARNING,
+        "instruction": _BRIEF_SOFT_INSTRUCTION,
+        "gates": _public_gates(scene),
+    }
+
+
+def _wrap_brief_soft(executor):  # type: ignore[no-untyped-def]
+    """Soft-warn mutating shot_* tools when Brief is not recorded."""
+
+    async def wrapped(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+        _sid, scene_before = _load_scene(ctx)
+        result = await executor(ctx, args)
+        if isinstance(result, dict) and result.get("ok"):
+            extra = _brief_soft_fields(scene_before)
+            if extra:
+                result = {**result, **extra}
+        return result
+
+    return wrapped
+
+
 def _scene_of(comp: dict[str, Any]) -> dict[str, Any]:
     try:
         scene = json.loads(comp.get("scene_json") or "{}")
@@ -244,6 +332,7 @@ async def t_get_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         objects=[_summarize_object(o) for o in scene.get("objects", []) if isinstance(o, dict)],
         shotParams=scene.get("shotParams"),
         playback=scene.get("playback"),
+        gates=_public_gates(scene),
     )
 
 
@@ -365,10 +454,15 @@ async def t_select_object(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
 
 
 async def t_clear_scene(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    shot_id, _scene = _load_scene(ctx)
-    comp_id = _save_scene(ctx, {"objects": []})
+    shot_id, scene = _load_scene(ctx)
+    # Keep Brief/Cut approvals across wipe — gates live beside objects on scene_json.
+    next_scene: dict[str, Any] = {"objects": []}
+    gates = scene.get("gates")
+    if isinstance(gates, dict):
+        next_scene["gates"] = gates
+    comp_id = _save_scene(ctx, next_scene)
     await _publish_updated(comp_id, "cleared")
-    return _ok(comp_id)
+    return _ok(comp_id, gates=_public_gates(next_scene))
 
 
 # ── keyframes / motion (port of open-media's mcpBridge keyframe commands) ──
@@ -662,11 +756,12 @@ async def t_list_shot_presets(ctx: ToolContext, args: dict[str, Any]) -> dict[st
 
 
 async def t_request_capture(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    """Stamp a capture request, then poll for the UI's posted capture row.
+    """Capture a still via the UI Three.js viewport.
 
-    The browser renders the PNG (it owns the WebGL canvas) and POSTs it to
-    /api/shots/{id}/captures, which clears capture_request_json — that clear
-    is the completion signal.
+    Stamps capture_request_json and polls for the viewport to POST the PNG
+    (the Build Scene page renders the canvas and uploads the data URL). This is
+    the only capture path — stills come from the 3D editor, not a headless
+    renderer.
     """
     from calliope.routers.shots import get_or_create_for_session
 
@@ -675,6 +770,12 @@ async def t_request_capture(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
     try:
         comp = get_or_create_for_session(conn, ctx.session_id)
         comp_id = int(comp["id"])
+    finally:
+        conn.close()
+
+    # --- UI poll path -----------------------------------------------------
+    conn = _db()
+    try:
         conn.execute(
             "UPDATE shot_composition SET capture_request_json = ?, "
             "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -705,16 +806,54 @@ async def t_request_capture(ctx: ToolContext, args: dict[str, Any]) -> dict[str,
                     label=label,
                     capture_id=cap["id"] if cap else None,
                     file_path=cap["file_path"] if cap else None,
-                    note="Capture saved. Reference it in generation by this path.",
+                    note="Capture saved via the 3D editor viewport. Reference it "
+                    "in generation by this path.",
                 )
         finally:
             conn.close()
-    return _ok(
-        comp_id,
-        label=label,
-        note="Capture request sent — the page will save the PNG shortly "
-        "(it may be closed right now).",
-    )
+    return {
+        "ok": False,
+        "shot_id": comp_id,
+        "capture_pending": True,
+        "error": (
+            "Capture request timed out after "
+            f"{CAPTURE_POLL_TIMEOUT_S:.0f}s — the Build Scene page did not "
+            "save the PNG (it is probably closed). Tell the user to open "
+            "the Build Scene page and re-run capture; do NOT reference a "
+            "file path."
+        ),
+    }
+
+
+
+
+async def t_record_build_scene_gate(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Record Brief or Cut approval after ask_user affirmation (shot-composer-blockout)."""
+    from datetime import datetime, timezone
+
+    gate = str(args.get("gate") or "").strip().lower()
+    if gate not in _GATE_NAMES:
+        return {"ok": False, "error": "gate must be 'brief' or 'cut'"}
+    note = args.get("note")
+    if note is not None:
+        note = str(note).strip()[:500] or None
+
+    shot_id, scene = _load_scene(ctx)
+    gates = dict(_gates_of(scene))
+    gates[gate] = {
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "source": "agent",
+        "note": note,
+    }
+    scene["gates"] = gates
+    comp_id = _save_scene(ctx, scene)
+    await _publish_updated(comp_id, f"gate_{gate}")
+    return _ok(comp_id, gate=gate, gates=_public_gates(scene))
+
+
+async def t_get_build_scene_gates(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    shot_id, scene = _load_scene(ctx)
+    return _ok(shot_id, gates=_public_gates(scene))
 
 
 # ---- registration -----------------------------------------------------------
@@ -887,11 +1026,14 @@ def register(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="set_joint",
             description=(
-                "Pose one joint of a character (degrees). Joints: torso, head, "
-                "l_leg/r_leg, l_knee/r_knee (1 bend value), l_ankle/r_ankle, "
-                "l_arm/r_arm (shoulders), l_elbow/r_elbow (1 bend), "
-                "l_wrist/r_wrist, l_finger_0..4 / r_finger_0..4 (7 values). "
-                "Most joints take 3 euler values [x, y, z]."
+                "Pose one joint of a character (degrees) for pose/gizmo editing "
+                "or sparse motion-recipe keys — NOT per-frame puppeting in "
+                "Build Scene. Joints: torso, head, l_leg/r_leg, "
+                "l_knee/r_knee (1 bend), l_ankle/r_ankle, l_arm/r_arm, "
+                "l_elbow/r_elbow (1 bend), l_wrist/r_wrist, "
+                "l_finger_0..4 / r_finger_0..4 (7 values). Most joints take "
+                "3 euler values [x, y, z]. Prefer apply_pose + recipes over "
+                "frame-by-frame set_joint loops."
             ),
             parameters={
                 "type": "object",
@@ -1019,7 +1161,9 @@ def register(registry: ToolRegistry) -> None:
             description=(
                 "Render the current viewport as a PNG reference (for ControlNet "
                 "or prompt reference). The Build Scene page saves it; returns "
-                "the file path to reference in generation."
+                "the file path to reference in generation. FAILS if the Build "
+                "Scene page is not open — ask the user to open it before "
+                "calling, and never reference a file path on failure."
             ),
             parameters={
                 "type": "object",
@@ -1148,3 +1292,53 @@ def register(registry: ToolRegistry) -> None:
             blind_only=True,
         )
     )
+
+    registry.register(
+        ToolDefinition(
+            name="record_build_scene_gate",
+            description=(
+                "Record Brief or Cut approval for Build Scene (shot-composer-blockout). "
+                "Call ONLY after ask_user affirmation — Brief before mutates, "
+                "Cut before export. Soft 'maybe' is not approval."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "gate": {
+                        "type": "string",
+                        "enum": ["brief", "cut"],
+                        "description": "Which human gate was approved",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional short note (e.g. brief summary)",
+                    },
+                },
+                "required": ["gate"],
+            },
+            executor=t_record_build_scene_gate,
+            category="shot",
+            requires_project=False,
+            blind_only=True,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="get_build_scene_gates",
+            description=(
+                "Return Brief/Cut gate state for the session composition "
+                "(also included on get_scene as `gates`)."
+            ),
+            parameters={"type": "object", "properties": {}},
+            executor=t_get_build_scene_gates,
+            category="shot",
+            requires_project=False,
+            blind_only=True,
+        )
+    )
+
+    # Soft Brief warning on mutators (export hard-enforces Cut separately).
+    for _name in _MUTATE_TOOLS_SOFT_BRIEF:
+        _defn = registry.get(_name)
+        if _defn is not None:
+            _defn.executor = _wrap_brief_soft(_defn.executor)

@@ -301,6 +301,67 @@ class AgentRunner:
         await self._publish_session(session_id)
         return user_msg
 
+    async def steer(
+        self,
+        session_id: int,
+        content: str,
+        *,
+        mentions: list[dict[str, Any]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist + publish a mid-run steering message. No new turn.
+
+        Only valid while a turn is running (the router falls back to this when
+        POST /messages hits the running-session 409). The event is
+        `steering/message`, NOT user/message — policy derives render and
+        destructive approval from the latest user/message, so steering must
+        never silently grant or void permissions. The running loop drains
+        these between steps and injects them into its in-flight request
+        history. Returns the published chat row, or None when the session is
+        not running (caller should start a normal turn instead).
+        """
+        if not self.is_running(session_id):
+            return None
+
+        extra: dict[str, Any] = {}
+        if mentions:
+            extra["mentions"] = mentions
+        if attachments:
+            extra["attachments"] = attachments
+        event = session_log.append_event(
+            session_id,
+            session_log.STEERING_MESSAGE,
+            {"content": content, **extra},
+        )
+        # Mirror into agent_messages so legacy readers see the row; the event
+        # log stays authoritative (role user, status steering).
+        conn = self._db()
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO agent_messages
+                (session_id, role, content, agent_name, status)
+                VALUES (?, 'user', ?, NULL, 'steering')
+                """,
+                (session_id, content or ""),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM agent_messages WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+        finally:
+            conn.close()
+        from calliope.db import row_to_dict
+
+        out = row_to_dict(row)
+        out["seq"] = event.seq
+        if mentions:
+            out["mentions"] = mentions
+        if attachments:
+            out["attachments"] = attachments
+        await event_bus.publish("agent.message", {"message": out})
+        return out
+
     async def _run_session(self, session_id: int) -> None:
         conn = self._db()
         try:
@@ -312,7 +373,11 @@ class AgentRunner:
         finally:
             conn.close()
 
-        ctx = ToolContext(session_id=session_id, project_id=project_id, origin=origin)
+        ctx = ToolContext(
+            session_id=session_id,
+            project_id=project_id,
+            origin=origin,
+        )
         try:
             final = await orchestrate(
                 ctx,
