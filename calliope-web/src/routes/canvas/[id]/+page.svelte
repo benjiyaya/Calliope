@@ -486,8 +486,14 @@
 		sessionScopeHandled = true;
 		const paramSession = page.url.searchParams.get('session');
 		const pid = Number(paramSession);
-		if (paramSession != null && Number.isFinite(pid)) {
-			activeId = sessions.some((s) => s.id === pid) ? pid : null;
+		if (paramSession != null && Number.isFinite(pid) && pid > 0) {
+			// Trust the deep-link param even when the (possibly cached) sessions
+			// list doesn't contain it yet: /agents?project=&task= hands us a
+			// session created milliseconds ago. Validating against a stale list
+			// nulled activeId and orphaned the chat — the next Send then created
+			// a DUPLICATE session (empty 905 vs working 906 signature). A truly
+			// gone session just 404s in the session query, which is recoverable.
+			activeId = pid;
 			// Deep-link handoff (/agents?project=&task=) pre-fills the composer once.
 			const prefill = sessionStorage.getItem('calliope.canvas.composerPrefill');
 			if (prefill) {

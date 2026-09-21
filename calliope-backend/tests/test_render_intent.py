@@ -36,9 +36,18 @@ from calliope.agent.harness.policy import is_render_request
         # Plain positive cues
         ("render all scenes now", True),
         ("yes, generate the images", True),
+        # Clip/shot are render-unit nouns (session 908: "shot clips" left the
+        # video sub-agent's enqueue tools hidden → "generation tool is not
+        # exposed")
+        ("Break the beats into the 8-scene script + shot clips", True),
+        ("break scene 3 into clips", True),
+        ("render the shots for scene 2", True),
         # Non-render text must not flip positive
         ("generate the story", False),
         ("provide the lyrics", False),
+        # 'clip' as a noun of speech ("clip the beard") is not a cue — but the
+        # verb is rare in film asks; keep the broad match and rely on
+        # clause-scoped negation for safety.
     ],
 )
 def test_render_intent(text: str, want: bool):

@@ -41,8 +41,13 @@ _NEGATE_RE = re.compile(
 # Image/video *generation* intent. `video` matches as a SUBSTRING so model /
 # compound names keep signaling intent ("text2video", "fastvideoH3_t2v-API");
 # everything else is \b-anchored (`vid` must not match "provide").
+# clip/shot/storyboard are RENDER-UNIT nouns in Calliope's vocabulary (clips
+# are the render units) — "break the beats into the script + shot clips" is a
+# generation order, not a text edit (session 908: the video sub-agent's tools
+# stayed hidden and it reported "the generation tool is not exposed").
 _RENDER_REQUEST_RE = re.compile(
-    r"(video|\b(?:render|image|portrait|sheet|artwork|visual|thumbnail|vid)\w*|"
+    r"(video|\b(?:render|image|portrait|sheet|artwork|visual|thumbnail|vid|"
+    r"clip|shot|storyboard)\w*|"
     r"txt2\w+|text2\w+|img2\w+|photo2\w+)",
     re.IGNORECASE,
 )

@@ -119,6 +119,15 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "add_beat",
         "update_beat",
         "delete_beat",
+        # Story tasks may structure beats INTO scenes — the planner schedules
+        # "break the beats into an 8-scene structure" as a story task, and a
+        # story agent without scene tools dead-ends with "add_scene is not
+        # available to this role" (session 908: scenes never got created, the
+        # script role then found "no scenes in the project").
+        "list_scenes",
+        "add_scene",
+        "update_scene",
+        "delete_scene",
         "list_workflows",
         "ask_user",
     ],
@@ -174,6 +183,7 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "wait_for_jobs",
         "comfy_server_info",
         "ask_user",
+        "post_artifact_to_canvas",
     ],
 }
 
@@ -193,7 +203,9 @@ Respond with ONLY a JSON object:
 
 Rules:
 - The standard EDIT pipeline (story → script → add/update assets text) is swarm work: one task per role, in that order.
+- ROLE BOUNDARIES: the story role owns BEATS (beats, characters, locations via generate_story/add_beat) — it cannot create scenes. The script role owns SCENES (add_scene, generate_script, break_into_shots). A "turn the story into N scenes" plan is a SCRIPT task; never schedule add_scene under the story role (session 908: a story task told to add_scene reported "tool not available to this role" and the whole build stalled).
 - Image/video GENERATION is human-in-the-loop, but the user's EXPLICIT choices grant permission: tagging a workflow (@mention), asking to "generate/render/create an image", or confirming an offer all count. When the user tagged a workflow AND named entities (characters/locations/scenes), schedule a single assets task whose goal says: run_workflow with the tagged workflow_id + per-entity prompts (character_ids=[…] for multiple characters), wait_for_jobs, then post_artifact_to_canvas for each output.
+- When ANY task involves generating videos/clips (enqueue_video_jobs / run_workflow for clips), the video role's tools are visible only if the user's message carries render intent — phrase that task's goal so the sub-agent first calls ask_user to confirm scope when unsure, rather than reporting "the generation tool is not exposed". Never schedule a render task and a text-only pass of the same scope.
 - For text-only edits (add/update characters, locations, items, scenes, story, script) with NO generation ask, schedule the edit task and DO NOT schedule render tasks.
 - Film clips: video sub-agent must enqueue_video_jobs with orders (#N on Video) or scene_ids from list_scenes — ONLY the clips the user named. Never dump every scene_id. Never add_scene to attach a generated mp4. Orphan jobs (scene_id null) do not show on the Video timeline.
 - A tagged workflow ([Calliope context] with workflow_id=) with entities named is a generation request: one assets task covers the text updates AND the render (the assets role has run_workflow/enqueue_asset_jobs). Never end a turn saying you lack enqueue access — the assets sub-agent has it.
@@ -204,12 +216,31 @@ Rules:
 
 
 def _scoped_payload(ctx: ToolContext, allowed: list[str]) -> list[dict[str, Any]]:
+    """The sub-agent's tool payload.
+
+    Deliberately bypasses `_visible`'s render-approval clause: sub-agents with
+    enqueue/run tools in their role MUST see them, or a planner-scheduled
+    render task dead-ends ("the generation tool is not exposed", session 908)
+    with no path to ask. Permission is enforced at execute time by the
+    `_render_approval_guard` denial, which teaches ask_user — a visible,
+    guard-denied tool is recoverable; a hidden one is a wall. Everything else
+    (requires_project / blind_only / scene scope) still filters here.
+    """
     registry = get_registry()
     out: list[dict[str, Any]] = []
     for n in allowed:
         t = registry.get(n)
-        if t is None or not registry._visible(t, ctx):
+        if t is None:
             continue
+        if t.requires_project and ctx.project_id is None:
+            continue
+        if t.blind_only and ctx.project_id is not None:
+            continue
+        if ctx.origin == "scene":
+            from calliope.agent.harness.registry import _scene_scoped
+
+            if not _scene_scoped(t):
+                continue
         out.append(
             {
                 "type": "function",
@@ -580,12 +611,15 @@ async def _run_sub_agent(
         "summary when done — no tool call.\n"
         "Image/video generation (enqueue_asset_jobs / enqueue_video_jobs / "
         "run_workflow) is human-in-the-loop: only call it when the user "
-        "explicitly asked to generate. A workflow_id= appendix is not "
-        "permission. There is no MCP run_workflow. Film clips: "
-        "enqueue_video_jobs with orders (Video #N) or scene_ids from "
-        "list_scenes — only the clips they named, never the whole timeline. "
-        "Never add_scene to attach an mp4. For text-only edits, "
-        "do the edit and stop."
+        "explicitly asked to generate. If the guard denies the call "
+        "(guard_render_approval), do NOT give up and do NOT claim the tool "
+        "is missing — it is available but gated. Call ask_user to confirm "
+        "generation with the user; their affirmative answer unlocks the "
+        "retry. A workflow_id= appendix is not permission. There is no MCP "
+        "run_workflow. Film clips: enqueue_video_jobs with orders (Video #N) "
+        "or scene_ids from list_scenes — only the clips they named, never "
+        "the whole timeline. Never add_scene to attach an mp4. For "
+        "text-only edits, do the edit and stop."
     )
     hardening = hardening_text()
     if hardening:

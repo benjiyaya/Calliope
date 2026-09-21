@@ -399,6 +399,24 @@ async def create_canvas(payload: CanvasCreate) -> dict[str, Any]:
 async def get_canvas(canvas_id: int) -> dict[str, Any]:
     conn = get_db(settings.db_path)
     try:
+        # Auto-seed: entity cards for content created AFTER the canvas was
+        # opened (agent drafted characters/locations/scenes mid-session) must
+        # appear on refetch, not only on ensure/re-open. Idempotent and
+        # tombstone-respecting — deleted cards never resurrect. Only project
+        # canvases seed (sandbox boards have no entities to seed).
+        row = conn.execute("SELECT * FROM canvas WHERE id = ?", (canvas_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Canvas not found")
+        if row["project_id"] is not None:
+            if seed_entities(conn, canvas_id, int(row["project_id"])) > 0:
+                conn.execute(
+                    "UPDATE canvas SET updated_at = ? WHERE id = ?", (_now(), canvas_id)
+                )
+                conn.commit()
+                await event_bus.publish(
+                    "canvas.updated",
+                    {"canvas_id": canvas_id, "reason": "entities_seeded"},
+                )
         return _load_graph(conn, canvas_id)
     finally:
         conn.close()

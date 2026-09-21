@@ -2,6 +2,7 @@
 
 Dated notes for GitHub releases. Newest first.
 
+- [2026-09-22 swarm render/scene fixes](./2026-09-22-swarm-render-scene-fixes.md) — video-role render tools reachable (ask_user recovery); story role gains scene tools; deep-link sessions no longer orphan; canvas auto-seeds new entities (1.5.5)
 - [2026-09-19 steering + Asset Library + hardening](./2026-09-19-steering-library-hardening.md) — mid-run steering; Asset Library page (filter + lazy loading); canvas delete that deletes; agent-loop hardening batch; Build Scene Brief/Cut gates (1.5.4)
 - [2026-09-16 SSR storage fix](./2026-09-16-ssr-storage-fix.md) — fix the `localStorage.getItem is not a function` crash on Node 22+; new `npm test` guard (1.5.3)
 - [2026-09-16 multilingual UI](./2026-09-16-multilingual-ui.md) — seven-language UI (en/zh/es/fr/de/ja/ko); header language switcher; correct backend version; local start scripts (1.5.2)
