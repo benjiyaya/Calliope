@@ -3,11 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ProjectCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    """`name` is accepted as an alias for `title` — LLM agents and external API
+    clients very often emit `name` for the required project title field and get
+    an opaque 422 otherwise."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str = Field(..., min_length=1, max_length=200, validation_alias=AliasChoices("title", "name"))
     idea: str | None = None
     genre: str | None = None
     tone: str | None = None
@@ -15,7 +21,11 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    title: str | None = Field(None, min_length=1, max_length=200)
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = Field(
+        None, min_length=1, max_length=200, validation_alias=AliasChoices("title", "name")
+    )
     idea: str | None = None
     genre: str | None = None
     tone: str | None = None

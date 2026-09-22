@@ -134,6 +134,22 @@ def test_update_project_cover(client):
     assert r.json()["cover_path"] is None
 
 
+def test_create_project_accepts_name_alias(client):
+    """LLM agents and external API clients often emit `name` for the required
+    title field — the schema aliases it instead of returning an opaque 422."""
+    r = client.post("/api/projects", json={"name": "Aliased", "idea": "idea"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Aliased"
+
+
+def test_update_project_accepts_name_alias(client):
+    r = client.post("/api/projects", json={"title": "Old"})
+    pid = r.json()["id"]
+    r = client.patch(f"/api/projects/{pid}", json={"name": "Renamed"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Renamed"
+
+
 def test_delete_project(client):
     r = client.post("/api/projects", json={"title": "Delete"})
     pid = r.json()["id"]

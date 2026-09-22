@@ -315,6 +315,13 @@ _TITLE_MAX = 200  # mirrors ProjectCreate/ProjectUpdate schema bounds
 
 async def t_create_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     title = args.get("title")
+    # LLM agents frequently emit `name` for the title field — mirror the REST
+    # schema's AliasChoices("title", "name") so the call succeeds instead of
+    # dead-ending on "title is required".
+    if not isinstance(title, str) or not title.strip():
+        alt = args.get("name")
+        if isinstance(alt, str) and alt.strip():
+            title = alt
     if not isinstance(title, str) or not title.strip():
         # str(None) would create a project literally named "None".
         return {"ok": False, "error": "title is required (non-empty string)"}
@@ -363,6 +370,10 @@ async def t_update_project(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
         # reach SQL as identifiers.
         allowed = ("title", "idea", "genre", "tone", "target_duration")
         data = {k: v for k, v in args.items() if k in allowed and v is not None}
+        if "title" not in data:
+            alt = args.get("name")
+            if isinstance(alt, str) and alt.strip():
+                data["title"] = alt
         if "title" in data and len(str(data["title"])) > _TITLE_MAX:
             return {
                 "ok": False,

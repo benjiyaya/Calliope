@@ -960,6 +960,17 @@ def test_blind_only_tool_denied_when_linked(client):
     assert "sandbox" in out["error"]
 
 
+def test_create_project_accepts_name_alias(client):
+    """LLM agents frequently emit `name` for the title field — the tool falls
+    back to it (mirrors ProjectCreate's AliasChoices("title", "name")) instead
+    of dead-ending on 'title is required'."""
+    registry, _ = build_harness()
+    ctx = ToolContext(session_id=_mk_session(), project_id=None)
+    out = asyncio.run(registry.execute(ctx, "create_project", {"name": "Named", "idea": "x"}))
+    assert out["ok"] is True
+    assert out["project"]["title"] == "Named"
+
+
 def test_create_project_rejects_null_title(client):
     """A null/empty title must error instead of creating a 'None' project."""
     registry, _ = build_harness()
