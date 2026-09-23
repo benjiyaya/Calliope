@@ -5,7 +5,8 @@ Three reported issues fixed — [#66](https://github.com/benjiyaya/Calliope/issu
 [#64](https://github.com/benjiyaya/Calliope/issues/64) (scripts ignored the
 story's target length), and
 [#67](https://github.com/benjiyaya/Calliope/issues/67) (a directory path
-passed as a video input crashed ComfyUI with `Errno 21`).
+passed as a video input crashed ComfyUI with `Errno 21`) — plus two agent-loop
+bugs found in the Sep 24 loop evaluation.
 
 ## #66 — Workflow choice is per clip
 
@@ -53,10 +54,32 @@ opaque `ValueError: [Errno 21] Is a directory`.
   fails the tool call with correction guidance instead of creating a doomed
   job.
 
+## Agent loop — attachments crash and dangling tool calls
+
+Two crashes found by the Sep 24 agent-loop evaluation, folded into this line:
+
+- **Attached images/videos/documents crashed every linked-session turn.**
+  Multimodal user content projects as an OpenAI parts *list*, but the
+  orchestrator read that list as the turn's goal and called `.strip()` on it
+  (`AttributeError: 'list' object has no attribute 'strip'`) — any
+  project-linked session turn with an attachment failed 100% of the time.
+  A new `text_of_content()` helper extracts the text part, and both the
+  single-loop and swarm (planner) paths now survive attachments.
+- **`ask_user` mid tool-batch left dangling tool calls.** When the model
+  issued `ask_user` alongside other tool calls, the rest of the batch never
+  executed but also never received results — an assistant `tool_calls`
+  message with missing results is an invalid request sequence that strict
+  OpenAI-compatible servers reject on the next turn. The pause path now
+  synthesizes skipped tool results for the un-executed ids before ending
+  the turn.
+
 ## Testing
 
 - `tests/test_script_chunking.py` — per-scene budget present in both prompt
   builders; oversized-script durations shrink toward the target.
 - `tests/test_video_continue.py` — directory and missing-file rejection,
   bare-name passthrough, existing-file upload still works.
-- Full backend suite: 534 passed; `svelte-check`: 0 errors.
+- `tests/test_agent_harness.py` — multimodal goal (single + swarm paths),
+  `text_of_content` shapes, mid-batch `ask_user` closure; planner stubbed so
+  the tests never make a real LLM call.
+- Full backend suite: 538 passed; `svelte-check`: 0 errors.

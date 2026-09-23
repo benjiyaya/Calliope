@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -737,3 +738,253 @@ def test_sub_agent_failure_names_empty_str_exception(client):
     ]
     assert fails, "no failure message recorded"
     assert "ReadError" in fails[0]["content"]
+
+
+def test_multimodal_goal_does_not_crash_orchestrate(client, tmp_path):
+    """A linked-session turn whose user message carries an image attachment
+    projects content as an OpenAI parts LIST. orchestrate must extract the
+    text part instead of calling string methods on the list (the crash that
+    failed EVERY linked-session attachment turn with
+    AttributeError: 'list' object has no attribute 'strip')."""
+    r = client.post("/api/agent/sessions", json={"title": "mm-goal"})
+    sid = r.json()["id"]
+    pid = _make_project(client)
+
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    # A readable image under assets_dir is required for the parts-list
+    # projection (unresolvable attachments degrade to the text appendix).
+    import struct
+    import zlib
+
+    assets = Path(settings.assets_dir)
+    assets.mkdir(parents=True, exist_ok=True)
+    png = assets / "ref.png"
+    sig = b"\x89PNG\r\n\x1a\n"
+
+    def _chunk(tag, data):
+        return (
+            struct.pack(">I", len(data)) + tag + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    png.write_bytes(
+        sig + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+        + _chunk(b"IEND", b"")
+    )
+
+    session_log.append_event(
+        sid,
+        session_log.USER_MESSAGE,
+        {
+            "content": "update the character to match this reference",
+            "attachments": [{"kind": "image", "path": str(png), "name": "ref.png"}],
+        },
+    )
+
+    goal_seen: dict[str, Any] = {}
+
+    # The attachment appendix ("[Calliope context]\nattached: …") puts newlines
+    # in the extracted goal, so this message is NOT trivial — the planner call
+    # must be stubbed too, or the test makes a real network LLM call (the
+    # source of its flakiness: solo runs degraded to single, full-file runs
+    # sometimes got a swarm plan and run_turn was never called).
+    class _SingleModeClient:
+        async def chat(self, *a, **kw):
+            return json.dumps({"mode": "single", "tasks": [], "note": ""})
+
+        async def close(self):
+            return None
+
+    async def fake_run_turn(ctx, history, *, on_message=None, **kw):
+        goal_seen["called"] = True
+        return "handled the attachment"
+
+    orig_client = orch.LLMClient
+    orig_run_turn = orch.run_turn
+    orch.LLMClient = lambda: _SingleModeClient()
+    orch.run_turn = fake_run_turn
+    try:
+        ctx = ToolContext(session_id=sid, project_id=pid)
+        # The crash fired at _is_trivial_goal BEFORE the fix — the raw parts
+        # list hit .strip() the moment the goal was read, planner or not.
+        out = asyncio.run(orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch.run_turn = orig_run_turn
+
+    assert goal_seen.get("called") is True
+    assert out == "handled the attachment"
+
+
+def test_text_of_content_extracts_parts_and_strings(client):
+    """The projection helper behind the multimodal-goal fix: strings pass
+    through, parts lists join their text parts, anything else is ''."""
+    from calliope.agent.harness import log as session_log
+
+    assert session_log.text_of_content("plain goal") == "plain goal"
+    parts = [
+        {"type": "text", "text": "first"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}},
+        {"type": "text", "text": "second"},
+    ]
+    assert session_log.text_of_content(parts) == "first\nsecond"
+    assert session_log.text_of_content(None) == ""
+    assert session_log.text_of_content(42) == ""
+
+
+def test_swarm_goal_from_multimodal_message_plans(client, tmp_path):
+    """The swarm path must also survive a multimodal goal: the planner call
+    receives the extracted TEXT, not the raw parts list."""
+    r = client.post("/api/agent/sessions", json={"title": "mm-swarm"})
+    sid = r.json()["id"]
+    pid = _make_project(client)
+
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    # A real .md document under assets_dir projects as a parts list (big text
+    # block in part[0]) — same list-shaped content, no binary needed.
+    assets = Path(settings.assets_dir)
+    assets.mkdir(parents=True, exist_ok=True)
+    doc = assets / "script-ref.md"
+    doc.write_text(
+        "# Scene notes\nFADE IN on the neon rooftop.\n\nKira waits at the rail.",
+        encoding="utf-8",
+    )
+
+    session_log.append_event(
+        sid,
+        session_log.USER_MESSAGE,
+        {
+            "content": "turn the attached reference into scenes and render them",
+            "attachments": [{"kind": "document", "path": str(doc), "name": "script-ref.md"}],
+        },
+    )
+
+    seen_goals: list[str] = []
+
+    class _PlannerCaptureClient:
+        async def chat(self, messages, temperature=0.2, **kw):
+            seen_goals.append(messages[-1]["content"])
+            return json.dumps({"mode": "single", "tasks": [], "note": ""})
+
+        async def close(self):
+            return None
+
+    async def fake_run_turn(ctx, history, *, on_message=None, **kw):
+        return "single-loop handled the swarm-path goal"
+
+    orig_client = orch.LLMClient
+    orig_run_turn = orch.run_turn
+    orch.LLMClient = lambda: _PlannerCaptureClient()
+    orch.run_turn = fake_run_turn
+    try:
+        ctx = ToolContext(session_id=sid, project_id=pid)
+        asyncio.run(orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch.run_turn = orig_run_turn
+
+    assert seen_goals, "planner was never called"
+    assert isinstance(seen_goals[0], str)
+    # The extracted TEXT reached the planner: the user's words and the
+    # document marker — never a stringified parts list ("[{'type':
+    # 'text', ...}]").
+    assert "turn the attached reference into scenes" in seen_goals[0]
+    assert "[Script document: script-ref.md]" in seen_goals[0]
+    assert "[{'type'" not in seen_goals[0]
+
+
+def test_ask_user_mid_batch_closes_tool_exchange(client):
+    """When ask_user pauses the turn mid tool-batch, the calls AFTER it never
+    executed. Their call ids must still receive skipped tool results — an
+    assistant tool_calls message with missing results is an invalid request
+    sequence that strict OpenAI-compatible servers reject on the next turn."""
+    r = client.post("/api/agent/sessions", json={"title": "ask-mid-batch"})
+    sid = r.json()["id"]
+
+    from calliope.agent.harness.loop import run_turn
+
+    # Step 1: batch [ask_user, list_memories]; step 2 (never reached): text.
+    class _BatchStream:
+        def __init__(self, calls):
+            self._calls = calls
+
+        def __aiter__(self):
+            return self._iter()
+
+        async def _iter(self):
+            for c in self._calls:
+                yield {"type": "tool_call", "tool_call": c}
+            if not self._calls:
+                yield {"type": "delta", "content": "after answer"}
+
+    class _Client:
+        def __init__(self):
+            self.turn = 0
+
+        async def close(self):
+            return None
+
+        def chat_stream(self, messages, temperature=0.4, tools=None):
+            self.turn += 1
+            if self.turn == 1:
+                return _BatchStream(
+                    [
+                        {
+                            "id": "call_a",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": json.dumps(
+                                    {
+                                        "question": "Proceed?",
+                                        "options": ["Yes", "No"],
+                                        "scope": "info",
+                                    }
+                                ),
+                            },
+                        },
+                        {
+                            "id": "call_b",
+                            "function": {"name": "list_memories", "arguments": "{}"},
+                        },
+                    ]
+                )
+            return _BatchStream([])
+
+    from calliope.agent.harness import loop as loop_mod
+
+    orig_llm = loop_mod._llm_for_role
+    orig_turn_no = loop_mod._next_turn_number
+    loop_mod._llm_for_role = lambda role: _Client()
+    loop_mod._next_turn_number = lambda s: 1
+    try:
+        ctx = ToolContext(session_id=sid, project_id=None)
+        history: list[dict[str, Any]] = []
+        out = asyncio.run(run_turn(ctx, history, max_iterations=3))
+    finally:
+        loop_mod._llm_for_role = orig_llm
+        loop_mod._next_turn_number = orig_turn_no
+
+    # Turn ended for the user's answer.
+    assert out == ""  # ask_user path returns empty final text
+    from calliope.agent.harness import log as session_log
+
+    events = session_log.read_events(sid)
+    results = {
+        e.data["call_id"]: e.data["result"]
+        for e in events
+        if e.type == session_log.TOOL_RESULT
+    }
+    assert results.get("call_a", {}).get("awaiting_user_input") is True
+    skipped_b = results.get("call_b")
+    assert skipped_b is not None, "call_b never received a synthetic result"
+    assert skipped_b.get("skipped") is True
+    # History stays a valid request sequence: every tool_call has a result.
+    calls = [e.data["call_id"] for e in events if e.type == session_log.TOOL_CALL]
+    assert set(calls) == set(results.keys())
+    tool_msgs = [m for m in history if m.get("role") == "tool"]
+    assert {m["tool_call_id"] for m in tool_msgs} == set(calls)

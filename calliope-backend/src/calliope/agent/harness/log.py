@@ -624,6 +624,25 @@ def max_turn_number(session_id: int) -> int:
 STEERING_INJECT_HEADER = "[STEERING — user message sent while you work]"
 
 
+def text_of_content(content: Any) -> str:
+    """The text of a projected content value (string or multimodal parts list).
+
+    `project_user_content` returns an OpenAI parts list when a message has
+    usable attachments. Routing/planning code that only needs the words (the
+    orchestrator goal, swarm synthesis) must go through this helper — calling
+    string methods on the parts list directly is the multimodal-goal crash
+    (`'list' object has no attribute 'strip'`).
+    """
+    if isinstance(content, list):
+        texts = [
+            str(p.get("text") or "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        return "\n".join(t for t in texts if t).strip()
+    return content if isinstance(content, str) else ""
+
+
 def steering_user_content(d: dict[str, Any]) -> Any:
     """Projected steering content with the [STEERING] header.
 

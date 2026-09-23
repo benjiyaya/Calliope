@@ -318,7 +318,7 @@ async def run_turn(
             if reasoning_text:
                 tool_msg_data["reasoning"] = reasoning_text
             log_append(session_log.ASSISTANT_MESSAGE, tool_msg_data)
-            for tc in tool_calls:
+            for tc_idx, tc in enumerate(tool_calls):
                 name = tc["function"]["name"]
                 raw_args = tc["function"].get("arguments") or "{}"
                 try:
@@ -425,6 +425,66 @@ async def run_turn(
                 # ask_user ends the turn: the agent's question waits for the
                 # user's answer, so the loop must not burn steps polling.
                 if isinstance(result, dict) and result.get("awaiting_user_input"):
+                    # Close the batch first: any REMAINING calls of this step
+                    # never executed, and an assistant tool_calls message with
+                    # missing results is an invalid request sequence (strict
+                    # OpenAI-compatible servers 400 the next turn). Synthesize
+                    # skipped receipts for the un-executed call ids.
+                    for pending in tool_calls[tc_idx + 1:]:
+                        skipped = {
+                            "ok": False,
+                            "skipped": True,
+                            "error": (
+                                "Not executed — this turn paused for the user's "
+                                "answer to an ask_user question in the same step. "
+                                "Re-issue the call after they answer if still needed."
+                            ),
+                        }
+                        pname = pending["function"]["name"]
+                        praw_args = pending["function"].get("arguments") or "{}"
+                        try:
+                            pargs = json.loads(praw_args) if praw_args.strip() else None
+                        except json.JSONDecodeError:
+                            pargs = None
+                        log_append(
+                            session_log.TOOL_CALL,
+                            {
+                                "turn": turn_no,
+                                "step": iteration,
+                                "call_id": pending["id"],
+                                "tool_name": pname,
+                                "arguments": praw_args,
+                                "agent_name": agent_name,
+                            },
+                        )
+                        log_append(
+                            session_log.TOOL_RESULT,
+                            {
+                                "turn": turn_no,
+                                "step": iteration,
+                                "call_id": pending["id"],
+                                "tool_name": pname,
+                                "result": skipped,
+                                "agent_name": agent_name,
+                            },
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": pending["id"],
+                                "content": json.dumps(skipped, ensure_ascii=False),
+                            }
+                        )
+                        await emit(
+                            {
+                                "role": "tool",
+                                "agent_name": agent_name,
+                                "tool_name": pname,
+                                "tool_args": pargs if isinstance(pargs, dict) else None,
+                                "tool_result": skipped,
+                                "content": "",
+                            }
+                        )
                     log_append(session_log.STEP_END, {"turn": turn_no, "step": iteration})
                     turn_status = "awaiting_input"
                     raise _AwaitingInput()

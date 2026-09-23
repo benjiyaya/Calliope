@@ -313,9 +313,15 @@ async def orchestrate(
         max_user_turns=MAX_HISTORY_USER_TURNS,
         max_chars=_history_char_budget(),
     )
-    goal = next(
-        (m["content"] for m in reversed(derived) if m.get("role") == "user"),
-        "",
+    # Multimodal user content (image/video/document attachments) projects as
+    # an OpenAI parts LIST, not a string — extract the text part. Calling
+    # string methods on the raw value crashed every linked-session turn that
+    # carried an attachment ('list' object has no attribute 'strip').
+    goal = session_log.text_of_content(
+        next(
+            (m["content"] for m in reversed(derived) if m.get("role") == "user"),
+            "",
+        )
     )
 
     if ctx.project_id is None:
