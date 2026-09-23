@@ -817,6 +817,34 @@ async def t_run_workflow(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         extra = {str(k): v for k, v in iv.items()}
 
     inputs = parse_dynamic_inputs(wf_json) if wf_json else []
+    # Issue #67: reject directory / missing-file paths the model hand-writes
+    # into media-role inputs (e.g. ComfyUI's .../input dir) at CALL time, not
+    # as a failed job later. Bare/relative names may resolve on the Comfy side
+    # and pass; only local-looking absolute/qualified paths are checked.
+    media_node_ids = {
+        str(inp["nodeId"])
+        for inp in inputs
+        if inp.get("kind") in ("image", "image_url", "audio", "video")
+    }
+    for nid in media_node_ids:
+        v = extra.get(nid)
+        if not isinstance(v, str) or v.startswith(("http://", "https://")):
+            continue
+        p = Path(v)
+        if p.is_absolute() or "/" in v or "\\" in v:
+            if p.is_dir():
+                return {
+                    "ok": False,
+                    "error": f"input_values[{nid}] '{v}' is a directory — pass a media FILE path.",
+                }
+            if not p.exists():
+                return {
+                    "ok": False,
+                    "error": (
+                        f"input_values[{nid}] file not found locally: '{v}'. Reference a "
+                        "project asset path or attach the file in chat instead."
+                    ),
+                }
     if args.get("width") is not None:
         for inp in inputs:
             if input_has_role(inp, "width"):

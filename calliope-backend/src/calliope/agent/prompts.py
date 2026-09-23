@@ -16,9 +16,10 @@ SCRIPT_GENERATION_SYSTEM = (
     "You are a screenwriter for AI video production. "
     "Write a scene-by-scene script that uses the provided characters and locations. "
     "A scene is a SCREENPLAY unit — a heading, full action prose, and all dialogue that plays "
-    "in it — exactly like a produced script. Scenes may be long; a later 'break into shots' "
-    "pass splits each scene into short renderable clips, so never compress the content to fit "
-    "a single video generation. "
+    "in it — exactly like a produced script. A later 'break into shots' pass splits each scene "
+    "into short renderable clips, so never compress what a scene needs to say — but scale the "
+    "TOTAL material to the runtime budget given in the user message: a 30-second film needs "
+    "30 seconds of action and dialogue, not two minutes. "
     "Always respond with a single valid JSON object. "
     "HARD RULE: the scenes array length must equal required_scene_count from the user message. "
     "Returning fewer scenes is a failure. Respect the user's chosen scene count."
@@ -313,6 +314,9 @@ def build_script_messages(
     scene_n = max(recommended, int(scene_count)) if scene_count and scene_count > 0 else recommended
     # Stretch runtime floor when the user asked for more clips than duration alone implies
     secs = max(secs, scene_n * 6)
+    # Issue #64: the target is a budget, not a floor — give the model a concrete
+    # per-scene scale to write to so content volume matches the runtime.
+    per_scene_secs = max(3, round(secs / scene_n))
     char_lines = "\n".join(
         f"- id={c['id']} {c['name']} ({c.get('role') or ''}): {c.get('appearance') or ''}"
         for c in characters
@@ -328,8 +332,10 @@ def build_script_messages(
 Title: {title}
 Idea: {idea or ''}
 Target duration: {target_duration or 'short (~30-60 seconds)'}
-Estimated runtime: ~{secs} seconds
+Estimated runtime: ~{secs} seconds TOTAL — the finished film must play in about {secs}s
 required_scene_count: {scene_n}
+Per-scene budget: ~{per_scene_secs} seconds each (sum across scenes ≈ {secs}s) — write
+action length and dialogue VOLUME to this scale.
 
 Story beats:
 {beat_lines or '(none)'}
@@ -344,9 +350,10 @@ Locations:
 1. The JSON field "scenes" MUST contain EXACTLY {scene_n} objects.
 2. order_index must run 1, 2, 3, ... {scene_n} with no gaps.
 3. Do NOT collapse back to fewer scenes. The user expanded the script to {scene_n} scenes — fill all of them.
-4. Spread the full story across all {scene_n} scenes. A scene is a SCREENPLAY unit — it may
-   run 30–120 seconds when the material needs it (a later pass breaks long scenes into
-   short renderable clips). NEVER compress or summarize action to make a scene shorter.
+4. Spread the full story across all {scene_n} scenes. A scene is a SCREENPLAY unit — long scenes
+   are fine ONLY when the {secs}s total allows (≈{per_scene_secs}s each). Scale action detail
+   and the NUMBER of dialogue lines to that per-scene budget; do not write 2 minutes of
+   material into a {secs}s film. Never drop lines the story needs — write fewer instead.
 5. Pace the total toward ~{secs} seconds overall — scenes with lots of dialogue run longer.
 
 === ACTION (full visible action prose — the fidelity contract) ===
@@ -421,6 +428,8 @@ def build_script_chunk_messages(
     continuity — heading style, location, who's on screen — without resending
     the whole script."""
     secs = estimate_target_seconds(target_duration)
+    # Issue #64: per-scene budget so chunk content volume matches the runtime.
+    per_scene_secs = max(3, round(secs / scene_count))
     char_lines = "\n".join(
         f"- id={c['id']} {c['name']} ({c.get('role') or ''}): {c.get('appearance') or ''}"
         for c in characters
@@ -448,7 +457,10 @@ def build_script_chunk_messages(
 Title: {title}
 Idea: {idea or ''}
 Target duration: {target_duration or 'short (~30-60 seconds)'}
+Estimated runtime: ~{secs} seconds TOTAL — the finished film must play in about {secs}s
 required_scene_count: {scene_count}
+Per-scene budget: ~{per_scene_secs} seconds each (sum across the whole script ≈ {secs}s) —
+write action length and dialogue VOLUME to this scale.
 THIS CHUNK: exactly {chunk_scenes} scenes, order_index {chunk_start} through {last}.
 Full script is {scene_count} scenes; other chunks are written separately — do NOT write
 scenes outside {chunk_start}..{last}.
@@ -465,9 +477,11 @@ Locations:
 === HARD CONSTRAINTS (non-negotiable) ===
 1. The JSON field "scenes" MUST contain EXACTLY {chunk_scenes} objects.
 2. order_index must run {chunk_start}, {chunk_start + 1}, ... {last} with no gaps.
-3. A scene is a SCREENPLAY unit — it may run 30–120 seconds when the material needs it
-   (a later pass breaks long scenes into short renderable clips). NEVER compress or
-   summarize action to make a scene shorter.
+3. A scene is a SCREENPLAY unit — long scenes are fine ONLY when the {secs}s total allows
+   (≈{per_scene_secs}s each). Scale action detail and the NUMBER of dialogue lines to that
+   per-scene budget; do not write 2 minutes of material into a {secs}s film. Never drop
+   lines the story needs — write fewer instead. A later pass breaks scenes into renderable
+   clips, so never compress what a scene needs to SAY.
 4. Advance the beat arc across the whole {scene_count}-scene story; this chunk covers
    the part that falls at scenes {chunk_start}–{last}.
 5. If earlier scenes are listed above, continue them naturally — same characters,

@@ -296,6 +296,11 @@ async def generate_script(
         # guess — and the user's target runtime is the total they sum to. Runs
         # AFTER all chunks are committed, as a bulk UPDATE over the durable
         # board (the rescale is global; the rows were persisted per chunk).
+        # Issue #64: the scale may go BELOW 1.0 (floor 0.5) so an over-written
+        # script's scene budgets shrink toward the target too — the old
+        # max(..., 1.0) treated the target as a floor, and a 30s ask produced a
+        # 1:51 script. The floor keeps a wildly over-written board from being
+        # mislabeled more than 2x; content itself is not edited.
         if target_seconds:
             all_rows = conn.execute(
                 "SELECT id, action, dialog FROM scenes WHERE project_id = ? ORDER BY order_index",
@@ -307,7 +312,7 @@ async def generate_script(
             ]
             total_est = sum(estimates)
             if total_est > 0:
-                scale = max(target_seconds / total_est, 1.0)
+                scale = max(target_seconds / total_est, 0.5)
                 for row, est in zip(all_rows, estimates):
                     conn.execute(
                         "UPDATE scenes SET duration_sec = ? WHERE id = ?",

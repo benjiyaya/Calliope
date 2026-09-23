@@ -420,3 +420,95 @@ def test_worker_passes_plain_job_unchanged(client, monkeypatch):
     assert captured["20"]["inputs"]["file"] == ""
     assert captured["10"]["inputs"]["text"]  # scene prompt was filled
     assert job["workflow_id"] == wid
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Issue #67 — media inputs that are directories / missing local files must
+# fail BEFORE queuing with a node-naming error, not as ComfyUI Errno 21.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_prepare_media_inputs_rejects_directory_value(client, tmp_path):
+    """The exact #67 failure shape: a LoadVideo fed ComfyUI's input DIR."""
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    wf = {
+        "20": {
+            "class_type": "VHS_LoadVideo",
+            "inputs": {"video": str(tmp_path)},  # a directory
+            "_meta": {"title": "Previous Clip (Input:video)"},
+        },
+    }
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(c.prepare_media_inputs(wf))
+    msg = str(excinfo.value)
+    assert "node 20" in msg
+    assert "is a directory" in msg
+
+
+def test_prepare_media_inputs_rejects_missing_absolute_file(client, tmp_path):
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    missing = tmp_path / "never_rendered.mp4"
+    wf = {
+        "20": {
+            "class_type": "LoadVideo",
+            "inputs": {"file": str(missing)},
+            "_meta": {"title": "Previous Clip (Input:video)"},
+        },
+    }
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(c.prepare_media_inputs(wf))
+    msg = str(excinfo.value)
+    assert "node 20" in msg
+    assert "not found locally" in msg
+
+
+def test_prepare_media_inputs_leaves_bare_comfy_names_alone(client):
+    """Bare names (no path separators) are legit Comfy-side references — no
+    guard fires and no upload is attempted."""
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    wf = {
+        "20": {
+            "class_type": "VHS_LoadVideo",
+            "inputs": {"video": "clip_3.mp4"},
+            "_meta": {"title": "Previous Clip (Input:video)"},
+        },
+        "30": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "example_image.png"},
+            "_meta": {"title": "Ref (Input:image)"},
+        },
+    }
+    out = asyncio.run(c.prepare_media_inputs(wf))
+    assert out["20"]["inputs"]["video"] == "clip_3.mp4"
+    assert out["30"]["inputs"]["image"] == "example_image.png"
+
+
+def test_prepare_media_inputs_uploads_existing_video(client, tmp_path):
+    """A real local file still uploads normally (guard must not over-fire)."""
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    clip = tmp_path / "prev.mp4"
+    clip.write_bytes(b"00")
+
+    uploaded: list[str] = []
+
+    async def fake_upload(self, path, subfolder="calliope"):
+        uploaded.append(str(path))
+        return f"{subfolder}/{Path(path).name}"
+
+    import calliope.comfyui.client as client_mod
+
+    orig = client_mod.ComfyUIClient.upload_video
+    client_mod.ComfyUIClient.upload_video = fake_upload
+    try:
+        wf = {
+            "20": {
+                "class_type": "VHS_LoadVideo",
+                "inputs": {"video": str(clip)},
+                "_meta": {"title": "Previous Clip (Input:video)"},
+            },
+        }
+        out = asyncio.run(c.prepare_media_inputs(wf))
+    finally:
+        client_mod.ComfyUIClient.upload_video = orig
+    assert uploaded == [str(clip)]
+    assert out["20"]["inputs"]["video"].endswith("prev.mp4")

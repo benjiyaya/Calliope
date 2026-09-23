@@ -113,9 +113,31 @@ class ComfyUIClient:
         sub = result.get("subfolder") or subfolder
         return f"{sub}/{name}" if sub else name
 
+    @staticmethod
+    def _reject_bad_media_path(value: str, node_id: str, class_type: str, field: str) -> None:
+        """Fail a job BEFORE queueing when a media input value is unusable.
+
+        Issue #67: a directory (e.g. ComfyUI's `.../input`) or a nonexistent
+        local path previously passed through verbatim and died inside ComfyUI
+        with an opaque `ValueError: [Errno 21] Is a directory`. Bare/relative
+        names are legitimate Comfy-side references and are left alone.
+        """
+        path = Path(value)
+        if path.is_dir():
+            raise RuntimeError(
+                f"node {node_id} ({class_type}): {field} value '{value}' is a "
+                "directory — expected a media FILE path."
+            )
+        if not path.exists():
+            raise RuntimeError(
+                f"node {node_id} ({class_type}): {field} file not found locally: "
+                f"'{value}'. Upload the file through the Video stage's reference "
+                "picker or attach it in chat, then retry."
+            )
+
     async def prepare_media_inputs(self, workflow: dict[str, Any]) -> dict[str, Any]:
         """Upload local file paths referenced in LoadImage / LoadAudio / LoadVideo nodes."""
-        for _node_id, node in workflow.items():
+        for node_id, node in workflow.items():
             if not isinstance(node, dict):
                 continue
             class_type = node.get("class_type", "")
@@ -125,8 +147,12 @@ class ComfyUIClient:
                 if isinstance(image, str) and self._looks_like_local_path(image):
                     path = Path(image)
                     if path.exists():
+                        if path.is_dir():
+                            self._reject_bad_media_path(image, str(node_id), class_type, "image")
                         inputs["image"] = await self.upload_image(path)
                         node["inputs"] = inputs
+                    else:
+                        self._reject_bad_media_path(image, str(node_id), class_type, "image")
             elif class_type in AUDIO_CLASSES:
                 # VHS_LoadAudio names its widget "audio:" (with colon); stock
                 # LoadAudio uses "audio". Probe both so the file is uploaded
@@ -140,16 +166,28 @@ class ComfyUIClient:
                     if isinstance(audio, str) and self._looks_like_local_path(audio):
                         path = Path(audio)
                         if path.exists():
+                            if path.is_dir():
+                                self._reject_bad_media_path(
+                                    audio, str(node_id), class_type, audio_key
+                                )
                             inputs[audio_key] = await self.upload_audio(path)
                             node["inputs"] = inputs
+                        else:
+                            self._reject_bad_media_path(
+                                audio, str(node_id), class_type, audio_key
+                            )
             elif class_type in VIDEO_CLASSES:
                 field = "file" if class_type in VIDEO_FILE_CLASSES else "video"
                 media = inputs.get(field)
                 if isinstance(media, str) and self._looks_like_local_path(media):
                     path = Path(media)
                     if path.exists():
+                        if path.is_dir():
+                            self._reject_bad_media_path(media, str(node_id), class_type, field)
                         inputs[field] = await self.upload_video(path)
                         node["inputs"] = inputs
+                    else:
+                        self._reject_bad_media_path(media, str(node_id), class_type, field)
         return workflow
 
     @staticmethod

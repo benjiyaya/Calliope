@@ -42,6 +42,9 @@
 	/** Selected render unit = a clip id (flattened playback order). */
 	let selectedClipId = $state<number | null>(null);
 	let formValues = $state<Record<string, string | number>>({});
+	// Workflow choice is per CLIP (issue #66): two clips of one scene may use
+	// different workflows (e.g. image→video then video→video extend). Keys are
+	// clip ids; hydrated from clip.workflow_id / saved video_settings.
 	let selectedWorkflow = $state<Record<number, number>>({});
 	let lastFormScene = $state<number | null>(null);
 	// Clip source for continue scenes, keyed per scene: 'auto' | 'upload' | scene id.
@@ -54,8 +57,10 @@
 		const el = e.currentTarget as HTMLInputElement;
 		const file = el.files?.[0];
 		el.value = '';
-		const node = videoInputNodeFor(selected ? workflowFor(selected) : undefined);
-		if (!file || !selected || !node) return;
+		const node = videoInputNodeFor(
+			selectedEntry ? workflowForClip(selectedEntry.clip, selectedEntry.scene) : undefined,
+		);
+		if (!file || !selectedEntry || !node) return;
 		const path = await videoUploadMgr.uploadSafe(node.nodeId, file);
 		if (path) {
 			formValues = { ...formValues, [node.nodeId]: path };
@@ -228,6 +233,17 @@
 		if (id != null) {
 			const entry = filmClips.find((c) => c.clip.id === id);
 			if (!entry) return;
+			// Hydrate the per-clip workflow choice (issue #66) on first open —
+			// persisted clip row wins, else the saved form choice, else scene.
+			if (selectedWorkflow[id] == null) {
+				const wfId =
+					entry.clip.workflow_id ??
+					entry.clip.video_settings?.form_workflow_id ??
+					entry.scene.workflow_id;
+				if (wfId != null) {
+					selectedWorkflow = { ...selectedWorkflow, [id]: Number(wfId) };
+				}
+			}
 			const stored = formCache.get(id);
 			if (stored) {
 				formValues = { ...stored };
@@ -263,7 +279,9 @@
 		const out: Record<string, unknown> = {
 			input_values: compactInputValues(formValues),
 		};
-		const wfId = selectedWorkflow[selectedEntry.scene.id];
+		// Per-clip workflow choice (issue #66) — saved inside video_settings for
+		// display hydration; the clips.workflow_id column is written alongside.
+		const wfId = selectedWorkflow[selectedEntry.clip.id];
 		if (wfId) out.form_workflow_id = wfId;
 		const src = clipSource[selectedEntry.scene.id];
 		if (src) out.clip_source = src;
@@ -292,8 +310,15 @@
 			const hash = settingsHash(next);
 			if (hash === lastSavedHash) return;
 			lastSavedHash = hash;
+			const wfId = selectedWorkflow[selectedEntry.clip.id];
 			projects
-				.updateClip(projectId, selectedEntry.clip.id, { video_settings: next })
+				.updateClip(projectId, selectedEntry.clip.id, {
+					video_settings: next,
+					// Persist the per-clip workflow onto the column the enqueue
+					// path prefers (wf_id = workflow_id or clip.workflow_id) so
+					// Generate All renders each clip with its own workflow.
+					workflow_id: wfId,
+				})
 				.catch(() => {
 					/* transient — next change retries */
 				});
@@ -312,7 +337,7 @@
 	function seedClipDefaults(entry: { clip: Clip; scene: Scene }): Record<string, string | number> {
 		const seed: Record<string, string | number> = {};
 		if (!entry) return seed;
-		const wf = workflowFor(entry.scene);
+		const wf = workflowForClip(entry.clip, entry.scene);
 		const secs = entry.clip.duration_sec ?? entry.scene.duration_sec;
 		for (const inp of wf?.input_schema ?? []) {
 			if (normalizeInputRole(inp.role ?? null) === 'duration' && secs != null) {
@@ -356,17 +381,18 @@
 	}
 
 const generateOne = createMutation({
-		mutationFn: (vars: { clipId: number; sceneId: number; prompt?: string }) => {
-			const { clipId, sceneId, prompt } = vars;
-			const scene = scenes.find((s) => s.id === sceneId);
-			const wf = scene ? workflowFor(scene) : undefined;
-			return jobsApi.generateVideos(projectId, {
-				clip_ids: [clipId],
-				workflow_id: selectedWorkflow[sceneId] ?? wf?.id,
-				input_values: compactInputValues(formValues),
-				prompts: prompt ? { [String(clipId)]: prompt } : undefined,
-			});
-		},
+	mutationFn: (vars: { clipId: number; sceneId: number; prompt?: string }) => {
+		const { clipId, sceneId, prompt } = vars;
+		const scene = scenes.find((s) => s.id === sceneId);
+		const clip = scene?.clips?.find((c) => c.id === clipId);
+		const wf = clip && scene ? workflowForClip(clip, scene) : undefined;
+		return jobsApi.generateVideos(projectId, {
+			clip_ids: [clipId],
+			workflow_id: selectedWorkflow[clipId] ?? clip?.workflow_id ?? wf?.id,
+			input_values: compactInputValues(formValues),
+			prompts: prompt ? { [String(clipId)]: prompt } : undefined,
+		});
+	},
 		onSuccess: async () => {
 			await client.invalidateQueries({ queryKey: ['jobs'] });
 			await client.invalidateQueries({ queryKey: ['scenes'] });
@@ -464,9 +490,10 @@ const generateOne = createMutation({
 				done++;
 				batchNote = t('queue.queueingProgress', { n: done, total: totalClips });
 				try {
-					// Resolve like the per-clip button does: session pick → scene's stored
-					// workflow → first enabled video workflow. A scene whose stored workflow
-					// was deleted would otherwise enqueue a job doomed to "No workflow found".
+					// Resolve like the per-clip button does: session pick → clip's stored
+					// workflow → scene default → first enabled video workflow. Per CLIP
+					// (issue #66): a scene may mix image→video and video→video extend
+					// workflows across its clips, so each target resolves its own.
 					// Fresh per-clip drafts ride along; stale/absent drafts get the backend's
 					// auto-rewrite (deterministic template on LLM failure).
 					const clip = clips.length > 0 ? clips.find((c) => c.id === target.id) : null;
@@ -475,10 +502,11 @@ const generateOne = createMutation({
 						draft && clip?.video_settings?.prompt_draft_meta?.based_on
 							? clip.video_settings.prompt_draft_meta.based_on
 							: null;
+					const wf = clip ? workflowForClip(clip, scene) : undefined;
 					await jobsApi.generateVideos(projectId, {
 						clip_ids: clip ? [target.id] : undefined,
 						scene_ids: clip ? undefined : [target.id],
-						workflow_id: workflowFor(scene)?.id,
+						workflow_id: clip ? (selectedWorkflow[clip.id] ?? clip.workflow_id ?? wf?.id) : wf?.id,
 						prompts: draft ? { [target.key]: draft } : undefined,
 					});
 					queued++;
@@ -505,8 +533,15 @@ const generateOne = createMutation({
 		await client.invalidateQueries({ queryKey: ['scenes'] });
 	}
 
-	function workflowFor(scene: Scene): Workflow | undefined {
-		const id = selectedWorkflow[scene.id] ?? scene.workflow_id ?? undefined;
+	/** Resolve the workflow for a CLIP (issue #66): explicit in-session pick →
+	 * clip row's workflow_id → saved form choice → scene default → first enabled. */
+	function workflowForClip(clip: Clip, scene: Scene | null | undefined): Workflow | undefined {
+		const id =
+			selectedWorkflow[clip.id] ??
+			clip.workflow_id ??
+			clip.video_settings?.form_workflow_id ??
+			scene?.workflow_id ??
+			undefined;
 		return enabledWorkflows.find((w) => w.id === id) ?? enabledWorkflows[0] ?? undefined;
 	}
 
@@ -848,7 +883,7 @@ const generateOne = createMutation({
 			<p class="muted">{t('queue.noTimelineBody')}</p>
 		</div>
 	{:else if selected}
-		{@const selWf = workflowFor(selected)}
+		{@const selWf = selClip ? workflowForClip(selClip, selected) : undefined}
 		{@const selStatus = selClip ? statusOfClip(selClip.id) : sceneStatus(selected)}
 		{@const selPreview = selClip ? previewPathForClip(selClip.id) : null}
 		{@const selHasVideoInput = workflowHasVideoInput(selWf)}
@@ -923,9 +958,10 @@ const generateOne = createMutation({
 			onClipSourceUpload={() => videoFileInput?.click()}
 			onSelectClip={selectClip}
 			onStep={step}
-			onWorkflowChange={(id) => {
-				selectedWorkflow = { ...selectedWorkflow, [selected.id]: Number(id) };
-			}}
+		onWorkflowChange={(id) => {
+			if (!selClip) return;
+			selectedWorkflow = { ...selectedWorkflow, [selClip.id]: Number(id) };
+		}}
 		onGenerate={() => {
 			if (selClip) $generateOne.mutate({ clipId: selClip.id, sceneId: selected.id });
 		}}
