@@ -61,6 +61,8 @@ def test_build_ffmpeg_cmd_two_clips():
     # format=yuv420p must come AFTER the xfade output label
     assert "[x1]format=yuv420p[vout]" in joined
     assert "loudnorm=I=-16:TP=-1.5:LRA=11" in joined
+    # back to 48 kHz after loudnorm (it upsamples to 192 kHz internally -> a 96 kHz AAC export)
+    assert "[c1]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[aout]" in joined
     assert "scale=1920:1080:force_original_aspect_ratio=decrease" in joined
     assert "fps=30" in joined
     assert "-c:v libx264" in joined
@@ -99,7 +101,7 @@ def test_build_ffmpeg_cmd_single_clip():
     assert "xfade" not in joined
     assert "acrossfade" not in joined
     assert "[v0]format=yuv420p[vout]" in joined
-    assert "[a0]loudnorm=I=-16:TP=-1.5:LRA=11[aout]" in joined
+    assert "[a0]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[aout]" in joined
     assert "-c:v libx264" in joined
 
 

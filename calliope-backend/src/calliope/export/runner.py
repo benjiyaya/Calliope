@@ -151,6 +151,12 @@ async def probe(path: str | Path) -> dict[str, Any]:
     return {"duration": duration, "has_audio": has_audio, "fps": video_fps}
 
 
+# EBU R128 loudness normalisation, then back to 48 kHz: loudnorm resamples to 192 kHz
+# internally and never resamples back, so without aresample every export lands at
+# 96 kHz AAC (the encoder's ceiling).
+LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000"
+
+
 def build_ffmpeg_cmd(
     clips: list[dict[str, Any]],
     probes: list[dict[str, Any]],
@@ -207,7 +213,7 @@ def build_ffmpeg_cmd(
     if n == 1:
         # Single clip: no crossfade, but same normalize + loudness treatment.
         filters.append("[v0]format=yuv420p[vout]")
-        filters.append("[a0]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+        filters.append(f"[a0]{LOUDNORM}[aout]")
     else:
         for k in range(1, n):
             offset = sum(durations[:k]) - k * XFADE_SEC
@@ -220,7 +226,7 @@ def build_ffmpeg_cmd(
         # format=yuv420p AFTER the final xfade — the chain renegotiates to
         # yuv444p otherwise and players choke on the result.
         filters.append(f"[x{n - 1}]format=yuv420p[vout]")
-        filters.append(f"[c{n - 1}]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+        filters.append(f"[c{n - 1}]{LOUDNORM}[aout]")
 
     cmd += ["-filter_complex", ";".join(filters)]
     cmd += ["-map", "[vout]", "-map", "[aout]"]
