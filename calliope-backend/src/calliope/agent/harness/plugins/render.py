@@ -308,9 +308,9 @@ def register(registry: ToolRegistry) -> None:
             executor=t_wait_for_jobs,
             category="video",
             requires_project=False,
-            # Owns its own wait contract (timeout_sec → queue_poll_timeout_sec):
-            # exempt from the per-tool wall-clock cap, which would otherwise
-            # cut a legitimate long render wait short.
+            # Owns its own wait (timeout_sec → queue_poll_timeout_sec, 0 = until
+            # done): exempt from the same Queue timeout wrapping every other
+            # tool, so a long render wait is not cut short by a second clock.
             long_running=True,
         )
     )

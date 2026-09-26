@@ -257,7 +257,7 @@ def test_clip_tools_in_swarm_roles():
 
 
 def test_tool_timeout_kills_hung_tool():
-    """A tool slower than agent_tool_timeout_sec returns ok:False with the
+    """A tool slower than Settings → Queue → Timeout returns ok:False with the
     timeout marker instead of stalling the step forever."""
     import asyncio as aio
 
@@ -288,9 +288,9 @@ def test_tool_timeout_kills_hung_tool():
         ToolDefinition(name="fast", description="", parameters={}, executor=_fast, requires_project=False)
     )
 
-    orig = settings.agent_tool_timeout_sec
+    orig = settings.queue_poll_timeout_sec
     try:
-        settings.agent_tool_timeout_sec = 0.2
+        settings.queue_poll_timeout_sec = 0.2
         out = aio.run(reg.execute(ToolContext(session_id=1), "hang", {}))
         assert out["ok"] is False
         assert out.get("timeout") is True
@@ -302,13 +302,13 @@ def test_tool_timeout_kills_hung_tool():
         out_fast = aio.run(reg.execute(ToolContext(session_id=1), "fast", {}))
         assert out_fast["ok"] is True
 
-        # 0 disables the timeout entirely.
-        settings.agent_tool_timeout_sec = 0
+        # 0 waits until the tool finishes.
+        settings.queue_poll_timeout_sec = 0
         from calliope.agent.harness.registry import _tool_timeout_sec
 
         assert _tool_timeout_sec() == 0.0
     finally:
-        settings.agent_tool_timeout_sec = orig
+        settings.queue_poll_timeout_sec = orig
 
 
 def test_wait_for_jobs_is_long_running():
