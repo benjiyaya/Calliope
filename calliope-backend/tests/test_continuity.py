@@ -312,7 +312,7 @@ def test_preview_returns_critic_notes(client, monkeypatch):
     assert result["critic"]["notes"] == ["lighting contradicts the previous shot"]
 
 
-def test_failing_critic_falls_back_to_template(client, monkeypatch):
+def test_failing_critic_keeps_the_compiled_prompt(client, monkeypatch):
     from calliope.agent.video_agent import preview_clip_prompt
 
     pid = _mk_project(client, "Critic down")
@@ -346,11 +346,41 @@ def test_failing_critic_falls_back_to_template(client, monkeypatch):
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
     result = asyncio.run(preview_clip_prompt(pid, clip_id))
-    assert result["prompt"].startswith("subject_definitions:")
-    assert "salt flats" in result["prompt"]
-    assert "COMPILED CANDIDATE" not in result["prompt"]
+    assert result["prompt"] == "COMPILED CANDIDATE"
     assert result["critic"]["ok"] is False
     assert "judge down" in result["critic"]["notes"][0]
+
+
+def test_critic_retries_json_mode_when_the_reply_is_prose(monkeypatch):
+    from calliope.agent.continuity import critique_prompt
+
+    calls = {"n": 0}
+
+    class Scripted:
+        @classmethod
+        def for_role(cls, role, timeout=120.0):
+            return cls()
+
+        async def chat(self, messages, temperature=0.0, response_format=None, **kwargs):
+            calls["n"] += 1
+            if not response_format:
+                return "The lighting is wrong. Here is an essay with no JSON object."
+            return json.dumps(
+                {"ok": False, "notes": ["lighting contradicts the previous shot"]}
+            )
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("calliope.agent.continuity.LLMClient", Scripted)
+    result = asyncio.run(
+        critique_prompt("compiled", {"shots": [{"clip_id": 1, "lighting": "sodium"}]}, 1)
+    )
+    assert calls["n"] == 2
+    assert result == {
+        "ok": False,
+        "notes": ["lighting contradicts the previous shot"],
+    }
 
 
 def test_failing_critic_keeps_a_saved_draft(client, monkeypatch):

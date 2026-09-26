@@ -90,7 +90,8 @@ _CRITIC_SYSTEM = """You check one clip prompt against a film continuity plan.
 Nine checks: style, subjects, actions, dialogue, sound, camera, lighting, spatial relations, scene.
 Accept paraphrase and compatible elaboration.
 Report only failures: omission, wrong subject binding, wrong speaker–dialogue binding, contradiction, or a shot-order conflict with the neighbor shots.
-Return JSON only: {"ok": true, "notes": []} when it holds, or {"ok": false, "notes": ["short failure", ...]}.
+Return one JSON object and nothing else. No markdown, no preamble.
+{"ok": true, "notes": []} when it holds, or {"ok": false, "notes": ["short failure", ...]}.
 No second draft. No praise.
 """
 
@@ -542,37 +543,66 @@ def _unavailable(exc: BaseException) -> dict[str, Any]:
     }
 
 
+async def _critic_reply(client: LLMClient, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """One critic call, then a JSON-mode retry when the reply is not an object.
+
+    Local models often answer the check in prose. That is a parse miss, not a
+    dead endpoint, so the retry asks for a JSON object before giving up.
+    """
+    raw = await client.chat(messages, temperature=0.0)
+    try:
+        data = extract_json(raw)
+    except ValueError as exc:
+        logger.warning("Continuity critic reply was not JSON (%s); retrying", exc)
+        raw = await client.chat(
+            messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        data = extract_json(raw)
+    if not isinstance(data, dict):
+        raise ValueError("critic returned no JSON object")
+    return data
+
+
 async def critique_prompt(
     prompt: str, plan: dict[str, Any] | None, clip_id: int
 ) -> dict[str, Any]:
     """Score one candidate. Failures only. A dead judge never raises."""
     if not plan:
         return {"ok": True, "notes": []}
+    messages = [
+        {"role": "system", "content": _CRITIC_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                "Plan slice:\n"
+                + continuity_lock_text(plan, clip_id)
+                + "\n\nCandidate prompt:\n"
+                + (prompt or "")
+                + '\n\nReply with one JSON object: {"ok": true, "notes": []} '
+                'or {"ok": false, "notes": ["failure"]}.'
+            ),
+        },
+    ]
     client = LLMClient.for_role("video", timeout=CRITIC_TIMEOUT_SEC)
     try:
-        raw = await client.chat(
-            [
-                {"role": "system", "content": _CRITIC_SYSTEM},
-                {
-                    "role": "user",
-                    "content": (
-                        "Plan slice:\n"
-                        + continuity_lock_text(plan, clip_id)
-                        + "\n\nCandidate prompt:\n"
-                        + (prompt or "")
-                    ),
-                },
-            ],
-            temperature=0.0,
-        )
-        data = extract_json(raw)
-    except Exception as exc:
-        logger.warning("Continuity critic failed (%s)", exc)
-        return _unavailable(exc)
+        try:
+            data = await _critic_reply(client, messages)
+        except ValueError as exc:
+            # The prompt already compiled. A prose critique must not replace it.
+            logger.warning("Continuity critic reply stayed non-JSON (%s)", exc)
+            return {
+                "ok": False,
+                "notes": [
+                    "Continuity check could not be read. The prompt below is unchanged."
+                ],
+            }
+        except Exception as exc:
+            logger.warning("Continuity critic failed (%s)", exc)
+            return _unavailable(exc)
     finally:
         await client.close()
-    if not isinstance(data, dict):
-        return _unavailable(ValueError("critic returned no JSON object"))
     notes: list[str] = []
     for item in data.get("notes") or []:
         text = str(item).strip()

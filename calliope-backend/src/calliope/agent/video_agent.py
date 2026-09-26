@@ -543,10 +543,9 @@ async def preview_clip_prompt(
                 scene, subjects, videos=videos, continuity=lock, timeout=30.0
             )
         critic = await _critique_or_unavailable(prompt, plan, clip_id)
-        # A dead judge must not 500. Drop a compiled candidate for the
-        # template; keep a draft the user already saved.
-        if critic.get("unavailable") and not from_draft:
-            prompt = minimax_h3_ref_fallback(scene, subjects, videos)
+        # A dead or unreadable judge leaves this prompt in place and reports
+        # the note. The rewrite already falls back to the template when that
+        # call itself fails.
         return {
             "prompt": prompt,
             "profile": profile,
