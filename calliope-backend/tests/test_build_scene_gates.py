@@ -48,7 +48,7 @@ def _run(sid: int, tool: str, args: dict | None = None):
 def test_gate_tools_visible_in_sandbox():
     from calliope.agent.harness.tools import openai_tools_payload
 
-    ctx = ToolContext(session_id=_mk_session(), project_id=None)
+    ctx = ToolContext(session_id=_mk_session(), project_id=None, origin="scene")
     names = {e["function"]["name"] for e in openai_tools_payload(ctx)}
     assert "record_build_scene_gate" in names
     assert "get_build_scene_gates" in names

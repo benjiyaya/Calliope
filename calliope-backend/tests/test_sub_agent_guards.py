@@ -385,3 +385,142 @@ def test_trivial_goal_skips_planner():
 
     assert out == "single-loop answer"
     assert planner_calls["n"] == 0
+
+
+# ── planner role validation (finding 5) ─────────────────────────────────
+
+
+def test_unknown_planner_role_clamped_to_story_with_note():
+    """A planner that invents a role ("asset" typo, "renderer") gets it clamped
+    to story; the clamp is recorded in the plan event and surfaced in the note
+    instead of silently running the script toolset."""
+    import json as _json
+
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    sid = _mk_session()
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "Build the whole film from scratch"}
+    )
+
+    class _PlannerClient:
+        async def chat(self, *a, **kw):
+            return _json.dumps(
+                {
+                    "mode": "swarm",
+                    "note": "Plan ready.",
+                    "tasks": [
+                        {"role": "story", "goal": "write beats"},
+                        {"role": "asset", "goal": "make characters"},
+                        {"role": "renderer", "goal": "render it"},
+                    ],
+                }
+            )
+
+        async def close(self):
+            return None
+
+    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
+        return f"{agent_name} done"
+
+    async def fake_run_turn(ctx, history, *, on_message=None):
+        return "single"
+
+    orig_client = orch.LLMClient
+    orig_run_sub = orch._run_sub_agent
+    orig_run_turn = orch.run_turn
+    orch.LLMClient = lambda: _PlannerClient()
+    orch._run_sub_agent = fake_run_sub
+    orch.run_turn = fake_run_turn
+
+    class _NoWorkspace:
+        def get(self, name):
+            return {"ok": True}
+
+        async def execute(self, ctx, name, args):
+            return {"ok": True}
+
+    orig_ws = orch.get_registry
+    orch.get_registry = lambda: _NoWorkspace()
+    try:
+        ctx = ToolContext(session_id=sid, project_id=1)
+        asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch._run_sub_agent = orig_run_sub
+        orch.run_turn = orig_run_turn
+        orch.get_registry = orig_ws
+
+    events = session_log.read_events(sid)
+    plan_event = next(e for e in events if e.type == session_log.PLAN_CREATED)
+    clamped = plan_event.data.get("clamped_roles")
+    assert clamped and len(clamped) == 2
+    assert {c["from"] for c in clamped} == {"asset", "renderer"}
+    assert all(c["to"] == "story" for c in clamped)
+    # The plan event roles are the CLAMPED ones.
+    assert {t["role"] for t in plan_event.data["tasks"]} == {"story"}
+    # The note surfaced the clamp.
+    assert "'asset' is not valid — ran as story" in plan_event.data["note"]
+    assert "'renderer' is not valid — ran as story" in plan_event.data["note"]
+
+
+def test_valid_planner_roles_not_clamped():
+    """A well-formed plan records no clamped_roles entry."""
+    import json as _json
+
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    sid = _mk_session()
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "Build the whole film from scratch"}
+    )
+
+    class _PlannerClient:
+        async def chat(self, *a, **kw):
+            return _json.dumps(
+                {
+                    "mode": "swarm",
+                    "note": "",
+                    "tasks": [
+                        {"role": "story", "goal": "a"},
+                        {"role": "script", "goal": "b"},
+                        {"role": "assets", "goal": "c"},
+                        {"role": "video", "goal": "d"},
+                    ],
+                }
+            )
+
+        async def close(self):
+            return None
+
+    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
+        return "done"
+
+    orig_client = orch.LLMClient
+    orig_run_sub = orch._run_sub_agent
+    orch.LLMClient = lambda: _PlannerClient()
+    orch._run_sub_agent = fake_run_sub
+
+    class _NoWorkspace:
+        def get(self, name):
+            return {"ok": True}
+
+        async def execute(self, ctx, name, args):
+            return {"ok": True}
+
+    orig_ws = orch.get_registry
+    orch.get_registry = lambda: _NoWorkspace()
+    try:
+        ctx = ToolContext(session_id=sid, project_id=1)
+        asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch._run_sub_agent = orig_run_sub
+        orch.get_registry = orig_ws
+
+    plan_event = next(
+        e for e in session_log.read_events(sid) if e.type == session_log.PLAN_CREATED
+    )
+    assert "clamped_roles" not in plan_event.data

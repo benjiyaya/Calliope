@@ -54,9 +54,12 @@
 		agent_max_steps: 'queue',
 		agent_hardening_prompt: 'agent',
 		agent_llm_assignments: 'agent',
+		agent_history_char_budget: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
+		agent_workspace_dir: 'storage',
 		db_name: 'storage',
+		agent_shell_enabled: 'agent',
 	};
 	// Mirrors backend Field(ge=..., le=...) limits — validated client-side so
 	// save never trips a raw 422.
@@ -66,6 +69,7 @@
 		queue_poll_timeout_sec: { min: 0, max: 86400, labelKey: 'settings.pollTimeoutField' },
 		queue_max_retries: { min: 0, max: 10, labelKey: 'settings.maxRetriesField' },
 		agent_max_steps: { min: 1, max: 100, labelKey: 'settings.agentMaxStepsField' },
+		agent_history_char_budget: { min: 10000, max: 2000000, labelKey: 'settings.historyBudgetField' },
 	};
 	const dirtyTabs = $derived(
 		new Set(dirtyKeys.map((k) => FIELD_TAB[k]).filter((t): t is string => Boolean(t))),
@@ -203,6 +207,26 @@
 	function dryRunChecked(s: Settings): boolean {
 		if (draft.dry_run !== undefined) return Boolean(draft.dry_run);
 		return s.dry_run === true;
+	}
+
+	function shellChecked(s: Settings): boolean {
+		if (draft.agent_shell_enabled !== undefined) return Boolean(draft.agent_shell_enabled);
+		return s.agent_shell_enabled === true;
+	}
+
+	// History budget presets (chars). Large matches the backend default (400k).
+	const HISTORY_BUDGET_PRESETS: { value: number; labelKey: string }[] = [
+		{ value: 60_000, labelKey: 'settings.historyBudgetSmall' },
+		{ value: 120_000, labelKey: 'settings.historyBudgetMedium' },
+		{ value: 400_000, labelKey: 'settings.historyBudgetLarge' },
+	];
+
+	function historyBudgetActive(s: Settings, value: number): boolean {
+		const current =
+			draft.agent_history_char_budget !== undefined
+				? Number(draft.agent_history_char_budget)
+				: Number(s.agent_history_char_budget ?? 0);
+		return current === value;
 	}
 
 	// Snap out-of-range numbers back into the valid range when the user leaves
@@ -609,6 +633,60 @@
 							></textarea>
 						<p class="field-hint">{t('settings.hardeningHint')}</p>
 					</label>
+			</section>
+			<section class="panel">
+				<h1>{t('settings.historyBudgetSection')}</h1>
+				<p class="lead">{t('settings.historyBudgetLead')}</p>
+				<label class="field">
+					<span class="field-label">{t('settings.historyBudgetField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.agent_history_char_budget}
+						type="number"
+						min="10000"
+						max="2000000"
+						step="1000"
+						value={String(fieldValue('agent_history_char_budget', s.agent_history_char_budget))}
+						oninput={(e) => (draft.agent_history_char_budget = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'agent_history_char_budget')}
+					/>
+					{#if validationErrors.agent_history_char_budget}
+						<p class="field-error">{validationErrors.agent_history_char_budget}</p>
+					{/if}
+					<div class="preset-chips">
+						{#each HISTORY_BUDGET_PRESETS as preset (preset.value)}
+							<button
+								type="button"
+								class="preset-chip"
+								class:active={historyBudgetActive(s, preset.value)}
+								onclick={() => (draft.agent_history_char_budget = String(preset.value))}
+							>
+								{t(preset.labelKey)}
+							</button>
+						{/each}
+					</div>
+					<p class="field-hint">{t('settings.historyBudgetHint')}</p>
+				</label>
+			</section>
+			<section class="panel">
+				<h1>{t('settings.shellSection')}</h1>
+					<p class="lead">{t('settings.shellLead')}</p>
+					<div class="callout">
+						<Icon name="alert" size={16} />
+						<p>
+							<strong>{t('settings.shellCalloutStrong')}</strong>{' '}
+							{t('settings.shellCalloutBody')}
+						</p>
+					</div>
+					<label class="check">
+						<input
+							type="checkbox"
+							checked={shellChecked(s)}
+							onchange={(e) => (draft.agent_shell_enabled = e.currentTarget.checked)}
+						/>
+						{t('settings.shellLabel')}
+					</label>
+					<p class="field-hint">{t('settings.shellHint')}</p>
 				</section>
 				<MemoryPanel />
 				{:else if tab === 'storage'}
@@ -639,6 +717,16 @@
 								oninput={(e) => (draft.assets_dir = e.currentTarget.value)}
 							/>
 							<p class="field-hint">{t('settings.current')} <code class="mono">{s.assets_dir}</code></p>
+						</label>
+						<label class="field">
+							<span class="field-label">{t('settings.workspaceDir')}</span>
+							<input
+								class="field-input"
+								value={String(fieldValue('agent_workspace_dir', s.agent_workspace_dir))}
+								oninput={(e) => (draft.agent_workspace_dir = e.currentTarget.value)}
+							/>
+							<p class="field-hint">{t('settings.workspaceDirHint')}</p>
+							<p class="field-hint">{t('settings.current')} <code class="mono">{s.agent_workspace_dir}</code></p>
 						</label>
 					</section>
 				{:else if tab === 'workflows'}
@@ -733,6 +821,31 @@
 	}
 	.check input {
 		width: auto;
+	}
+	.preset-chips {
+		display: flex;
+		gap: 8px;
+		margin-top: 8px;
+		flex-wrap: wrap;
+	}
+	.preset-chip {
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-secondary);
+		border-radius: 999px;
+		padding: 4px 12px;
+		font-size: 12px;
+		cursor: pointer;
+		transition: border-color 0.15s, color 0.15s, background 0.15s;
+	}
+	.preset-chip:hover {
+		border-color: var(--accent);
+		color: var(--text-primary);
+	}
+	.preset-chip.active {
+		border-color: var(--accent);
+		background: var(--accent);
+		color: var(--accent-contrast, #0b0e14);
 	}
 	.callout {
 		display: flex;

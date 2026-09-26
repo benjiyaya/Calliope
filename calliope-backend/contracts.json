@@ -116,6 +116,7 @@
     "reset_pose",
     "reset_transform",
     "run_canvas_node",
+    "run_command",
     "run_workflow",
     "save_memory",
     "select_object",
@@ -165,6 +166,11 @@
     "guard_destructive_replace",
     "guard_no_export_video_tool",
     "guard_render_approval",
-    "guard_scene_tool_scope"
+    "guard_scene_tool_scope",
+    "guard_shell_approval",
+    "guard_shell_denied_command",
+    "guard_shell_denied_path",
+    "guard_shell_disabled",
+    "guard_shell_outside_workspace"
   ]
 }

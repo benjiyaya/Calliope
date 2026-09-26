@@ -57,8 +57,8 @@ export const ja: Dict = {
 	'nav.skillsBlurb': 'このプロジェクトで利用できるエージェントスキル。',
 	'nav.queue': 'ジョブキュー',
 	'nav.queueBlurb': '生成ジョブの並列数とタイムアウト。',
-	'nav.storage': 'ストレージ',
-	'nav.storageBlurb': 'ファイルの保存先。',
+	'nav.storage': 'システムパス',
+	'nav.storageBlurb': 'ファイルの保存先とエージェントの作業場所。',
 
 	// --- Toast ---
 	'toast.dismiss': '閉じる',
@@ -1012,12 +1012,32 @@ export const ja: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'ComfyUI の実行場所。',
 	'settings.comfyHint': 'このマシンから到達できる必要があります。',
-	'settings.storageSection': 'ストレージ',
-	'settings.storageLead': 'ファイルの保存先。',
+	'settings.storageSection': 'システムパス',
+	'settings.storageLead': 'ファイルの保存先と、エージェントの作業場所。',
 	'settings.storageCalloutStrong': 'データディレクトリの変更',
 	'settings.storageCalloutBody': 'はアセットを移動します。既存のパスはここで設定するまで引き続き機能します。',
 	'settings.dataDir': 'データディレクトリ',
 	'settings.assetsDir': 'アセットディレクトリ',
+	'settings.workspaceDir': 'エージェントワークスペース',
+	'settings.workspaceDirHint':
+		'エージェントのシェル（run_command）が作業できるサンドボックスフォルダ。空欄の場合は DATA_DIR/workspace を使用します。エージェントはこのフォルダの外にはアクセスできません。',
+	'settings.shellSection': 'エージェントシェル',
+	'settings.shellLead': 'ワークスペース内でインストール済みのコマンドラインツールを実行できるようにします。',
+	'settings.shellCalloutStrong': 'オプトイン：',
+	'settings.shellCalloutBody':
+		'コマンドはこのマシン上で実行されますが、エージェントワークスペースにサンドボックス化されます。機密ファイル（設定・データベース・資格情報）は常に拒否され、読み取り専用以外のコマンドは事前に確認を求めます。',
+	'settings.shellLabel': 'エージェントシェルを有効化（run_command）',
+	'settings.shellHint':
+		'デフォルトはオフです。オンにすると、検査系コマンド（ffprobe）は自由に実行でき、変更を伴うコマンドは scope="shell" の質問カードで承認を得た後にのみ実行されます。',
+	'settings.historyBudgetSection': 'コンテキスト履歴バジェット',
+	'settings.historyBudgetLead':
+		'各エージェント要求が再生する会話履歴の量を制限し、長いセッションでもモデルのコンテキストウィンドウがあふれないようにします。',
+	'settings.historyBudgetField': '履歴バジェット（文字数）',
+	'settings.historyBudgetHint':
+		'≈1トークン4文字。最も古いターンから先に除外されます。下のプリセットが良い出発点です。',
+	'settings.historyBudgetSmall': '小 · 60k',
+	'settings.historyBudgetMedium': '中 · 120k',
+	'settings.historyBudgetLarge': '大 · 400k',
 	'settings.hardeningSection': 'プロンプトのハードニング',
 	'settings.hardeningLead': '生成プロンプトの先頭に付加されるルール。',
 	'settings.hardeningHint': 'ネガティブ制約やスタイルのガードレールの適用に使います。',

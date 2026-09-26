@@ -179,6 +179,12 @@ class ToolRegistry:
             return False
         if t.blind_only and ctx.project_id is not None:
             return False
+        # shot_* tools exist ONLY on the Build Scene surface (origin='scene').
+        # A chat-origin session (AI Canvas, main loop) should not see 23 shot
+        # tools it can never legitimately use — payload noise at best, wasted
+        # calls at worst.
+        if t.category == "shot" and ctx.origin != "scene":
+            return False
         # Build Scene surface: shot tools + minimal base ONLY. A missing tool
         # is harder to misuse than one that fails at execute time.
         if ctx.origin == "scene" and not _scene_scoped(t):

@@ -143,6 +143,30 @@ def test_chat_payload_unaffected_by_scene_scope(client):
     assert "run_workflow" in names or "list_workflows" in names
 
 
+def test_chat_origin_payload_has_no_shot_tools(client):
+    """shot_* tools exist ONLY on the Build Scene surface (origin='scene') —
+    a chat-origin sandbox must not carry the 23-tool shot payload (~2k tokens
+    of noise the model can never legitimately use)."""
+    from calliope.agent.harness.tools import openai_tools_payload
+
+    chat_ctx = ToolContext(session_id=1, project_id=None, origin="chat")
+    names = {t["function"]["name"] for t in openai_tools_payload(chat_ctx)}
+    shot_names = [n for n in names if n.startswith("shot_") or n.startswith("add_") and n in {
+        "add_object", "add_keyframe", "update_keyframe", "delete_keyframe",
+        "move_keyframe_time", "set_playback",
+    }]
+    assert not shot_names, f"shot tools leaked into chat payload: {shot_names}"
+    assert "get_scene" not in names and "set_shot" not in names
+    assert "list_shot_presets" not in names
+
+
+def test_scene_origin_payload_still_has_shot_tools(client):
+    from calliope.agent.harness.tools import openai_tools_payload
+
+    names = {t["function"]["name"] for t in openai_tools_payload(_scene_ctx())}
+    assert "get_scene" in names and "add_keyframe" in names and "set_shot" in names
+
+
 def test_scene_execute_denies_out_of_scope_tool(client):
     from calliope.agent.harness.tools import execute_tool
 

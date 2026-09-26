@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     data_dir: Path = DEFAULT_DATA_DIR
     assets_dir: Path = DEFAULT_ASSETS_DIR
     db_name: str = "calliope.db"
+    # Dedicated sandbox folder the agent shell (run_command) may work in.
+    # None → data_dir / "workspace". The shell's cwd AND its path-like args
+    # are containment-checked against this folder (plus assets_dir for
+    # read-side reference inspection) — config / DB / repo root are never
+    # reachable from a tool call. User-settable in Settings → System Paths.
+    agent_workspace_dir: Path | None = None
+    # Master switch for the agent shell. Default OFF (ships to end users with
+    # secrets on disk; the eval callout requires explicit opt-in).
+    agent_shell_enabled: bool = False
 
     llm_base_url: str = "http://127.0.0.1:11434/v1"
     llm_model: str = "llama3.2"
@@ -145,9 +154,17 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         return self.data_dir / self.db_name
 
+    @property
+    def workspace_dir(self) -> Path:
+        """The agent shell's sandbox root (real folder, always under a disk home)."""
+        if self.agent_workspace_dir is not None:
+            return self.agent_workspace_dir
+        return self.data_dir / "workspace"
+
     def ensure_storage_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.assets_dir.mkdir(parents=True, exist_ok=True)
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_llm_profiles(self) -> bool:
         """Guarantee at least one profile and that llm_* match the active one.
@@ -313,6 +330,7 @@ class Settings(BaseSettings):
             "port": self.port,
             "data_dir": str(self.data_dir),
             "assets_dir": str(self.assets_dir),
+            "agent_workspace_dir": str(self.workspace_dir),
             "db_name": self.db_name,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
@@ -328,6 +346,7 @@ class Settings(BaseSettings):
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
             "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }
@@ -354,7 +373,7 @@ class Settings(BaseSettings):
             return
 
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        path_keys = {"data_dir", "assets_dir"}
+        path_keys = {"data_dir", "assets_dir", "agent_workspace_dir"}
         # Ignore legacy comfyui_input_dir / comfyui_output_dir if present in old configs.
         skip_keys = {"comfyui_input_dir", "comfyui_output_dir"}
         for key, value in data.items():
@@ -364,12 +383,17 @@ class Settings(BaseSettings):
                 value = normalize_path(value)
             if key == "dry_run":
                 value = bool(value)
-            if hasattr(self, key) and key not in {"data_dir", "assets_dir"}:
+            if key == "agent_shell_enabled":
+                value = bool(value)
+            if hasattr(self, key) and key not in {"data_dir", "assets_dir", "agent_workspace_dir"}:
                 setattr(self, key, value)
 
         data_dir = normalize_path(data.get("data_dir")) or DEFAULT_DATA_DIR
         assets_dir = normalize_path(data.get("assets_dir")) or (data_dir / "assets")
         self._apply_storage_paths(data_dir, assets_dir)
+        # Agent workspace: explicit + non-ephemeral wins; else the data_dir default.
+        ws = normalize_path(data.get("agent_workspace_dir"))
+        self.agent_workspace_dir = ws if ws is not None and not is_ephemeral_path(ws) else None
         self.dry_run = bool(data.get("dry_run", False))
         self.ensure_storage_dirs()
         profiles_migrated = self.ensure_llm_profiles()
@@ -389,7 +413,11 @@ class Settings(BaseSettings):
             self.data_dir = DEFAULT_DATA_DIR
         if is_ephemeral_path(self.assets_dir):
             self.assets_dir = self.data_dir / "assets"
+        # Same poison guard for the agent shell workspace
+        if self.agent_workspace_dir is not None and is_ephemeral_path(self.agent_workspace_dir):
+            self.agent_workspace_dir = None
         self.dry_run = bool(self.dry_run)
+        self.agent_shell_enabled = bool(self.agent_shell_enabled)
         self.ensure_storage_dirs()
 
         data = {
@@ -397,6 +425,7 @@ class Settings(BaseSettings):
             "port": self.port,
             "data_dir": str(self.data_dir),
             "assets_dir": str(self.assets_dir),
+            "agent_workspace_dir": str(self.workspace_dir),
             "db_name": self.db_name,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
@@ -412,6 +441,7 @@ class Settings(BaseSettings):
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
             "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
         }

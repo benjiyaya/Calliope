@@ -57,8 +57,8 @@ export const de: Dict = {
 	'nav.skillsBlurb': 'In diesem Projekt verfügbare Agenten-Fähigkeiten.',
 	'nav.queue': 'Warteschlange',
 	'nav.queueBlurb': 'Parallelität und Zeitlimits für Generierungsjobs.',
-	'nav.storage': 'Speicher',
-	'nav.storageBlurb': 'Wo Dateien auf der Festplatte liegen.',
+	'nav.storage': 'Systempfade',
+	'nav.storageBlurb': 'Wo Dateien liegen und wo der Agent arbeiten darf.',
 
 	// --- Toast ---
 	'toast.dismiss': 'Ausblenden',
@@ -1012,12 +1012,32 @@ export const de: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'Wo ComfyUI läuft.',
 	'settings.comfyHint': 'Muss von diesem Rechner aus erreichbar sein.',
-	'settings.storageSection': 'Speicher',
-	'settings.storageLead': 'Wo Dateien auf der Festplatte liegen.',
+	'settings.storageSection': 'Systempfade',
+	'settings.storageLead': 'Wo Dateien liegen und wo der Agent arbeiten darf.',
 	'settings.storageCalloutStrong': 'Datenverzeichnis ändern',
 	'settings.storageCalloutBody': 'verschiebt Ressourcen. Bestehende Pfade funktionieren weiter, bis sie hier gesetzt werden.',
 	'settings.dataDir': 'Datenverzeichnis',
 	'settings.assetsDir': 'Ressourcen-Verzeichnis',
+	'settings.workspaceDir': 'Agent-Arbeitsbereich',
+	'settings.workspaceDirHint':
+		'Isolierter Ordner, in dem die Agent-Shell (run_command) arbeiten darf. Leer = DATA_DIR/workspace. Der Agent kann nichts außerhalb anfassen.',
+	'settings.shellSection': 'Agent-Shell',
+	'settings.shellLead': 'Erlaubt dem Agenten, installierte Kommandozeilen-Tools in seinem Arbeitsbereich auszuführen.',
+	'settings.shellCalloutStrong': 'Nur nach Zustimmung:',
+	'settings.shellCalloutBody':
+		'Befehle laufen auf dieser Maschine, auf den Agent-Arbeitsbereich beschränkt. Sensible Dateien (Konfiguration, Datenbank, Zugangsdaten) werden immer abgelehnt; alles Nicht-Lese-Zugriff fragt vorher nach.',
+	'settings.shellLabel': 'Agent-Shell aktivieren (run_command)',
+	'settings.shellHint':
+		'Standardmäßig aus. Wenn aktiv, darf der Agent Inspektionsbefehle (ffprobe) frei ausführen; alles Modifizierende nur nach Freigabe über eine scope="shell"-Fragekarte.',
+	'settings.historyBudgetSection': 'Kontextverlaufs-Budget',
+	'settings.historyBudgetLead':
+		'Begrenzt, wie viel Konversationsverlauf jede Agentenanfrage wiedergibt, damit lange Sitzungen das Kontextfenster des Modells nie überlaufen.',
+	'settings.historyBudgetField': 'Verlaufsbudget (Zeichen)',
+	'settings.historyBudgetHint':
+		'≈4 Zeichen pro Token. Älteste ganze Runden fallen zuerst heraus; die Presets unten sind gute Startwerte.',
+	'settings.historyBudgetSmall': 'Klein · 60k',
+	'settings.historyBudgetMedium': 'Mittel · 120k',
+	'settings.historyBudgetLarge': 'Groß · 400k',
 	'settings.hardeningSection': 'Prompt-Härtung',
 	'settings.hardeningLead': 'Regeln, die Generierungs-Prompts vorangestellt werden.',
 	'settings.hardeningHint': 'Dienen dazu, negative Vorgaben oder Stil-Leitplanken durchzusetzen.',

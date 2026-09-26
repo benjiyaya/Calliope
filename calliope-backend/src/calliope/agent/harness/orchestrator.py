@@ -51,6 +51,29 @@ MAX_HISTORY_USER_TURNS = 40
 # pauses the swarm on it (skips remaining tasks, no synthesis LLM call).
 _PAUSED_PREFIX = "Paused: "
 
+# Prior task reports carried into each sub-agent's context: the LAST N
+# reports, each capped, so later tasks build on earlier results without a
+# full replay (sub-agents were fully stateless — finding 3).
+_PRIOR_REPORT_COUNT = 2
+_PRIOR_REPORT_CHARS = 1500
+
+
+def _prior_reports_digest(results: list[str]) -> str:
+    """Capped digest of the most recent task reports for the next sub-agent."""
+    if not results:
+        return ""
+    lines = []
+    for r in results[-_PRIOR_REPORT_COUNT:]:
+        r = (r or "").strip()
+        if not r:
+            continue
+        if len(r) > _PRIOR_REPORT_CHARS:
+            r = r[:_PRIOR_REPORT_CHARS] + "…[truncated]"
+        lines.append(r)
+    if not lines:
+        return ""
+    return "Prior task reports:\n" + "\n".join(lines) + "\n"
+
 # Trivial-goal fast-path: one-line imperative messages skip the planner
 # round-trip entirely. The single loop has every tool, so a misfire just
 # loses the task-list UI — routing decision, not a permission change.
@@ -130,6 +153,14 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "delete_scene",
         "list_workflows",
         "ask_user",
+        # Memory + skills are role-agnostic knowledge access: a sub-agent must
+        # be able to honor a saved user preference and load a skill body
+        # (escalation via ask_user is role-agnostic for the same reason).
+        "save_memory",
+        "list_memories",
+        "forget_memory",
+        "read_skill",
+        "list_skills",
     ],
     "script": [
         "get_workspace",
@@ -146,6 +177,11 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "reorder_scenes",
         "refresh_continuity_plan",
         "ask_user",
+        "save_memory",
+        "list_memories",
+        "forget_memory",
+        "read_skill",
+        "list_skills",
     ],
     "assets": [
         "get_workspace",
@@ -170,6 +206,11 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "post_artifact_to_canvas",
         "summarize_canvas",
         "ask_user",
+        "save_memory",
+        "list_memories",
+        "forget_memory",
+        "read_skill",
+        "list_skills",
     ],
     "video": [
         "get_workspace",
@@ -185,6 +226,11 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "comfy_server_info",
         "ask_user",
         "post_artifact_to_canvas",
+        "save_memory",
+        "list_memories",
+        "forget_memory",
+        "read_skill",
+        "list_skills",
     ],
 }
 
@@ -368,20 +414,39 @@ async def orchestrate(
         return await run_turn(ctx, history, on_message=on_message)
 
     # ── Swarm path ──────────────────────────────────────────────
+    # Planner output is LLM JSON — roles can be typos or invented names
+    # ("asset", "renderer"). Silent fallback ran the task with the script
+    # toolset; clamp to story instead and RECORD the clamp so the plan event
+    # and the user-facing note both surface it (finding 5).
+    valid_roles = set(ROLE_TOOLS)
     norm_tasks: list[dict[str, str]] = []
-    for t in plan["tasks"]:
+    clamped_roles: list[dict[str, str]] = []
+    for idx, t in enumerate(plan["tasks"]):
+        raw_role = str(t.get("role") or "story").strip()
+        role = raw_role if raw_role in valid_roles else "story"
+        if role != raw_role:
+            clamped_roles.append({"from": raw_role, "to": role, "index": idx})
         norm_tasks.append(
             {
-                "role": t.get("role") or "script",
+                "role": role,
                 "goal": (t.get("goal") or goal).strip(),
             }
         )
+    if clamped_roles:
+        clamp_note = "Role validation: " + ", ".join(
+            f"task {c['index']} role '{c['from']}' is not valid — ran as {c['to']}"
+            for c in clamped_roles
+        )
+        note = f"{note}\n{clamp_note}" if note else clamp_note
     # Persist the plan so the UI can render a live to-do table and re-derive
     # it after a reload; broadcast the full list with initial pending status.
+    plan_event_data: dict[str, Any] = {"tasks": norm_tasks, "note": note}
+    if clamped_roles:
+        plan_event_data["clamped_roles"] = clamped_roles
     session_log.append_event(
         session_id,
         session_log.PLAN_CREATED,
-        {"tasks": norm_tasks, "note": note},
+        plan_event_data,
     )
     await event_bus.publish(
         "agent.plan",
@@ -458,12 +523,15 @@ async def orchestrate(
                 "content": f"Starting: {goal_i}",
             }
         )
+        digest = _prior_reports_digest(results)
         sub_history: list[dict[str, Any]] = [
             {
                 "role": "user",
                 "content": (
                     f"You are the {role} sub-agent. Goal: {goal_i}\n"
-                    f"Project: #{ctx.project_id}. Complete your goal with your "
+                    f"Project: #{ctx.project_id}.\n"
+                    + (digest + "\n" if digest else "")
+                    + "Complete your goal with your "
                     "available tools, then reply with a concise summary of what "
                     "you did and what the next sub-agent should know."
                 ),
@@ -628,6 +696,19 @@ async def _run_sub_agent(
         "the whole timeline. Never add_scene to attach an mp4. For "
         "text-only edits, do the edit and stop."
     )
+    # Memory + skills sections, same content the main loop renders (order 35
+    # / 37). Rendered ONCE here: a sub-agent lives for one task, and memory
+    # recall doubles as use-count accounting, so per-step re-render would
+    # inflate ranking. Sections stay None when there is nothing to show.
+    from calliope.agent.harness.plugins.memory import memory_prompt_text
+    from calliope.agent.harness.plugins.skills import skills_prompt_text
+
+    try:
+        for section in (memory_prompt_text(ctx), skills_prompt_text(ctx)):
+            if section:
+                system += "\n\n" + section
+    except Exception:  # noqa: BLE001 — prompt garnish must never kill a task
+        logger.exception("Sub-agent memory/skills section render failed")
     hardening = hardening_text()
     if hardening:
         system += "\n\n" + hardening

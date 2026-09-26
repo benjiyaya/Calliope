@@ -57,8 +57,8 @@ export const fr: Dict = {
 	'nav.skillsBlurb': "Compétences de l'agent disponibles dans ce projet.",
 	'nav.queue': "File d'attente",
 	'nav.queueBlurb': 'Parallélisme et délais des tâches de génération.',
-	'nav.storage': 'Stockage',
-	'nav.storageBlurb': 'Où les fichiers sont stockés sur le disque.',
+	'nav.storage': 'Chemins système',
+	'nav.storageBlurb': "Où les fichiers sont stockés et où l'agent peut travailler.",
 
 	// --- Toast ---
 	'toast.dismiss': 'Ignorer',
@@ -1012,12 +1012,32 @@ export const fr: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': "Où ComfyUI s'exécute.",
 	'settings.comfyHint': 'Doit être accessible depuis cette machine.',
-	'settings.storageSection': 'Stockage',
-	'settings.storageLead': 'Où les fichiers sont stockés sur le disque.',
+	'settings.storageSection': 'Chemins système',
+	'settings.storageLead': "Où les fichiers sont stockés et où l'agent peut travailler.",
 	'settings.storageCalloutStrong': 'Changer le répertoire de données',
 	'settings.storageCalloutBody': "déplace les ressources. Les chemins existants continuent de fonctionner jusqu'à la définition ici.",
 	'settings.dataDir': 'Répertoire de données',
 	'settings.assetsDir': 'Répertoire des ressources',
+	'settings.workspaceDir': "Espace de travail de l'agent",
+	'settings.workspaceDirHint':
+		"Dossier isolé où le shell de l'agent (run_command) peut travailler. Vide = DATA_DIR/workspace. L'agent ne peut rien toucher en dehors.",
+	'settings.shellSection': "Shell de l'agent",
+	'settings.shellLead': "Permet à l'agent d'exécuter des outils en ligne de commande dans son espace de travail.",
+	'settings.shellCalloutStrong': 'Sur activation :',
+	'settings.shellCalloutBody':
+		"les commandes s'exécutent sur cette machine, isolées dans l'espace de travail de l'agent. Les fichiers sensibles (config, base de données, identifiants) sont toujours refusés ; tout ce qui n'est pas en lecture seule vous est demandé avant.",
+	'settings.shellLabel': "Activer le shell de l'agent (run_command)",
+	'settings.shellHint':
+		'Désactivé par défaut. Une fois activé, l\'agent peut lancer librement des commandes d\'inspection (ffprobe) ; les commandes modifiantes ne passent qu\'après approbation via une carte de question scope="shell".',
+	'settings.historyBudgetSection': 'Budget d\'historique du contexte',
+	'settings.historyBudgetLead':
+		'Limite la quantité d\'historique de conversation rejouée à chaque requête de l\'agent, afin que les longues sessions ne débordent jamais de la fenêtre de contexte du modèle.',
+	'settings.historyBudgetField': 'Budget d\'historique (caractères)',
+	'settings.historyBudgetHint':
+		'≈4 caractères par token. Les tours les plus anciens sont d\'abord retirés ; les préréglages ci-dessous sont de bons points de départ.',
+	'settings.historyBudgetSmall': 'Petit · 60k',
+	'settings.historyBudgetMedium': 'Moyen · 120k',
+	'settings.historyBudgetLarge': 'Grand · 400k',
 	'settings.hardeningSection': 'Renforcement du prompt',
 	'settings.hardeningLead': 'Règles ajoutées au début des prompts de génération.',
 	'settings.hardeningHint': 'Sert à imposer des contraintes négatives ou des garde-fous de style.',

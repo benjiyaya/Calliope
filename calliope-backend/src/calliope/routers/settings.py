@@ -30,12 +30,15 @@ class SettingsUpdate(BaseModel):
     comfyui_base_url: str | None = None
     data_dir: str | None = None
     assets_dir: str | None = None
+    agent_workspace_dir: str | None = None
+    agent_shell_enabled: bool | None = None
     queue_concurrency: int | None = Field(None, ge=1, le=8)
     queue_poll_interval_sec: float | None = Field(None, ge=0.5, le=60.0)
     queue_poll_timeout_sec: float | None = Field(None, ge=0, le=86400.0)
     queue_max_retries: int | None = Field(None, ge=0, le=10)
     agent_max_steps: int | None = Field(None, ge=1, le=100)
     agent_hardening_prompt: str | None = Field(None, max_length=20000)
+    agent_history_char_budget: int | None = Field(None, ge=10_000, le=2_000_000)
     h3_rewrite_extra_body: dict[str, Any] | None = None
     dry_run: bool | None = None
 
@@ -54,12 +57,15 @@ async def update_settings(payload: SettingsUpdate) -> dict[str, Any]:
     legacy_llm = {k: data.pop(k) for k in list(data) if k in _LEGACY_LLM_KEYS}
 
     for key, value in data.items():
-        if key in {"data_dir", "assets_dir"}:
+        if key in {"data_dir", "assets_dir", "agent_workspace_dir"}:
             path = normalize_path(value)
             if path is not None:
                 setattr(settings, key, path)
             continue
         if key == "dry_run":
+            setattr(settings, key, bool(value))
+            continue
+        if key == "agent_shell_enabled":
             setattr(settings, key, bool(value))
             continue
         setattr(settings, key, value)

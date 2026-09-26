@@ -15,7 +15,7 @@ from calliope.agent.harness.registry import ToolContext, ToolDefinition, ToolReg
 
 logger = logging.getLogger("calliope.harness.plugins.interaction")
 
-ALLOWED_SCOPES = ("render", "destructive_replace", "info")
+ALLOWED_SCOPES = ("render", "destructive_replace", "shell", "info")
 _QUESTION_CAP = 500
 _OPTION_CAP = 6
 _OPTION_LEN_CAP = 120
@@ -94,7 +94,8 @@ def register(registry: ToolRegistry) -> None:
                 'question="Generate images for all 3 characters?", '
                 'options=["Yes, generate", "No, not yet"], scope="render"). '
                 "scope: 'render' for generation approval, 'destructive_replace' for "
-                "content replacement, 'info' for everything else. Returns "
+                "content replacement, 'shell' for running a command via "
+                "run_command, 'info' for everything else. Returns "
                 "awaiting_user_input — treat it as the end of your turn."
             ),
             parameters={

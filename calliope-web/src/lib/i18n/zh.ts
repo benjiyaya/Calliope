@@ -57,8 +57,8 @@ export const zh: Dict = {
 	'nav.skillsBlurb': '本项目可用的智能体技能。',
 	'nav.queue': '任务队列',
 	'nav.queueBlurb': '生成任务的并发数与超时设置。',
-	'nav.storage': '存储',
-	'nav.storageBlurb': '文件在磁盘上的位置。',
+	'nav.storage': '系统路径',
+	'nav.storageBlurb': '文件在磁盘上的位置，以及代理可以工作的位置。',
 
 	// --- Toast ---
 	'toast.dismiss': '关闭',
@@ -1012,12 +1012,32 @@ export const zh: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'ComfyUI 的运行位置。',
 	'settings.comfyHint': '必须能从本机访问。',
-	'settings.storageSection': '存储',
-	'settings.storageLead': '文件在磁盘上的位置。',
+	'settings.storageSection': '系统路径',
+	'settings.storageLead': '文件在磁盘上的位置，以及 AI 代理可以工作的位置。',
 	'settings.storageCalloutStrong': '更改数据目录',
 	'settings.storageCalloutBody': '会移动素材。在你于此设置之前，现有路径仍可正常使用。',
 	'settings.dataDir': '数据目录',
 	'settings.assetsDir': '素材目录',
+	'settings.workspaceDir': '代理工作区',
+	'settings.workspaceDirHint':
+		'AI 代理 shell（run_command）可以工作的沙盒文件夹。留空则使用 DATA_DIR/workspace。代理无法触及该文件夹之外的任何内容。',
+	'settings.shellSection': '代理 Shell',
+	'settings.shellLead': '允许代理在其工作区内运行已安装的命令行工具。',
+	'settings.shellCalloutStrong': '需手动开启：',
+	'settings.shellCalloutBody':
+		'命令在本机运行，且被沙盒限制在代理工作区内。敏感文件（配置、数据库、凭据）始终被拒绝；非只读操作会先询问你。',
+	'settings.shellLabel': '启用代理 Shell（run_command）',
+	'settings.shellHint':
+		'默认关闭。开启后，代理可以自由运行检查类命令（ffprobe），修改类命令需先通过 scope="shell" 的提问卡片征得你同意。',
+	'settings.historyBudgetSection': '上下文历史预算',
+	'settings.historyBudgetLead':
+		'限制每次代理请求重放的对话历史数量，避免长会话溢出模型的上下文窗口。',
+	'settings.historyBudgetField': '历史预算（字符数）',
+	'settings.historyBudgetHint':
+		'约每 token 4 个字符。最早的整轮对话最先被丢弃；下方预设是不错的起点。',
+	'settings.historyBudgetSmall': '小 · 60k',
+	'settings.historyBudgetMedium': '中 · 120k',
+	'settings.historyBudgetLarge': '大 · 400k',
 	'settings.hardeningSection': '提示词加固',
 	'settings.hardeningLead': '添加到生成提示词前面的规则。',
 	'settings.hardeningHint': '用于强制执行负面约束或风格护栏。',

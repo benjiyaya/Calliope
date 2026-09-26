@@ -1,0 +1,25 @@
+{
+  "name": "guard_denial_recovery",
+  "description": "Synthetic: a render call denied by guard_render_approval, the model escalates via ask_user, and the turn ends awaiting_input.",
+  "events": [
+    { "seq": 1, "type": "user/message", "data": { "content": "Make the film better." } },
+    { "seq": 2, "type": "turn/start", "data": { "turn": 1 } },
+    { "seq": 3, "type": "step/start", "data": { "turn": 1, "step": 1 } },
+    { "seq": 4, "type": "assistant/message", "data": { "turn": 1, "step": 1, "content": null, "agent_name": null, "tool_calls": [
+      { "id": "r1", "type": "function", "function": { "name": "enqueue_video_jobs", "arguments": "{\"scene_ids\": [1]}" } }
+    ] } },
+    { "seq": 5, "type": "tool/call", "data": { "turn": 1, "step": 1, "call_id": "r1", "tool_name": "enqueue_video_jobs", "arguments": "{\"scene_ids\": [1]}", "agent_name": null } },
+    { "seq": 6, "type": "tool/result", "data": { "turn": 1, "step": 1, "call_id": "r1", "tool_name": "enqueue_video_jobs", "result": { "ok": false, "reason_code": "guard_render_approval", "error": "blocked: nothing is being generated — the user has not asked for generation. Ask with ask_user(...)." }, "agent_name": null } },
+    { "seq": 7, "type": "step/end", "data": { "turn": 1, "step": 1 } },
+    { "seq": 8, "type": "step/start", "data": { "turn": 1, "step": 2 } },
+    { "seq": 9, "type": "assistant/message", "data": { "turn": 1, "step": 2, "content": null, "agent_name": null, "tool_calls": [
+      { "id": "q1", "type": "function", "function": { "name": "ask_user", "arguments": "{\"question\": \"Render scene 1 now?\", \"options\": [\"Yes\", \"No\"], \"scope\": \"render\"}" } }
+    ] } },
+    { "seq": 10, "type": "tool/call", "data": { "turn": 1, "step": 2, "call_id": "q1", "tool_name": "ask_user", "arguments": "{\"question\": \"Render scene 1 now?\", \"options\": [\"Yes\", \"No\"], \"scope\": \"render\"}", "agent_name": null } },
+    { "seq": 11, "type": "tool/result", "data": { "turn": 1, "step": 2, "call_id": "q1", "tool_name": "ask_user", "result": { "ok": true, "awaiting_user_input": true, "question": "Render scene 1 now?" }, "agent_name": null } },
+    { "seq": 12, "type": "question/asked", "data": { "question": "Render scene 1 now?", "options": ["Yes", "No"], "scope": "render" } },
+    { "seq": 13, "type": "step/end", "data": { "turn": 1, "step": 2 } },
+    { "seq": 14, "type": "assistant/message", "data": { "turn": 1, "step": 2, "content": "Paused: Render scene 1 now?", "agent_name": null } },
+    { "seq": 15, "type": "turn/end", "data": { "turn": 1, "status": "awaiting_input" } }
+  ]
+}

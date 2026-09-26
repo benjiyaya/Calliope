@@ -1,0 +1,21 @@
+{
+  "name": "ask_user_pause_mid_batch",
+  "description": "Synthetic: a step with two tool calls where the first is ask_user; the second call has skipped tool/call + tool/result receipts and the turn ends awaiting_input.",
+  "events": [
+    { "seq": 1, "type": "user/message", "data": { "content": "Generate a portrait for Kira." } },
+    { "seq": 2, "type": "turn/start", "data": { "turn": 1 } },
+    { "seq": 3, "type": "step/start", "data": { "turn": 1, "step": 1 } },
+    { "seq": 4, "type": "assistant/message", "data": { "turn": 1, "step": 1, "content": null, "agent_name": null, "tool_calls": [
+      { "id": "q1", "type": "function", "function": { "name": "ask_user", "arguments": "{\"question\": \"Render a portrait of Kira now?\", \"options\": [\"Yes\", \"No\"], \"scope\": \"render\"}" } },
+      { "id": "w1", "type": "function", "function": { "name": "enqueue_asset_jobs", "arguments": "{\"character_ids\": [3]}" } }
+    ] } },
+    { "seq": 5, "type": "tool/call", "data": { "turn": 1, "step": 1, "call_id": "q1", "tool_name": "ask_user", "arguments": "{\"question\": \"Render a portrait of Kira now?\", \"options\": [\"Yes\", \"No\"], \"scope\": \"render\"}", "agent_name": null } },
+    { "seq": 6, "type": "tool/result", "data": { "turn": 1, "step": 1, "call_id": "q1", "tool_name": "ask_user", "result": { "ok": true, "awaiting_user_input": true, "question": "Render a portrait of Kira now?" }, "agent_name": null } },
+    { "seq": 7, "type": "question/asked", "data": { "question": "Render a portrait of Kira now?", "options": ["Yes", "No"], "scope": "render" } },
+    { "seq": 8, "type": "tool/call", "data": { "turn": 1, "step": 1, "call_id": "w1", "tool_name": "enqueue_asset_jobs", "arguments": "{\"character_ids\": [3]}", "agent_name": null } },
+    { "seq": 9, "type": "tool/result", "data": { "turn": 1, "step": 1, "call_id": "w1", "tool_name": "enqueue_asset_jobs", "result": { "ok": false, "skipped": true, "error": "Not executed — this turn paused for the user's answer to an ask_user question in the same step. Re-issue the call after they answer if still needed." }, "agent_name": null } },
+    { "seq": 10, "type": "step/end", "data": { "turn": 1, "step": 1 } },
+    { "seq": 11, "type": "assistant/message", "data": { "turn": 1, "step": 1, "content": "Paused: Render a portrait of Kira now?", "agent_name": null } },
+    { "seq": 12, "type": "turn/end", "data": { "turn": 1, "status": "awaiting_input" } }
+  ]
+}

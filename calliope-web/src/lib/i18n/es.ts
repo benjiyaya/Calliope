@@ -57,8 +57,8 @@ export const es: Dict = {
 	'nav.skillsBlurb': 'Habilidades del agente disponibles en este proyecto.',
 	'nav.queue': 'Cola de tareas',
 	'nav.queueBlurb': 'Concurrencia y tiempos de espera de las tareas de generación.',
-	'nav.storage': 'Almacenamiento',
-	'nav.storageBlurb': 'Dónde se guardan los archivos en el disco.',
+	'nav.storage': 'Rutas del sistema',
+	'nav.storageBlurb': 'Dónde se guardan los archivos y dónde puede trabajar el agente.',
 
 	// --- Toast ---
 	'toast.dismiss': 'Descartar',
@@ -1012,12 +1012,32 @@ export const es: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'Dónde se ejecuta ComfyUI.',
 	'settings.comfyHint': 'Debe ser accesible desde este equipo.',
-	'settings.storageSection': 'Almacenamiento',
-	'settings.storageLead': 'Dónde se guardan los archivos en el disco.',
+	'settings.storageSection': 'Rutas del sistema',
+	'settings.storageLead': 'Dónde se guardan los archivos y dónde puede trabajar el agente.',
 	'settings.storageCalloutStrong': 'Cambiar el directorio de datos',
 	'settings.storageCalloutBody': 'mueve los recursos. Las rutas existentes seguirán funcionando hasta que se establezca aquí.',
 	'settings.dataDir': 'Directorio de datos',
 	'settings.assetsDir': 'Directorio de recursos',
+	'settings.workspaceDir': 'Espacio de trabajo del agente',
+	'settings.workspaceDirHint':
+		'Carpeta aislada donde puede trabajar el shell del agente (run_command). Si se deja vacía, se usa DATA_DIR/workspace. El agente no puede tocar nada fuera de ella.',
+	'settings.shellSection': 'Shell del agente',
+	'settings.shellLead': 'Permite al agente ejecutar herramientas de línea de comandos en su espacio de trabajo.',
+	'settings.shellCalloutStrong': 'Solo con consentimiento:',
+	'settings.shellCalloutBody':
+		'los comandos se ejecutan en esta máquina, aislados en el espacio de trabajo del agente. Los archivos sensibles (configuración, base de datos, credenciales) siempre se rechazan; lo que no sea de solo lectura te lo preguntará antes.',
+	'settings.shellLabel': 'Activar el shell del agente (run_command)',
+	'settings.shellHint':
+		'Desactivado por defecto. Al activarlo, el agente puede ejecutar comandos de inspección (ffprobe) libremente, y los comandos de modificación solo tras aprobar una tarjeta de pregunta scope="shell".',
+	'settings.historyBudgetSection': 'Presupuesto de historial de contexto',
+	'settings.historyBudgetLead':
+		'Limita cuánto historial de conversación repite cada solicitud del agente, para que las sesiones largas nunca desborden la ventana de contexto del modelo.',
+	'settings.historyBudgetField': 'Presupuesto de historial (caracteres)',
+	'settings.historyBudgetHint':
+		'≈4 caracteres por token. Los turnos más antiguos se descartan primero; los preajustes de abajo son buenos puntos de partida.',
+	'settings.historyBudgetSmall': 'Pequeño · 60k',
+	'settings.historyBudgetMedium': 'Medio · 120k',
+	'settings.historyBudgetLarge': 'Grande · 400k',
 	'settings.hardeningSection': 'Refuerzo de prompts',
 	'settings.hardeningLead': 'Reglas que se añaden al inicio de los prompts de generación.',
 	'settings.hardeningHint': 'Sirve para imponer restricciones negativas o límites de estilo.',

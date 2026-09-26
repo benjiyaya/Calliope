@@ -18,6 +18,7 @@ _PLUGIN_MODULES = (
     "calliope.agent.harness.plugins.memory",
     "calliope.agent.harness.plugins.skills",
     "calliope.agent.harness.plugins.shot_builder",
+    "calliope.agent.harness.plugins.system",
 )
 
 

@@ -55,8 +55,8 @@ export const en = {
 	'nav.skillsBlurb': 'Agent skills available in this project.',
 	'nav.queue': 'Job queue',
 	'nav.queueBlurb': 'Concurrency and timeouts for generation jobs.',
-	'nav.storage': 'Storage',
-	'nav.storageBlurb': 'Where files live on disk.',
+	'nav.storage': 'System Paths',
+	'nav.storageBlurb': 'Where files live, and where the agent may work.',
 
 	// --- Toast ---
 	'toast.dismiss': 'Dismiss',
@@ -1012,12 +1012,32 @@ export const en = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'Where ComfyUI runs.',
 	'settings.comfyHint': 'Must be reachable from this machine.',
-	'settings.storageSection': 'Storage',
-	'settings.storageLead': 'Where files live on disk.',
+	'settings.storageSection': 'System Paths',
+	'settings.storageLead': 'Where files live on disk, and where the agent may work.',
 	'settings.storageCalloutStrong': 'Changing data directory',
 	'settings.storageCalloutBody': 'moves assets. Existing paths keep working until set here.',
 	'settings.dataDir': 'Data directory',
 	'settings.assetsDir': 'Assets directory',
+	'settings.workspaceDir': 'Agent workspace',
+	'settings.workspaceDirHint':
+		'Sandbox folder the AI agent’s shell may work in (run_command). Leave empty to use DATA_DIR/workspace. The agent cannot touch anything outside it.',
+	'settings.shellSection': 'Agent shell',
+	'settings.shellLead': 'Let the agent run installed command-line tools in its workspace.',
+	'settings.shellCalloutStrong': 'Opt-in only:',
+	'settings.shellCalloutBody':
+		'commands run on this machine, sandboxed to the agent workspace. Sensitive files (config, database, credentials) are always denied; anything not read-only asks you first.',
+	'settings.shellLabel': 'Enable agent shell (run_command)',
+	'settings.shellHint':
+		'Off by default. When on, the agent may run inspection commands (ffprobe) freely and mutating commands only after you approve a scope="shell" question card.',
+	'settings.historyBudgetSection': 'Context history budget',
+	'settings.historyBudgetLead':
+		'Caps how much conversation history each agent request replays, so long sessions never overflow the model’s context window.',
+	'settings.historyBudgetField': 'History budget (characters)',
+	'settings.historyBudgetHint':
+		'≈4 characters per token. Oldest whole turns drop first; presets below are good starting points.',
+	'settings.historyBudgetSmall': 'Small · 60k',
+	'settings.historyBudgetMedium': 'Medium · 120k',
+	'settings.historyBudgetLarge': 'Large · 400k',
 	'settings.hardeningSection': 'Prompt hardening',
 	'settings.hardeningLead': 'Rules prepended to generation prompts.',
 	'settings.hardeningHint': 'Used to enforce negative constraints or style guardrails.',

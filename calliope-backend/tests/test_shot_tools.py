@@ -72,7 +72,7 @@ def test_shot_tools_hidden_in_linked_sessions():
 
 
 def test_shot_tools_visible_in_sandbox():
-    ctx = ToolContext(session_id=_mk_session(), project_id=None)
+    ctx = ToolContext(session_id=_mk_session(), project_id=None, origin="scene")
     names = {e["function"]["name"] for e in openai_tools_payload(ctx)}
     assert "get_scene" in names
     assert "set_joint" in names

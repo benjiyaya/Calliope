@@ -57,8 +57,8 @@ export const ko: Dict = {
 	'nav.skillsBlurb': '이 프로젝트에서 사용할 수 있는 에이전트 스킬입니다.',
 	'nav.queue': '작업 대기열',
 	'nav.queueBlurb': '생성 작업의 동시 실행 수와 시간 초과를 설정합니다.',
-	'nav.storage': '저장소',
-	'nav.storageBlurb': '파일이 디스크에 저장되는 위치입니다.',
+	'nav.storage': '시스템 경로',
+	'nav.storageBlurb': '파일이 저장되는 위치와 에이전트가 작업할 수 있는 위치입니다.',
 
 	// --- Toast ---
 	'toast.dismiss': '닫기',
@@ -1012,12 +1012,32 @@ export const ko: Dict = {
 	'settings.comfySection': 'ComfyUI',
 	'settings.comfyLead': 'ComfyUI가 실행되는 위치입니다.',
 	'settings.comfyHint': '이 컴퓨터에서 접근할 수 있어야 합니다.',
-	'settings.storageSection': '저장소',
-	'settings.storageLead': '파일이 디스크에 저장되는 위치입니다.',
+	'settings.storageSection': '시스템 경로',
+	'settings.storageLead': '파일이 저장되는 위치와 에이전트가 작업할 수 있는 위치입니다.',
 	'settings.storageCalloutStrong': '데이터 디렉터리를 변경하면',
 	'settings.storageCalloutBody': '에셋이 이동합니다. 여기에 설정하기 전까지 기존 경로는 계속 작동합니다.',
 	'settings.dataDir': '데이터 디렉터리',
 	'settings.assetsDir': '에셋 디렉터리',
+	'settings.workspaceDir': '에이전트 작업 공간',
+	'settings.workspaceDirHint':
+		'에이전트 셸(run_command)이 작업할 수 있는 샌드박스 폴더입니다. 비워 두면 DATA_DIR/workspace를 사용합니다. 에이전트는 이 폴더 밖의 어떤 것도 건드릴 수 없습니다.',
+	'settings.shellSection': '에이전트 셸',
+	'settings.shellLead': '에이전트가 작업 공간 안에서 설치된 명령줄 도구를 실행할 수 있게 합니다.',
+	'settings.shellCalloutStrong': '직접 허용 필요:',
+	'settings.shellCalloutBody':
+		'명령은 이 머신에서, 에이전트 작업 공간으로 샌드박스되어 실행됩니다. 민감한 파일(설정, 데이터베이스, 자격 증명)은 항상 거부되며, 읽기 전용이 아닌 명령은 먼저 사용자에게 묻습니다.',
+	'settings.shellLabel': '에이전트 셸 사용 (run_command)',
+	'settings.shellHint':
+		'기본값은 꺼짐입니다. 켜면 에이전트가 검사 명령(ffprobe)은 자유롭게 실행할 수 있고, 변경 명령은 scope="shell" 질문 카드로 승인받은 후에만 실행됩니다.',
+	'settings.historyBudgetSection': '컨텍스트 기록 예산',
+	'settings.historyBudgetLead':
+		'각 에이전트 요청이 재생하는 대화 기록의 양을 제한하여, 긴 세션도 모델의 컨텍스트 창을 넘치지 않도록 합니다.',
+	'settings.historyBudgetField': '기록 예산 (문자 수)',
+	'settings.historyBudgetHint':
+		'약 토큰당 4문자입니다. 가장 오래된 대화 턴부터 먼저 제외되며, 아래 프리셋이 좋은 시작점입니다.',
+	'settings.historyBudgetSmall': '소형 · 60k',
+	'settings.historyBudgetMedium': '중형 · 120k',
+	'settings.historyBudgetLarge': '대형 · 400k',
 	'settings.hardeningSection': '프롬프트 강화',
 	'settings.hardeningLead': '생성 프롬프트 앞에 추가되는 규칙입니다.',
 	'settings.hardeningHint': '네거티브 제약이나 스타일 가드레일을 적용할 때 사용합니다.',

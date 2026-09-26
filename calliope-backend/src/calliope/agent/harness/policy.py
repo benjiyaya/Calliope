@@ -163,6 +163,55 @@ def user_allows_render(ctx: ToolContext) -> bool:
     return is_render_request(latest) or is_confirmation(latest)
 
 
+# ── Shell permission (run_command) ────────────────────────────────────────
+# A non-read-only command runs only when the user explicitly asked for it:
+# a scope="shell" question card answered affirmatively, or the command name
+# appearing in their own visible words ("run ffprobe on clip 3" — ffprobe is
+# read-only anyway; "run ffmpeg to convert it" names the mutating command).
+# A bare "yes" to an unrelated card must not unlock the shell.
+
+_SHELL_REQUEST_RE = re.compile(
+    r"\b(run|execute|launch|invoke)\b.{0,40}?\b"
+    r"(command|shell|terminal|ffmpeg|ffprobe|script|python|cli)\b",
+    re.IGNORECASE,
+)
+
+
+def is_shell_request(text: str, command: str | None = None) -> bool:
+    """True when the user's prose explicitly asks for shell/command use.
+
+    With `command`, the command name appearing in the visible words counts
+    by itself; without it, a generic run/execute-a-command cue is matched.
+    Clause-scoped: the cue must not be negated.
+    """
+    t = user_prose(text)
+    if not t:
+        return False
+    if command and re.search(rf"(?<![A-Za-z0-9_-]){re.escape(command)}(?![A-Za-z0-9_-])", t, re.IGNORECASE):
+        for clause in re.split(r"[,.;!?]|\bbut\b|\bhowever\b", t, flags=re.IGNORECASE):
+            m = re.search(
+                rf"(?<![A-Za-z0-9_-]){re.escape(command)}(?![A-Za-z0-9_-])", clause, re.IGNORECASE
+            )
+            if m and not _cue_is_negated(clause[: m.start()], clause[m.end() :]):
+                return True
+        return False
+    for clause in re.split(r"[,.;!?]|\bbut\b|\bhowever\b", t, flags=re.IGNORECASE):
+        m = _SHELL_REQUEST_RE.search(clause)
+        if m and not _cue_is_negated(clause[: m.start()], clause[m.end() :]):
+            return True
+    return False
+
+
+def user_allows_shell(ctx: ToolContext, command: str | None = None) -> bool:
+    """Shell permission from explicit user acts only (mirrors user_allows_render)."""
+    if has_structured_approval(ctx, "shell"):
+        return True
+    from calliope.agent.harness import log as session_log
+
+    latest = session_log.latest_user_message(ctx.session_id) or ""
+    return is_shell_request(latest, command)
+
+
 # ── Structured approvals (ask_user question cards) ────────────────────────
 # An approval is an event-log fact, not parsed prose: question/asked followed
 # by question/answered with an affirmative option. The card click sends the
