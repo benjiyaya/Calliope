@@ -788,6 +788,7 @@ export const es: Dict = {
 	'promptPreview.fromDraftHint': 'Basado en tu borrador, no en el flujo de trabajo actual.',
 	'promptPreview.proseHint': 'Prompt en prosa editable — los cambios se quedan en local.',
 	'promptPreview.h3Hint': 'Prompt construido a partir de la selección de arriba.',
+	'promptPreview.criticTitle': 'Comprobación de continuidad',
 	'promptPreview.h3Rewrite': 'Reescrito',
 	'promptPreview.editorAria': 'Editor de prompt',
 	'promptPreview.defaultWorkflow': 'predeterminado',

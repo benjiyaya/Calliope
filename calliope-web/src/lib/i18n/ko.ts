@@ -788,6 +788,7 @@ export const ko: Dict = {
 	'promptPreview.fromDraftHint': '현재 워크플로가 아닌 초안을 기반으로 합니다.',
 	'promptPreview.proseHint': '편집 가능한 산문 프롬프트 — 변경 사항은 로컬에만 유지됩니다.',
 	'promptPreview.h3Hint': '위 선택 항목으로 만든 프롬프트입니다.',
+	'promptPreview.criticTitle': '연속성 검사',
 	'promptPreview.h3Rewrite': '재작성됨',
 	'promptPreview.editorAria': '프롬프트 편집기',
 	'promptPreview.defaultWorkflow': '기본',

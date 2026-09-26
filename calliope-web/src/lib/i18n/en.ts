@@ -788,6 +788,7 @@ export const en = {
 	'promptPreview.fromDraftHint': 'Based on your draft, not the current workflow.',
 	'promptPreview.proseHint': 'Editable prose prompt — changes stay local.',
 	'promptPreview.h3Hint': 'Prompt built from the selection above.',
+	'promptPreview.criticTitle': 'Continuity check',
 	'promptPreview.h3Rewrite': 'Rewritten',
 	'promptPreview.editorAria': 'Prompt editor',
 	'promptPreview.defaultWorkflow': 'default',

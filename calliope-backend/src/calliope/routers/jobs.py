@@ -97,7 +97,11 @@ async def preview_prompt(project_id: int, payload: PreviewPromptRequest) -> dict
         clip_id = int(row["id"])
     try:
         return await preview_clip_prompt(
-            project_id, clip_id, workflow_id=payload.workflow_id
+            project_id,
+            clip_id,
+            workflow_id=payload.workflow_id,
+            input_values=payload.input_values,
+            force=payload.force,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

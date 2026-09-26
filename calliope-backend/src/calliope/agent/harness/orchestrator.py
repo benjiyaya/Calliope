@@ -144,6 +144,7 @@ ROLE_TOOLS: dict[str, list[str]] = {
         "add_scene",
         "delete_scene",
         "reorder_scenes",
+        "refresh_continuity_plan",
         "ask_user",
     ],
     "assets": [

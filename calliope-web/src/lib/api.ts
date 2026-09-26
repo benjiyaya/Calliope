@@ -324,13 +324,20 @@ export const jobsApi = {
 		}),
 	previewPrompt: (
 		projectId: number,
-		payload: { clip_id?: number; scene_id?: number; workflow_id?: number },
+		payload: {
+			clip_id?: number;
+			scene_id?: number;
+			workflow_id?: number;
+			input_values?: Record<string, unknown>;
+			force?: boolean;
+		},
 	) =>
 		api<{
 			prompt: string;
 			profile: string;
 			from_draft: boolean;
 			based_on: string;
+			critic?: { ok: boolean; notes: string[] };
 		}>(`/api/jobs/projects/${projectId}/preview-prompt`, {
 			method: 'POST',
 			body: JSON.stringify(payload),

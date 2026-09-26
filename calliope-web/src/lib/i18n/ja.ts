@@ -788,6 +788,7 @@ export const ja: Dict = {
 	'promptPreview.fromDraftHint': '現在のワークフローではなく下書きに基づいています。',
 	'promptPreview.proseHint': '編集可能なプロンプト — 変更はローカルに留まります。',
 	'promptPreview.h3Hint': '上の選択内容からプロンプトを構築しました。',
+	'promptPreview.criticTitle': '連続性チェック',
 	'promptPreview.h3Rewrite': '書き換え済み',
 	'promptPreview.editorAria': 'プロンプトエディター',
 	'promptPreview.defaultWorkflow': '既定',

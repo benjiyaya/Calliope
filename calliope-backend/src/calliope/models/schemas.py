@@ -259,3 +259,8 @@ class PreviewPromptRequest(BaseModel):
     scene_id: int | None = None
     clip_id: int | None = None
     workflow_id: int | None = None
+    # Live Video-tab form values. Image and video slots here are the files the
+    # H3 rewrite must describe; they win over the saved clip setup.
+    input_values: dict[str, Any] | None = None
+    # Skip a fresh saved draft and rewrite from the current references.
+    force: bool = False

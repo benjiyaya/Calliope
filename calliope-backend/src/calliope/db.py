@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS projects (
     target_duration TEXT,
     cover_path TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
+    continuity_json TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -369,6 +370,8 @@ async def migrate_db(db_path: Path) -> None:
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if "cover_path" not in project_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN cover_path TEXT")
+    if "continuity_json" not in project_cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN continuity_json TEXT")
     # Legacy canvases carry generic titles ("Untitled Canvas" or an older
     # iteration's "Project canvas"); name them after what they show
     # (project, else session). New canvases derive at create time.

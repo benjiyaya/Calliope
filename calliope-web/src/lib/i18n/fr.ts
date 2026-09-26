@@ -788,6 +788,7 @@ export const fr: Dict = {
 	'promptPreview.fromDraftHint': 'Basé sur votre brouillon, pas sur le workflow actuel.',
 	'promptPreview.proseHint': 'Prompt en prose modifiable — les modifications restent locales.',
 	'promptPreview.h3Hint': 'Prompt construit à partir de la sélection ci-dessus.',
+	'promptPreview.criticTitle': 'Contrôle de continuité',
 	'promptPreview.h3Rewrite': 'Réécrit',
 	'promptPreview.editorAria': 'Éditeur de prompt',
 	'promptPreview.defaultWorkflow': 'par défaut',

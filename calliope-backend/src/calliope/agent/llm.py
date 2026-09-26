@@ -114,7 +114,39 @@ class LLMClient:
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        response_format: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str:
+        outbound = messages
+        if self._text_only and _has_image_parts(messages):
+            outbound = _strip_image_parts(messages)
+        try:
+            return await self._chat_collect(
+                outbound, temperature, response_format, extra_body
+            )
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500] if exc.response is not None else ""
+            if _has_image_parts(outbound) and _looks_like_image_rejection(
+                exc.response.status_code, body
+            ):
+                logger.warning(
+                    "Endpoint rejected image parts (%s); retrying text-only", body[:200]
+                )
+                self._text_only = True
+                _TEXT_ONLY_ENDPOINTS.add(self.base_url)
+                return await self._chat_collect(
+                    _strip_image_parts(outbound),
+                    temperature,
+                    response_format,
+                    extra_body,
+                )
+            raise
+
+    async def _chat_collect(
+        self,
+        messages: list[dict[str, Any]],
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
@@ -389,6 +421,9 @@ class LLMClient:
             reasoning = delta.get("reasoning_content")
             if reasoning:
                 yield {"type": "reasoning", "content": reasoning}
+            usage = chunk.get("usage")
+            if isinstance(usage, dict) and usage:
+                yield {"type": "usage", "usage": usage}
             for tc in delta.get("tool_calls") or []:
                 idx = tc.get("index", 0)
                 acc = tool_acc.get(idx)

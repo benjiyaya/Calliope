@@ -788,6 +788,7 @@ export const de: Dict = {
 	'promptPreview.fromDraftHint': 'Basiert auf deinem Entwurf, nicht auf dem aktuellen Workflow.',
 	'promptPreview.proseHint': 'Bearbeitbarer Prosa-Prompt — Änderungen bleiben lokal.',
 	'promptPreview.h3Hint': 'Prompt aus der obigen Auswahl erstellt.',
+	'promptPreview.criticTitle': 'Kontinuitätsprüfung',
 	'promptPreview.h3Rewrite': 'Neu geschrieben',
 	'promptPreview.editorAria': 'Prompt-Editor',
 	'promptPreview.defaultWorkflow': 'Standard',

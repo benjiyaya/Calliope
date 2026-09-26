@@ -1,6 +1,7 @@
 """Enqueue per-clip video generation jobs (a scene expands into many clips)."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -8,6 +9,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from calliope.agent.continuity import (
+    continuity_lock_text,
+    critique_prompt,
+    ensure_continuity_plan,
+    media_paths,
+)
+from calliope.agent.harness.log import (
+    _image_attachment_data_url,
+    _video_attachment_frames,
+)
 from calliope.agent.llm import LLMClient
 from calliope.agent.prompts import (
     build_minimax_h3_ref_messages,
@@ -16,7 +27,7 @@ from calliope.agent.prompts import (
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.roles import input_has_role
-from calliope.comfyui.smart_fill import ref_image_slots, smart_fill_inputs
+from calliope.comfyui.smart_fill import ref_image_slots, ref_video_slots, smart_fill_inputs
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
@@ -25,69 +36,215 @@ from calliope.queue.manager import queue_manager
 logger = logging.getLogger("calliope.video_agent")
 
 
-def _h3_subjects(
+def _path_key(path: str) -> str:
+    try:
+        return str(Path(path).resolve()).casefold()
+    except OSError:
+        return str(path).casefold()
+
+
+def _paths_equal(a: str, b: str) -> bool:
+    return bool(a and b) and _path_key(a) == _path_key(b)
+
+
+def _form_media_path(values: dict[str, Any], node_id: Any) -> str | None:
+    """A non-blank string the user stored on this workflow node."""
+    raw = values.get(str(node_id))
+    if raw is None:
+        raw = values.get(node_id)
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    return text or None
+
+
+def _story_image_roster(
     characters: list[dict[str, Any]],
     location: dict[str, Any] | None,
     loc_image: str | None,
-    inputs: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Ordered subject roster + ref image paths for the H3 ref profile.
+) -> list[dict[str, Any]]:
+    """Story images in fill order: scene characters, then the location.
 
-    Order = ref wiring order: scene characters first (scene order), then the
-    location. Capped at the workflow's generic (Input:image) slot count so
-    <Subject N> always matches an actually-wired reference image.
+    Used only for image slots the user left empty.
     """
-    subjects: list[dict[str, Any]] = []
-    paths: list[str] = []
+    roster: list[dict[str, Any]] = []
     for c in characters:
         img = c.get("sheet_path") or c.get("portrait_path")
         if not img:
             continue
-        subjects.append(
+        roster.append(
             {
-                "index": len(subjects) + 1,
                 "kind": "character",
                 "name": c.get("name"),
                 "appearance": c.get("consistency_prompt") or c.get("appearance") or "",
+                "path": img,
             }
         )
-        paths.append(img)
     if loc_image:
         loc = location or {}
-        subjects.append(
+        roster.append(
             {
-                "index": len(subjects) + 1,
                 "kind": "location",
                 "name": loc.get("name"),
                 "appearance": loc.get("consistency_prompt") or loc.get("description") or "",
+                "path": loc_image,
             }
         )
-        paths.append(loc_image)
-    cap = len(ref_image_slots(inputs))
-    return subjects[:cap], paths[:cap]
+    return roster
+
+
+def resolve_h3_references(
+    inputs: list[dict[str, Any]],
+    values: dict[str, Any],
+    characters: list[dict[str, Any]],
+    location: dict[str, Any] | None,
+    loc_image: str | None,
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    """Image subjects, image paths, and video refs for an H3 prompt.
+
+    Each ``(Input:image)`` slot uses the file the user put there. An empty
+    slot falls back to the story image that would have filled that same index
+    (characters, then location). Each ``(Input:video)`` slot the user filled
+    becomes ``<Video N>``. Story text never replaces a file the user chose.
+    """
+    roster = _story_image_roster(characters, location, loc_image)
+    subjects: list[dict[str, Any]] = []
+    image_paths: list[str] = []
+    for index, slot in enumerate(ref_image_slots(inputs)):
+        user_path = _form_media_path(values, slot["nodeId"])
+        if user_path:
+            matched = next(
+                (item for item in roster if _paths_equal(item["path"], user_path)),
+                None,
+            )
+            if matched:
+                subject = {
+                    "kind": matched["kind"],
+                    "name": matched.get("name"),
+                    "appearance": matched.get("appearance") or "",
+                    "path": user_path,
+                }
+            else:
+                subject = {
+                    "kind": "reference",
+                    "name": Path(user_path).stem or "reference",
+                    "appearance": "",
+                    "path": user_path,
+                }
+        elif index < len(roster):
+            item = roster[index]
+            subject = {
+                "kind": item["kind"],
+                "name": item.get("name"),
+                "appearance": item.get("appearance") or "",
+                "path": item["path"],
+            }
+            user_path = item["path"]
+        else:
+            continue
+        subject["index"] = len(subjects) + 1
+        subjects.append(subject)
+        image_paths.append(user_path)
+    videos: list[dict[str, Any]] = []
+    for slot in ref_video_slots(inputs):
+        user_path = _form_media_path(values, slot["nodeId"])
+        if not user_path:
+            continue
+        videos.append(
+            {
+                "index": len(videos) + 1,
+                "path": user_path,
+                "name": Path(user_path).name,
+            }
+        )
+    return subjects, image_paths, videos
+
+
+def _reference_signature(image_paths: list[str], video_paths: list[str]) -> str:
+    """Fingerprint of the files a draft was written against. Empty when none."""
+    parts: list[str] = []
+    if image_paths:
+        parts.append("img=" + ",".join(image_paths))
+    if video_paths:
+        parts.append("vid=" + ",".join(video_paths))
+    return "|".join(parts)
+
+
+async def _reference_media_parts(
+    subjects: list[dict[str, Any]],
+    videos: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Vision parts for the files under assets_dir. Missing files stay text-only."""
+    parts: list[dict[str, Any]] = []
+    for subject in subjects:
+        path = str(subject.get("path") or "")
+        url = _image_attachment_data_url(path)
+        if not url:
+            continue
+        parts.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Picture {subject['index']} is <Subject {subject['index']}>. "
+                    "Describe the visible identity in this image."
+                ),
+            }
+        )
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    for video in videos:
+        frames = await asyncio.to_thread(_video_attachment_frames, str(video.get("path") or ""))
+        if not frames:
+            continue
+        parts.append(
+            {
+                "type": "text",
+                "text": (
+                    f"<Video {video['index']}> frames, in time order. "
+                    "Take camera, timing, and physical action from these frames."
+                ),
+            }
+        )
+        for ts, url in frames:
+            parts.append(
+                {"type": "text", "text": f"<Video {video['index']}> at {ts:.2f}s"}
+            )
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts
 
 
 async def _h3_rewrite(
     scene: dict[str, Any],
     subjects: list[dict[str, Any]],
     *,
+    videos: list[dict[str, Any]] | None = None,
+    continuity: str | None = None,
     timeout: float = 120.0,
 ) -> str:
     """LLM rewrite into H3's six-section format, deterministic template on failure.
 
     The timeout bounds the whole wait for a dead endpoint before the template
     kicks in — the preview path passes a short value so the UI fails fast.
+    Reference images and video frames are attached when the files are readable
+    under assets_dir; a text-only endpoint still receives the file roster.
     """
+    videos = videos or []
+    media_parts = await _reference_media_parts(subjects, videos)
     client = LLMClient.for_role("video", timeout=timeout)
     try:
         return await client.chat(
-            build_minimax_h3_ref_messages(scene, subjects),
+            build_minimax_h3_ref_messages(
+                scene,
+                subjects,
+                videos=videos,
+                media_parts=media_parts or None,
+                continuity=continuity,
+            ),
             temperature=0.4,
             extra_body=settings.h3_rewrite_extra_body or None,
         )
     except Exception as exc:
         logger.warning("MiniMax H3 prompt rewrite failed (%s); using fallback template", exc)
-        return minimax_h3_ref_fallback(scene, subjects)
+        return minimax_h3_ref_fallback(scene, subjects, videos)
     finally:
         await client.close()
 
@@ -236,13 +393,19 @@ def _stored_prompt_draft(clip: dict[str, Any]) -> str | None:
     return draft if isinstance(draft, str) and draft.strip() else None
 
 
-def _clip_prompt_hash(clip: dict[str, Any]) -> str:
+def _clip_prompt_hash(
+    clip: dict[str, Any], *, references: str = "", ledger: str = ""
+) -> str:
     """Cheap fingerprint of the inputs a draft was based on (stale detection).
 
     Combines the scene's content fingerprint with the clip's own fields, so an
     edit to either invalidates saved drafts. Keeps the scene-only fields in the
     basis (heading/action/dialog/location/characters) so legacy drafts saved
-    against scene-level hashes invalidate consistently.
+    against scene-level hashes invalidate consistently. ``references`` is the
+    resolved image/video file signature — changing a ref on the clip form
+    invalidates a draft that was written against different files. Empty
+    references keep the historical hash. ``ledger`` is the continuity plan's
+    ``based_on`` hash; a new plan invalidates a draft written against the old one.
     """
     basis = "|".join(
         str(clip.get(k) or "")
@@ -253,20 +416,53 @@ def _clip_prompt_hash(clip: dict[str, Any]) -> str:
         str(clip.get(k) or "")
         for k in ("description", "shot_size", "duration_sec", "order_index")
     )
-    return hashlib.sha256(
-        (basis + "|" + chars + "|clip:" + clip_basis).encode()
-    ).hexdigest()[:16]
+    payload = basis + "|" + chars + "|clip:" + clip_basis
+    if references:
+        payload += "|refs:" + references
+    # Empty ledger keeps the historical hash so drafts saved before a plan
+    # existed still match until a plan hash is actually stored.
+    if ledger:
+        payload += "|ledger:" + ledger
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _merged_form_values(
+    clip: dict[str, Any], override: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Saved clip form values, with the live request winning on each node."""
+    values = dict(_stored_input_values(clip))
+    if override:
+        values.update({k: v for k, v in override.items() if v not in (None, "")})
+    return values
+
+
+async def _critique_or_unavailable(
+    prompt: str, plan: dict[str, Any] | None, clip_id: int
+) -> dict[str, Any]:
+    """Critic result. A raised judge becomes ok=false, never a 500."""
+    try:
+        return await critique_prompt(prompt, plan, clip_id)
+    except Exception as exc:
+        logger.warning("Continuity critic failed (%s)", exc)
+        reason = str(exc).strip() or exc.__class__.__name__
+        return {
+            "ok": False,
+            "notes": [f"Continuity critic unavailable: {reason[:180]}"],
+            "unavailable": True,
+        }
 
 
 async def preview_clip_prompt(
     project_id: int,
     clip_id: int,
     workflow_id: int | None = None,
+    input_values: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Resolve the exact prompt a Generate would send — without enqueueing.
 
-    Returns {"prompt": str, "profile": str, "from_draft": bool, "based_on": str}
-    so the UI can show/edit/save it before the user commits to a render.
+    Returns {"prompt", "profile", "from_draft", "based_on"} and, for an H3
+    workflow, "critic": {"ok", "notes"}. The critic never blocks Generate.
     """
     conn = get_db(settings.db_path)
     try:
@@ -314,30 +510,53 @@ async def preview_clip_prompt(
         raise ValueError("No enabled video workflow found — configure one in Settings")
     inputs = parse_dynamic_inputs(_workflow_json(workflow))
     profile = workflow.get("prompt_profile") or "prose"
-    based_on = _clip_prompt_hash({**clip, "character_ids": [c["id"] for c in characters]})
+    form_values = _merged_form_values(clip, input_values)
+    subjects, _image_paths, videos = resolve_h3_references(
+        inputs, form_values, characters, loc_row, loc_image
+    )
+    ref_sig = _reference_signature(_image_paths, [v["path"] for v in videos])
+    hash_clip = {**clip, "character_ids": [c["id"] for c in characters]}
 
     if profile == "minimax_h3_ref":
-        # Fresh saved draft short-circuits the LLM call
-        draft = _stored_prompt_draft(clip)
-        if draft:
-            meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
-            if meta.get("based_on") == based_on:
-                return {
-                    "prompt": draft,
-                    "profile": profile,
-                    "from_draft": True,
-                    "based_on": based_on,
-                }
-        subjects, _ = _h3_subjects(characters, loc_row, loc_image, inputs)
-        await event_bus.publish(
-            "agent.thinking",
-            {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
+        plan = await ensure_continuity_plan(
+            project_id, live_refs={clip_id: media_paths(form_values)}
         )
-        # Preview is interactive — fail fast to the deterministic template
-        # instead of making the user wait out a dead endpoint.
-        prompt = await _h3_rewrite(scene, subjects, timeout=30.0)
-    else:
-        prompt = scene_video_prompt(scene, characters)
+        ledger = str(plan.get("based_on") or "")
+        based_on = _clip_prompt_hash(hash_clip, references=ref_sig, ledger=ledger)
+        lock = continuity_lock_text(plan, clip_id)
+        # A fresh draft skips the compiler. The critic still runs so the modal
+        # can show continuity notes. Regenerate passes force=True.
+        draft = _stored_prompt_draft(clip)
+        from_draft = False
+        meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
+        if draft and not force and meta.get("based_on") == based_on:
+            prompt = draft
+            from_draft = True
+        else:
+            await event_bus.publish(
+                "agent.thinking",
+                {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
+            )
+            # Preview is interactive — fail fast to the deterministic template
+            # instead of making the user wait out a dead endpoint.
+            prompt = await _h3_rewrite(
+                scene, subjects, videos=videos, continuity=lock, timeout=30.0
+            )
+        critic = await _critique_or_unavailable(prompt, plan, clip_id)
+        # A dead judge must not 500. Drop a compiled candidate for the
+        # template; keep a draft the user already saved.
+        if critic.get("unavailable") and not from_draft:
+            prompt = minimax_h3_ref_fallback(scene, subjects, videos)
+        return {
+            "prompt": prompt,
+            "profile": profile,
+            "from_draft": from_draft,
+            "based_on": based_on,
+            "critic": {"ok": bool(critic.get("ok")), "notes": list(critic.get("notes") or [])},
+        }
+
+    based_on = _clip_prompt_hash(hash_clip, references=ref_sig)
+    prompt = scene_video_prompt(scene, characters)
     return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
 
 
@@ -395,6 +614,7 @@ async def enqueue_video_jobs(
     )
     conn = get_db(settings.db_path)
     jobs: list[dict[str, Any]] = []
+    continuity_plan: dict[str, Any] | None = None
     try:
         clips = _fetch_clips(conn, project_id, scene_ids=scene_ids, clip_ids=clip_ids)
 
@@ -471,15 +691,42 @@ async def enqueue_video_jobs(
                     {k: v for k, v in input_values_override.items() if v not in (None, "")}
                 )
             if profile == "minimax_h3_ref":
-                subjects, ref_paths = _h3_subjects(characters, loc_row, loc_image, inputs)
+                if continuity_plan is None:
+                    live_refs = None
+                    if input_values_override:
+                        live_refs = {
+                            int(c["id"]): media_paths(
+                                {
+                                    **_stored_input_values(c),
+                                    **{
+                                        k: v
+                                        for k, v in input_values_override.items()
+                                        if v not in (None, "")
+                                    },
+                                }
+                            )
+                            for c in clips
+                        }
+                    continuity_plan = await ensure_continuity_plan(
+                        project_id, live_refs=live_refs
+                    )
+                subjects, ref_paths, videos = resolve_h3_references(
+                    inputs, extra_values, characters, loc_row, loc_image
+                )
+                ref_sig = _reference_signature(ref_paths, [v["path"] for v in videos])
+                ledger = str((continuity_plan or {}).get("based_on") or "")
+                lock = continuity_lock_text(continuity_plan, int(clip["id"]))
                 # Prompt precedence: explicit request → saved (fresh) draft → LLM.
+                # Batch enqueue compiles from the ledger and does not run the critic.
                 explicit_prompt = (prompts or {}).get(clip["id"])
                 fresh_draft = None
                 if explicit_prompt is None:
                     candidate = _stored_prompt_draft(clip)
                     if candidate:
                         meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
-                        if meta.get("based_on") == _clip_prompt_hash(hash_input):
+                        if meta.get("based_on") == _clip_prompt_hash(
+                            hash_input, references=ref_sig, ledger=ledger
+                        ):
                             fresh_draft = candidate
                 if explicit_prompt is not None:
                     prompt = explicit_prompt
@@ -493,11 +740,14 @@ async def enqueue_video_jobs(
                             "project_id": project_id,
                         },
                     )
-                    prompt = await _h3_rewrite(scene, subjects)
+                    prompt = await _h3_rewrite(
+                        scene, subjects, videos=videos, continuity=lock
+                    )
                 values = smart_fill_inputs(
                     inputs,
                     prompt=prompt,
                     ref_images=ref_paths,
+                    ref_videos=[v["path"] for v in videos],
                     duration=duration,
                     extra=extra_values,
                 )

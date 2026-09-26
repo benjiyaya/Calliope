@@ -9,6 +9,8 @@
 	import { createMutation } from '@tanstack/svelte-query';
 	import { toast } from '$lib/toast';
 	import { jobsApi, projects, type Clip, type Scene, type Workflow } from '$lib/api';
+	import { normalizeInputRole } from '$lib/comfy/parser';
+	import { compactInputValues } from '$lib/comfy/promptInput';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
@@ -45,29 +47,59 @@
 	let basedOn = $state('');
 	let fromDraft = $state(false);
 	let stale = $state(false);
-	/** Clip/scene key whose resolve already fired once — guards re-runs. */
-	let attemptedFor = $state<number | null>(null);
+	/** Clip + reference-file key whose resolve already fired — guards re-runs. */
+	let attemptedFor = $state<string | null>(null);
+
+	/** Image and video slot paths. Changing them re-resolves the prompt. */
+	function mediaSlotKey(): string {
+		const ids = new Set(
+			(workflow?.input_schema ?? [])
+				.filter((inp) => {
+					const role = normalizeInputRole(inp.role ?? null);
+					return (
+						role === 'image' ||
+						role === 'video' ||
+						inp.kind === 'image' ||
+						inp.kind === 'image_url' ||
+						inp.kind === 'video'
+					);
+				})
+				.map((inp) => inp.nodeId),
+		);
+		const picked: Record<string, string> = {};
+		for (const [k, v] of Object.entries(inputValues)) {
+			if (typeof v !== 'string' || !v.trim()) continue;
+			if (ids.size === 0 || ids.has(k)) picked[k] = v;
+		}
+		return JSON.stringify(picked);
+	}
 	/** Resolve failed — modal shows a client-side prose fallback instead of a dead end. */
 	let failed = $state(false);
+	/** Continuity critic notes. Generate stays available when these are set. */
+	let criticNotes = $state<string[]>([]);
 
 	const preview = createMutation({
-		mutationFn: async () => {
+		mutationFn: async (vars?: { force?: boolean }) => {
 			if (!clip && !scene) throw new Error(t('promptPreview.noClipSelected'));
 			return jobsApi.previewPrompt(projectId, {
 				clip_id: clip?.id,
 				scene_id: clip ? undefined : scene?.id,
 				workflow_id: workflow?.id,
+				input_values: compactInputValues(inputValues),
+				force: Boolean(vars?.force),
 			});
 		},
 		onSuccess: (data) => {
 			text = data.prompt;
 			basedOn = data.based_on;
 			fromDraft = data.from_draft;
+			criticNotes = (data.critic?.notes ?? []).map((note) => note.trim()).filter(Boolean);
 			failed = false;
 			stale = false;
 		},
 		onError: (err) => {
 			failed = true;
+			criticNotes = [];
 			if (scene) {
 				// Never a dead end: populate the editor with raw scene text so the
 				// user can edit and Generate (confirm sends it via prompts override),
@@ -80,13 +112,14 @@
 		},
 	});
 
-	// Resolve once per clip (or scene for legacy rows). `attemptedFor` is set
+	// Resolve once per clip and reference-file set. `attemptedFor` is set
 	// before mutating so mutation-store transitions (pending → success/error)
 	// can't re-trigger this effect — the old `text` guard fired duplicate
-	// requests while the first was still pending.
+	// requests while the first was still pending. A new image or video path
+	// changes the key, so the next open rewrites against those files.
 	$effect(() => {
 		if (!open || (!clip && !scene)) return;
-		const key = clip?.id ?? -(scene?.id ?? 0);
+		const key = `${clip?.id ?? -(scene?.id ?? 0)}|${mediaSlotKey()}`;
 		if (attemptedFor === key) return;
 		attemptedFor = key;
 		$preview.mutate();
@@ -147,7 +180,7 @@
 
 	function regenerate() {
 		failed = false;
-		$preview.mutate();
+		$preview.mutate({ force: true });
 	}
 
 	function confirmGenerate() {
@@ -191,6 +224,20 @@
 			<div class="stale-hint" role="status">
 				<Icon name="alert" size={14} />
 				<span>{t('promptPreview.staleHint')}</span>
+			</div>
+		{/if}
+
+		{#if criticNotes.length}
+			<div class="stale-hint critic-hint" role="status">
+				<Icon name="alert" size={14} />
+				<div>
+					<p class="critic-title">{t('promptPreview.criticTitle')}</p>
+					<ul class="critic-notes">
+						{#each criticNotes as note, i (i)}
+							<li>{note}</li>
+						{/each}
+					</ul>
+				</div>
 			</div>
 		{/if}
 		<textarea
@@ -276,6 +323,22 @@
 
 	.stale-hint :global(svg) {
 		flex-shrink: 0;
+	}
+
+	.critic-hint {
+		align-items: flex-start;
+	}
+
+	.critic-title {
+		margin: 0;
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	.critic-notes {
+		margin: 4px 0 0;
+		padding-left: 18px;
+		font-size: 12px;
 	}
 
 	.prompt-editor {

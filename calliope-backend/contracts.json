@@ -109,6 +109,7 @@
     "post_artifact_to_canvas",
     "read_skill",
     "record_build_scene_gate",
+    "refresh_continuity_plan",
     "rename_object",
     "reorder_scenes",
     "request_capture",

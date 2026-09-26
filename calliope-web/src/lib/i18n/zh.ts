@@ -788,6 +788,7 @@ export const zh: Dict = {
 	'promptPreview.fromDraftHint': '基于你的草稿，而非当前工作流。',
 	'promptPreview.proseHint': '可编辑的散文式提示词——更改仅保留在本地。',
 	'promptPreview.h3Hint': '提示词由上方所选内容构建而成。',
+	'promptPreview.criticTitle': '连续性检查',
 	'promptPreview.h3Rewrite': '已重写',
 	'promptPreview.editorAria': '提示词编辑器',
 	'promptPreview.defaultWorkflow': '默认',

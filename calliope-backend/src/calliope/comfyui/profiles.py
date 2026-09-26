@@ -2,7 +2,9 @@
 
 ``prose`` (default) sends the classic flat prose paragraph. ``minimax_h3_ref``
 rewrites the scene into MiniMax H3's six-section full-reference format at
-video-enqueue time (see calliope.agent.prompts).
+video-enqueue time (see calliope.agent.prompts). The rewrite reads the clip
+form's ``(Input:image)`` and ``(Input:video)`` files; story images only fill
+slots the user left empty.
 """
 from __future__ import annotations
 
