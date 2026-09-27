@@ -841,6 +841,7 @@ export const ko: Dict = {
 	'wf.countVideo': '영상 {n}개',
 	'wf.countSaved': '{n}개 저장됨',
 	'wf.profileH3': '사용 사례',
+	'wf.profileH3Base': 'MiniMax H3 베이스 (텍스트/이미지→비디오)',
 	'wf.profileProse': '이 워크플로는 {target}에서 {kind}을(를) 생성합니다.',
 	'wf.promptFormat': '프롬프트 형식',
 	'wf.noInputs': '감지된 입력 없음',

@@ -21,9 +21,13 @@ from calliope.agent.harness.log import (
 )
 from calliope.agent.llm import LLMClient
 from calliope.agent.prompts import (
+    build_minimax_h3_base_messages,
     build_minimax_h3_ref_messages,
+    minimax_h3_base_fallback,
     minimax_h3_ref_fallback,
     scene_video_prompt,
+    video_appearance,
+    video_setting,
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.roles import input_has_role
@@ -76,21 +80,44 @@ def _story_image_roster(
             {
                 "kind": "character",
                 "name": c.get("name"),
-                "appearance": c.get("consistency_prompt") or c.get("appearance") or "",
+                # Not consistency_prompt: that is the sheet's image prompt
+                # ("neutral backdrop, studio lighting") and drags the clip
+                # away from the scene's environment.
+                "appearance": video_appearance(c),
                 "path": img,
             }
         )
     if loc_image:
-        loc = location or {}
+        setting = video_setting(location) or {"name": "the location", "description": ""}
         roster.append(
             {
                 "kind": "location",
-                "name": loc.get("name"),
-                "appearance": loc.get("consistency_prompt") or loc.get("description") or "",
+                "name": setting["name"],
+                "appearance": setting["description"],
                 "path": loc_image,
             }
         )
     return roster
+
+
+def _text_only_cast(
+    characters: list[dict[str, Any]], subjects: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Scene characters that got no image slot — described in text only.
+
+    The slot count caps IMAGES, not who is in the scene: without this a
+    1-slot workflow silently dropped every character after the first.
+    """
+    shown = {
+        (s.get("name") or "").strip().lower()
+        for s in subjects
+        if s.get("kind") == "character"
+    }
+    return [
+        {"name": c.get("name"), "appearance": video_appearance(c)}
+        for c in characters
+        if (c.get("name") or "").strip().lower() not in shown
+    ]
 
 
 def resolve_h3_references(
@@ -218,9 +245,14 @@ async def _h3_rewrite(
     *,
     videos: list[dict[str, Any]] | None = None,
     continuity: str | None = None,
+    setting: dict[str, str] | None = None,
+    extra_cast: list[dict[str, Any]] | None = None,
     timeout: float = 120.0,
 ) -> str:
     """LLM rewrite into H3's six-section format, deterministic template on failure.
+
+    ``setting`` (the location's text) is passed whether or not the location
+    got an image slot — a 1-slot workflow used to lose the environment.
 
     The timeout bounds the whole wait for a dead endpoint before the template
     kicks in — the preview path passes a short value so the UI fails fast.
@@ -238,13 +270,54 @@ async def _h3_rewrite(
                 videos=videos,
                 media_parts=media_parts or None,
                 continuity=continuity,
+                setting=setting,
+                extra_cast=extra_cast,
             ),
             temperature=0.4,
             extra_body=settings.h3_rewrite_extra_body or None,
         )
     except Exception as exc:
-        logger.warning("MiniMax H3 prompt rewrite failed (%s); using fallback template", exc)
-        return minimax_h3_ref_fallback(scene, subjects, videos)
+        logger.warning(
+            "MiniMax H3 prompt rewrite failed (%s); using fallback template", _exc_text(exc)
+        )
+        return minimax_h3_ref_fallback(
+            scene, subjects, videos, setting=setting, extra_cast=extra_cast
+        )
+    finally:
+        await client.close()
+
+
+def _exc_text(exc: Exception) -> str:
+    """httpx timeouts stringify empty — always name the type."""
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+
+
+async def _h3_base_rewrite(
+    scene: dict[str, Any],
+    characters: list[dict[str, Any]],
+    location: dict[str, Any] | None,
+    *,
+    timeout: float = 120.0,
+) -> str:
+    """LLM rewrite into H3's base (text/image-to-video) format, template on failure.
+
+    Base checkpoints have no reference slots, so every character's look and
+    the environment are written out in full.
+    """
+    cast = [{"name": c.get("name"), "appearance": video_appearance(c)} for c in characters]
+    setting = video_setting(location)
+    client = LLMClient.for_role("video", timeout=timeout)
+    try:
+        return await client.chat(
+            build_minimax_h3_base_messages(scene, cast, setting=setting),
+            temperature=0.4,
+            extra_body=settings.h3_rewrite_extra_body or None,
+        )
+    except Exception as exc:
+        logger.warning(
+            "MiniMax H3 base prompt rewrite failed (%s); using fallback template", _exc_text(exc)
+        )
+        return minimax_h3_base_fallback(scene, cast, setting=setting)
     finally:
         await client.close()
 
@@ -540,7 +613,13 @@ async def preview_clip_prompt(
             # Preview is interactive — fail fast to the deterministic template
             # instead of making the user wait out a dead endpoint.
             prompt = await _h3_rewrite(
-                scene, subjects, videos=videos, continuity=lock, timeout=30.0
+                scene,
+                subjects,
+                videos=videos,
+                continuity=lock,
+                setting=video_setting(loc_row),
+                extra_cast=_text_only_cast(characters, subjects),
+                timeout=30.0,
             )
         critic = await _critique_or_unavailable(prompt, plan, clip_id)
         # A dead or unreadable judge leaves this prompt in place and reports
@@ -555,7 +634,18 @@ async def preview_clip_prompt(
         }
 
     based_on = _clip_prompt_hash(hash_clip, references=ref_sig)
-    prompt = scene_video_prompt(scene, characters)
+    if profile == "minimax_h3_base":
+        draft = _stored_prompt_draft(clip)
+        meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
+        if draft and not force and meta.get("based_on") == based_on:
+            return {"prompt": draft, "profile": profile, "from_draft": True, "based_on": based_on}
+        await event_bus.publish(
+            "agent.thinking",
+            {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
+        )
+        prompt = await _h3_base_rewrite(scene, characters, loc_row, timeout=30.0)
+        return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
+    prompt = scene_video_prompt(scene, characters, loc_row)
     return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
 
 
@@ -740,7 +830,12 @@ async def enqueue_video_jobs(
                         },
                     )
                     prompt = await _h3_rewrite(
-                        scene, subjects, videos=videos, continuity=lock
+                        scene,
+                        subjects,
+                        videos=videos,
+                        continuity=lock,
+                        setting=video_setting(loc_row),
+                        extra_cast=_text_only_cast(characters, subjects),
                     )
                 values = smart_fill_inputs(
                     inputs,
@@ -750,9 +845,29 @@ async def enqueue_video_jobs(
                     duration=duration,
                     extra=extra_values,
                 )
+            elif profile == "minimax_h3_base":
+                # Prompt precedence: explicit request → saved (fresh) draft → LLM.
+                prompt = (prompts or {}).get(clip["id"])
+                if prompt is None:
+                    candidate = _stored_prompt_draft(clip)
+                    meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
+                    if candidate and meta.get("based_on") == _clip_prompt_hash(hash_input):
+                        prompt = candidate
+                if prompt is None:
+                    await event_bus.publish(
+                        "agent.thinking",
+                        {
+                            "message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}",
+                            "project_id": project_id,
+                        },
+                    )
+                    prompt = await _h3_base_rewrite(scene, characters, loc_row)
+                values = smart_fill_inputs(
+                    inputs, prompt=prompt, duration=duration, extra=extra_values
+                )
             else:
                 prompt = (prompts or {}).get(clip["id"]) or scene_video_prompt(
-                    scene, characters
+                    scene, characters, loc_row
                 )
                 values = smart_fill_inputs(
                     inputs,

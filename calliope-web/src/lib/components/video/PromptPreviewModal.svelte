@@ -122,7 +122,7 @@
 		const key = `${clip?.id ?? -(scene?.id ?? 0)}|${mediaSlotKey()}`;
 		if (attemptedFor === key) return;
 		attemptedFor = key;
-		$preview.mutate();
+		$preview.mutate({});
 	});
 
 	/** Fallback body when resolve fails: the clip's beat or the scene prose. */
@@ -200,7 +200,7 @@
 	{:else if $preview.isPending}
 		<div class="loading">
 			<Spinner size="md" />
-			<span>{t('promptPreview.resolving', { suffix: workflow?.prompt_profile === 'minimax_h3_ref' ? t('promptPreview.h3Rewrite') : '' })}</span>
+			<span>{t('promptPreview.resolving', { suffix: workflow?.prompt_profile?.startsWith('minimax_h3') ? t('promptPreview.h3Rewrite') : '' })}</span>
 		</div>
 	{:else}
 		<div class="head-row">
@@ -255,7 +255,7 @@
 			</div>
 		{:else if fromDraft}
 			<p class="hint">{t('promptPreview.fromDraftHint')}</p>
-		{:else if workflow?.prompt_profile === 'minimax_h3_ref'}
+		{:else if workflow?.prompt_profile?.startsWith('minimax_h3')}
 			<p class="hint">{t('promptPreview.h3Hint')}</p>
 		{:else}
 			<p class="hint">{t('promptPreview.proseHint')}</p>

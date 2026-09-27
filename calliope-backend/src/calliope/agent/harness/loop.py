@@ -100,6 +100,15 @@ class RepeatGuard:
         limit, else None (caller should execute for real)."""
         count = self.bumped(name, args)
         if count > REPEAT_EXECUTE_LIMIT and self.key(name, args) in self.cache:
+            if count > REPEAT_EXECUTE_LIMIT + 1:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Tool '{name}' was called {count} times with identical arguments. "
+                        "Call BLOCKED to prevent loop. You must choose a DIFFERENT tool "
+                        "or produce your final answer now."
+                    ),
+                }
             cached = self.cache[self.key(name, args)]
             return {
                 **cached,
@@ -465,6 +474,7 @@ async def run_turn(
         messages.append(
             {
                 "role": "tool",
+                "name": name,
                 "tool_call_id": tc["id"],
                 "content": result_text,
             }
@@ -557,8 +567,7 @@ async def run_turn(
             if tool_calls:
                 assistant_msg["tool_calls"] = [
                     {
-                        "id": tc["id"],
-                        "type": "function",
+                        **{k: v for k, v in tc.items() if k != "function"},
                         "function": {
                             "name": tc["function"]["name"],
                             "arguments": tc["function"]["arguments"],

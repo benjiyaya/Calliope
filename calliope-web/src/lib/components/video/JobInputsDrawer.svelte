@@ -240,7 +240,7 @@ function applyToScene() {
 						{copied ? t('jobDrawer.copied') : t('jobDrawer.copy')}
 					</Button>
 				</div>
-				{#if workflow?.prompt_profile === 'minimax_h3_ref'}
+				{#if workflow?.prompt_profile?.startsWith('minimax_h3')}
 					<p class="block-hint">{t('jobDrawer.h3Hint')}</p>
 				{/if}
 				<pre class="prompt-pre">{prompt}</pre>

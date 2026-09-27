@@ -67,9 +67,12 @@ def _extract_sse_events() -> list[str]:
 def _extract_prompt_profiles() -> list[str]:
     text = (SRC / "comfyui" / "profiles.py").read_text(encoding="utf-8") if (SRC / "comfyui" / "profiles.py").exists() else ""
     if not text:
-        # profiles may live elsewhere; fall back to the canonical two from AGENTS.md
-        return ["prose", "minimax_h3_ref"]
-    return sorted(set(re.findall(r'"(prose|minimax_h3_ref)"', text)) or {"prose", "minimax_h3_ref"})
+        # profiles may live elsewhere; fall back to the canonical set
+        return ["minimax_h3_base", "minimax_h3_ref", "prose"]
+    return sorted(
+        set(re.findall(r'"(prose|minimax_h3_ref|minimax_h3_base)"', text))
+        or {"prose", "minimax_h3_ref", "minimax_h3_base"}
+    )
 
 
 def _extract_guard_codes() -> list[str]:

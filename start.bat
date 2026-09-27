@@ -19,6 +19,7 @@ echo Opening two windows
 echo   Backend:  http://127.0.0.1:8247
 echo   Frontend: http://127.0.0.1:5173
 echo Close a window to stop that service
+echo Backend auto-reloads when a .py file in calliope-backend\src changes
 
-start "Calliope Backend" /D "%BACKEND%" cmd /k ".venv\Scripts\python -m calliope.main --host 127.0.0.1 --port 8247"
+start "Calliope Backend" /D "%BACKEND%" cmd /k ".venv\Scripts\python -m calliope.main --host 127.0.0.1 --port 8247 --reload"
 start "Calliope Web" /D "%WEB%" cmd /k "npm run dev"

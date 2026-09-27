@@ -841,6 +841,7 @@ export const zh: Dict = {
 	'wf.countVideo': '{n} 个视频',
 	'wf.countSaved': '已保存 {n} 个',
 	'wf.profileH3': '用途',
+	'wf.profileH3Base': 'MiniMax H3 基础（文本/图像生成视频）',
 	'wf.profileProse': '该工作流从{target}生成{kind}。',
 	'wf.promptFormat': '提示词格式',
 	'wf.noInputs': '未检测到输入',

@@ -28,13 +28,18 @@ profiles) is enforced by Calliope; this skill is the judgment layer on top.
    draft text, characters in scene order, and location. Never enqueue from a
    summary alone.
 2. **Prompt style follows the workflow's `prompt_profile`** — `prose` (flat
-   paragraph) or `minimax_h3_ref` (six-section, rewritten by an LLM at enqueue
-   time). Don't hand-format H3 sections unless the user asked for a raw prompt;
-   the profile owns the format.
+   paragraph), `minimax_h3_ref` (six-section, for H3 reference-to-video) or
+   `minimax_h3_base` (base multi-shot, for H3 text/image-to-video without ref
+   slots) — the H3 ones rewritten by an LLM at enqueue time. Don't hand-format
+   H3 sections unless the user asked for a raw prompt; the profile owns the format.
 3. **References fill slots in node-id order**: characters in scene order, then
    the location, capped at the workflow's `(Input:image)` slot count. `<Subject 1>`
    = lowest node id. If a specific character must be Subject 1, say so and let
-   the user re-wire the data edges on the canvas.
+   the user re-wire the data edges on the canvas. The cap limits images only:
+   the location's description always reaches the prompt as the Setting, and
+   characters without a slot are described as text. For the environment to be
+   *seen*, not just described, pick a workflow with one slot more than the
+   scene's characters (e.g. 1 character + location → `r2v_2ref`).
 4. **Continue scenes** need the workflow to have an `(Input:video)` node. Auto
    mode takes the nearest earlier clip; if it doesn't exist, surface the error —
    don't retry blind.

@@ -773,6 +773,7 @@ def derive_llm_history(
             if (d.get("content") or "").strip() or d.get("attachments"):
                 steer_buffer.append(d)
         elif e.type == ASSISTANT_MESSAGE:
+            pending_call_ids.clear()
             msg: dict[str, Any] = {"role": "assistant"}
             name = d.get("agent_name")
             content = d.get("content") or ""
@@ -791,20 +792,23 @@ def derive_llm_history(
         elif e.type == TOOL_CALL:
             tool_call_by_id[d.get("call_id", "")] = d
         elif e.type == TOOL_RESULT:
-            call = tool_call_by_id.get(d.get("call_id", ""))
-            tool_name = d.get("tool_name") or (call or {}).get("tool_name") or "tool"
-            result = d.get("result") or {}
-            digest = _truncate_result(result)
-            history.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": d.get("call_id", ""),
-                    "content": f"[{tool_name}] {digest}",
-                }
-            )
-            pending_call_ids.discard(d.get("call_id", ""))
-            if not pending_call_ids:
-                _flush_steering()  # exchange closed — safe injection point
+            call_id = d.get("call_id", "")
+            if call_id in pending_call_ids:
+                call = tool_call_by_id.get(call_id)
+                tool_name = d.get("tool_name") or (call or {}).get("tool_name") or "tool"
+                result = d.get("result") or {}
+                digest = _truncate_result(result)
+                history.append(
+                    {
+                        "role": "tool",
+                        "name": tool_name,
+                        "tool_call_id": call_id,
+                        "content": f"[{tool_name}] {digest}",
+                    }
+                )
+                pending_call_ids.discard(call_id)
+                if not pending_call_ids:
+                    _flush_steering()  # exchange closed — safe injection point
     # Steering that never saw its exchange close (crashed turn) still projects.
     _flush_steering()
     if max_user_turns is not None and user_turn_boundaries:

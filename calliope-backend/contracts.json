@@ -159,6 +159,7 @@
     "story.ready"
   ],
   "prompt_profiles": [
+    "minimax_h3_base",
     "minimax_h3_ref",
     "prose"
   ],

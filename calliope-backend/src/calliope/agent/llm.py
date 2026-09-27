@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator
@@ -205,19 +206,26 @@ class LLMClient:
 
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM request to %s with model %s", url, self.model)
-        resp = await self.client.post(url, headers=self._headers(), json=payload)
-        if resp.status_code == 400 and "response_format" in payload:
-            # Some OpenAI-compatible servers (e.g. LM Studio) reject the
-            # response_format field outright — retry without it.
-            logger.warning(
-                "Server rejected response_format (HTTP 400); retrying without it"
-            )
-            payload.pop("response_format")
+        for attempt in range(4):
             resp = await self.client.post(url, headers=self._headers(), json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        return content.strip()
+            if resp.status_code in (429, 503) and attempt < 3:
+                delay = (attempt + 1) * 2.0
+                logger.warning("LLM request rate limited or unavailable (HTTP %s); retrying in %.1fs", resp.status_code, delay)
+                await asyncio.sleep(delay)
+                continue
+            if resp.status_code == 400 and "response_format" in payload:
+                # Some OpenAI-compatible servers (e.g. LM Studio) reject the
+                # response_format field outright — retry without it.
+                logger.warning(
+                    "Server rejected response_format (HTTP 400); retrying without it"
+                )
+                payload.pop("response_format")
+                resp = await self.client.post(url, headers=self._headers(), json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            return content.strip()
+        raise RuntimeError("LLM request failed after retries")
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -359,9 +367,17 @@ class LLMClient:
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM stream request to %s with model %s", url, self.model)
         tool_acc: dict[int, dict[str, Any]] = {}
+        rate_retries = 0
         while True:
             retry_without: str | None = None
             async with self.client.stream("POST", url, headers=self._headers(), json=payload) as resp:
+                if resp.status_code in (429, 503) and rate_retries < 5:
+                    await resp.aread()
+                    rate_retries += 1
+                    delay = rate_retries * 5.0
+                    logger.warning("Stream request rate limited or unavailable (HTTP %s); retrying in %.1fs (attempt %d/5)", resp.status_code, delay, rate_retries)
+                    await asyncio.sleep(delay)
+                    continue
                 if resp.status_code == 400:
                     # Read body for logging, then drop optional fields one at a
                     # time before giving up.
@@ -436,6 +452,9 @@ class LLMClient:
                     tool_acc[idx] = acc
                 if tc.get("id"):
                     acc["id"] = tc["id"]
+                for k, v in tc.items():
+                    if k not in ("index", "id", "type", "function") and v is not None:
+                        acc[k] = v
                 fn = tc.get("function") or {}
                 if fn.get("name"):
                     acc["function"]["name"] += fn["name"]

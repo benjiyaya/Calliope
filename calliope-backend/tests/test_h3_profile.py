@@ -273,3 +273,159 @@ def test_h3_fallback_dialog_delivery_cue():
     text = minimax_h3_ref_fallback(scene, subjects)
     # Cue kept as delivery direction; speaker still matched to the subject
     assert "<Subject 1> (S1) says whispering, <d>[English] Did you hear that?</d>" in text
+
+
+# ── environment / setting reaches every video prompt ──────────────────────
+
+import asyncio  # noqa: E402
+
+from calliope.agent import video_agent  # noqa: E402
+from calliope.agent.prompts import (  # noqa: E402
+    build_minimax_h3_ref_messages,
+    video_setting,
+    minimax_h3_base_fallback,
+    scene_video_prompt,
+)
+
+I2V_WORKFLOW = REPO_ROOT / "example_ComfyUI_workflows" / "minimax_h3-Turbo_Image2Video_20260813_API.json"
+ONE_SLOT_WORKFLOW = REPO_ROOT / "example_ComfyUI_workflows" / "video_minimax_h3_r2v_API.json"
+
+SHEET_PROMPT = (
+    "CHARACTER SHEET — Elara\nLayout: single cinematic character reference sheet on a "
+    "clean neutral backdrop, even studio lighting."
+)
+ELARA = {
+    "id": 1,
+    "name": "Elara",
+    "appearance": "short-cropped dark hair, grey flight suit",
+    "consistency_prompt": SHEET_PROMPT,
+    "sheet_path": "elara.png",
+}
+VALLEY = {
+    "name": "The Reclaimed Valley",
+    "description": "A hidden oasis with dense green foliage and a sparkling river.",
+    "consistency_prompt": "ENVIRONMENT REFERENCE — no people, no text.",
+}
+SCENE = {
+    "heading": "EXT. RECLAIMED VALLEY - DAY",
+    "action": "Elara steps out of the pod.",
+    "duration_sec": 6,
+}
+
+
+class _DeadLLM:
+    """LLMClient stand-in whose chat always fails → deterministic fallback."""
+
+    def __init__(self, sink=None):
+        self.sink = sink
+
+    async def chat(self, messages, **kwargs):
+        if self.sink is not None:
+            self.sink.extend(messages)
+        raise RuntimeError("offline")
+
+    async def close(self):
+        return None
+
+
+def _stub_llm(monkeypatch, sink=None):
+    monkeypatch.setattr(
+        video_agent,
+        "LLMClient",
+        type("Stub", (), {"for_role": staticmethod(lambda role, **kw: _DeadLLM(sink))}),
+    )
+
+
+def _refs(workflow, characters, loc_image):
+    inputs = parse_dynamic_inputs(_load(workflow))
+    return video_agent.resolve_h3_references(inputs, {}, characters, VALLEY, loc_image)
+
+
+def test_one_slot_workflow_keeps_location_in_text(monkeypatch):
+    """1 ref slot + 1 character + location: the image slot goes to the
+    character, but the environment must still reach the prompt as text
+    (it used to vanish — image AND description)."""
+    subjects, paths, _videos = _refs(ONE_SLOT_WORKFLOW, [ELARA], "valley.png")
+    assert [s["kind"] for s in subjects] == ["character"]
+    assert paths == ["elara.png"]
+
+    sent: list[dict] = []
+    _stub_llm(monkeypatch, sent)
+    prompt = asyncio.run(
+        video_agent._h3_rewrite(
+            SCENE, subjects, setting=video_setting(VALLEY), timeout=1
+        )
+    )
+    user_msg = sent[-1]["content"]
+    assert "The Reclaimed Valley" in user_msg and "sparkling river" in user_msg
+    # Fallback (LLM offline) also carries the environment
+    assert "sparkling river" in prompt
+    assert "Natural ambience of The Reclaimed Valley" in prompt
+
+
+def test_video_prompts_never_use_image_consistency_prompts(monkeypatch):
+    """The sheet's image prompt ('neutral backdrop, studio lighting') and the
+    location's ('no people') must not leak into video prompts."""
+    subjects, paths, _videos = _refs(H3_WORKFLOW, [ELARA], "valley.png")  # 2 slots
+    assert [s["kind"] for s in subjects] == ["character", "location"]
+    assert paths == ["elara.png", "valley.png"]
+    assert subjects[0]["appearance"] == ELARA["appearance"]
+    assert subjects[1]["appearance"] == VALLEY["description"]
+
+    _stub_llm(monkeypatch)
+    prompts = {
+        "minimax_h3_ref": asyncio.run(
+            video_agent._h3_rewrite(SCENE, subjects, setting=video_setting(VALLEY), timeout=1)
+        ),
+        "minimax_h3_base": asyncio.run(
+            video_agent._h3_base_rewrite(SCENE, [ELARA], VALLEY, timeout=1)
+        ),
+        "prose": scene_video_prompt(SCENE, [ELARA], VALLEY),
+    }
+    for profile, prompt in prompts.items():
+        assert "neutral backdrop" not in prompt, profile
+        assert "no people" not in prompt, profile
+        assert "sparkling river" in prompt, profile
+
+
+def test_characters_without_slot_become_text_cast():
+    kai = {"id": 2, "name": "Kai", "appearance": "red scarf", "sheet_path": "kai.png"}
+    noimg = {"id": 3, "name": "Mo", "appearance": "tall, bald"}
+    subjects, _paths, _videos = _refs(ONE_SLOT_WORKFLOW, [ELARA, kai, noimg], None)
+    assert [s["name"] for s in subjects] == ["Elara"]
+    extra = video_agent._text_only_cast([ELARA, kai, noimg], subjects)
+    assert [c["name"] for c in extra] == ["Kai", "Mo"]
+    messages = build_minimax_h3_ref_messages(SCENE, subjects, extra_cast=extra)
+    assert "- Kai: red scarf" in messages[1]["content"]
+
+
+def test_detect_prompt_profile_h3_base():
+    assert detect_prompt_profile(_load(I2V_WORKFLOW)) == "minimax_h3_base"
+    assert (
+        detect_prompt_profile(
+            _load(REPO_ROOT / "example_ComfyUI_workflows" / "MiniMax-H3-Turbo-R2V-Extend-2Refs1Vid_API.json")
+        )
+        == "minimax_h3_ref"
+    )
+
+
+def test_h3_base_fallback_format():
+    text = minimax_h3_base_fallback(
+        {**SCENE, "dialog": "ELARA: We made it."},
+        [{"name": "Elara", "appearance": "short-cropped dark hair"}],
+        setting={"name": "The Reclaimed Valley", "description": "green foliage and a river"},
+    )
+    assert text.startswith("integrated_multimodal_description: [Shot 1] Cinematic, live-action")
+    fields = ["integrated_multimodal_description:", "overall_soundscape:", "non_diegetic_music:"]
+    assert [text.index(f) for f in fields] == sorted(text.index(f) for f in fields)
+    assert "subject_definitions" not in text and "<Subject" not in text
+    assert "The scene takes place in The Reclaimed Valley: green foliage and a river." in text
+    assert "Elara: short-cropped dark hair." in text
+    assert "<d>[English] We made it.</d>" in text
+
+
+def test_prose_prompt_includes_location():
+    text = scene_video_prompt(SCENE, [ELARA], VALLEY)
+    assert "The scene takes place in The Reclaimed Valley" in text
+    assert "Elara: short-cropped dark hair" in text
+    assert "neutral backdrop" not in text

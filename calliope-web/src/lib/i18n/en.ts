@@ -841,6 +841,7 @@ export const en = {
 	'wf.countVideo': '{n} videos',
 	'wf.countSaved': '{n} saved',
 	'wf.profileH3': 'Use case',
+	'wf.profileH3Base': 'MiniMax H3 base (text/image-to-video)',
 	'wf.profileProse': 'This workflow generates {kind} from a {target}.',
 	'wf.promptFormat': 'Prompt format',
 	'wf.noInputs': 'No inputs detected',
