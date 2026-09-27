@@ -1,0 +1,1306 @@
+{
+  "last_node_id": 195,
+  "last_link_id": 34,
+  "nodes": [
+    {
+      "id": 29,
+      "type": "SaveImage",
+      "pos": [
+        5100,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "title": "(output:image) Image Output",
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "krea2/Assets"
+      ]
+    },
+    {
+      "id": 144,
+      "type": "CLIPTextEncode",
+      "pos": [
+        2580,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 144,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 2,
+          "widget": {
+            "name": "text"
+          }
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            5,
+            8,
+            14
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "CLIP Text Encode (Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 145,
+      "type": "EmptyLatentImage",
+      "pos": [
+        60,
+        60
+      ],
+      "size": [
+        300,
+        146
+      ],
+      "flags": {},
+      "order": 145,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Empty Latent Image",
+      "properties": {
+        "Node name for S&R": "EmptyLatentImage"
+      },
+      "widgets_values": [
+        1280,
+        720,
+        1
+      ]
+    },
+    {
+      "id": 146,
+      "type": "KSampler",
+      "pos": [
+        3300,
+        60
+      ],
+      "size": [
+        300,
+        314
+      ],
+      "flags": {},
+      "order": 146,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 4
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 5
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 6
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            21
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "KSampler",
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        875219259066635,
+        "fixed",
+        8,
+        1,
+        "res_multistep",
+        "beta",
+        1
+      ]
+    },
+    {
+      "id": 148,
+      "type": "UNETLoader",
+      "pos": [
+        60,
+        238
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 148,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            9,
+            11
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Load Diffusion Model",
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "Krea-2-Turbo.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 149,
+      "type": "CLIPLoader",
+      "pos": [
+        60,
+        390
+      ],
+      "size": [
+        300,
+        146
+      ],
+      "flags": {},
+      "order": 149,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            3,
+            25
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Load CLIP",
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen3vl_4b_fp8_scaled.safetensors",
+        "krea2",
+        "default"
+      ]
+    },
+    {
+      "id": 150,
+      "type": "VAELoader",
+      "pos": [
+        60,
+        568
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 150,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            18,
+            20,
+            22
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Load VAE",
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "qwen_image_vae.safetensors"
+      ]
+    },
+    {
+      "id": 151,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        2940,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 151,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            6,
+            15
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Conditioning Zero Out",
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 152,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        420,
+        60
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 152,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            12,
+            13
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Load LoRA",
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "krea2\\Krea2-realism-V2.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 156,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        60,
+        718
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 156,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            24,
+            33
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "(Input:prompt) Prompt",
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        " ultra realistic landscape. A sprawling, vertical city of dark metal and concrete. Sleek towers are contrasted with grimy, overcrowded lower levels. Perpetual twilight is punctuated by neon propaganda and searchlights."
+      ]
+    },
+    {
+      "id": 159,
+      "type": "ComfySwitchNode",
+      "pos": [
+        780,
+        60
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 159,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 10,
+          "widget": {
+            "name": "switch"
+          }
+        },
+        {
+          "name": "on_false",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 11
+        },
+        {
+          "name": "on_true",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "COMFY_MATCHTYPE_V3",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Switch (Model)",
+      "properties": {
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 160,
+      "type": "PrimitiveBoolean",
+      "pos": [
+        60,
+        868
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 160,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "BOOLEAN",
+          "type": "BOOLEAN",
+          "links": [
+            10,
+            29
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Boolean (Enable LoRA?)",
+      "properties": {
+        "Node name for S&R": "PrimitiveBoolean"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 161,
+      "type": "PrimitiveBoolean",
+      "pos": [
+        60,
+        1018
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 161,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "BOOLEAN",
+          "type": "BOOLEAN",
+          "links": [
+            32
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Boolean (Refine Prompt?)",
+      "properties": {
+        "Node name for S&R": "PrimitiveBoolean"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 172,
+      "type": "KSampler",
+      "pos": [
+        4380,
+        60
+      ],
+      "size": [
+        300,
+        314
+      ],
+      "flags": {},
+      "order": 172,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 13
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 14
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 15
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            17
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "KSampler",
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        6,
+        1,
+        "euler",
+        "simple",
+        0.15
+      ]
+    },
+    {
+      "id": 173,
+      "type": "VAEDecode",
+      "pos": [
+        4740,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 173,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 17
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "VAE Decode",
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 187,
+      "type": "VAEEncode",
+      "pos": [
+        4020,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 187,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pixels",
+          "type": "IMAGE",
+          "link": 19
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            16
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "VAE Encode",
+      "properties": {
+        "Node name for S&R": "VAEEncode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 188,
+      "type": "VAEDecode",
+      "pos": [
+        3660,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 188,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 21
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            19
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "VAE Decode",
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 189,
+      "type": "StringConcatenate",
+      "pos": [
+        420,
+        238
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 189,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string_a",
+          "type": "STRING",
+          "link": 23,
+          "widget": {
+            "name": "string_a"
+          }
+        },
+        {
+          "name": "string_b",
+          "type": "STRING",
+          "link": 24,
+          "widget": {
+            "name": "string_b"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            26
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Concatenate Text",
+      "properties": {
+        "Node name for S&R": "StringConcatenate"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 190,
+      "type": "TextGenerate",
+      "pos": [
+        780,
+        238
+      ],
+      "size": [
+        300,
+        362
+      ],
+      "flags": {},
+      "order": 190,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 25
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 26,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "generated_text",
+          "type": "STRING",
+          "links": [
+            34
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Generate Text",
+      "properties": {
+        "Node name for S&R": "TextGenerate"
+      },
+      "widgets_values": [
+        512,
+        "on",
+        true,
+        true,
+        0.7,
+        64,
+        0.95,
+        0.05,
+        1.05,
+        0,
+        0
+      ]
+    },
+    {
+      "id": 191,
+      "type": "PreviewAny",
+      "pos": [
+        1500,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 191,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 27
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            28,
+            30
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Preview as Text",
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 192,
+      "type": "StringConcatenate",
+      "pos": [
+        1860,
+        60
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 192,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string_a",
+          "type": "STRING",
+          "link": 28,
+          "widget": {
+            "name": "string_a"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            31
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Concatenate Text (LoRA Trigger Word)",
+      "properties": {
+        "Node name for S&R": "StringConcatenate"
+      },
+      "widgets_values": [
+        "muted minimalist sketch style",
+        ", "
+      ]
+    },
+    {
+      "id": 193,
+      "type": "ComfySwitchNode",
+      "pos": [
+        2220,
+        60
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 193,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 29,
+          "widget": {
+            "name": "switch"
+          }
+        },
+        {
+          "name": "on_false",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 30
+        },
+        {
+          "name": "on_true",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 31
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "COMFY_MATCHTYPE_V3",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "If/Else Switch",
+      "properties": {
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 194,
+      "type": "ComfySwitchNode",
+      "pos": [
+        1140,
+        60
+      ],
+      "size": [
+        300,
+        122
+      ],
+      "flags": {},
+      "order": 194,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "switch",
+          "type": "BOOLEAN",
+          "link": 32,
+          "widget": {
+            "name": "switch"
+          }
+        },
+        {
+          "name": "on_false",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 33
+        },
+        {
+          "name": "on_true",
+          "type": "COMFY_MATCHTYPE_V3",
+          "link": 34
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "COMFY_MATCHTYPE_V3",
+          "links": [
+            27
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "If/Else Switch",
+      "properties": {
+        "Node name for S&R": "ComfySwitchNode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 195,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        60,
+        1168
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 195,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            23
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Text String (System Prompt)",
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "You are an expert prompt engineer for text-to-image models. Your task is to expand the user's prompt into a highly effective image-generation prompt.\n\nThink step by step about the request before writing the answer:\n- What is the subject and mood?\n- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.\n- What composition, framing, and grounded details will help the text-to-image model?\n\nThen output a single expanded prompt paragraph.\n\nFollow these rules strictly:\n1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.\n2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.\n3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.\n4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.\n5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.\n6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.\n7. **Respect Existing Detail:** If the user's prompt is already detailed, lightly polish and finalize rather than heavily expanding \u2014 preserve their phrasing and direction.\n8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.\n9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. \"photo of\", \"photograph of\", \"illustration of\", \"painting of\", \"sketch of\", \"3D render of\"), honor it. Do not pivot to a different medium to avoid difficulty \u2014 match the user's stated intent.\n\nUser's Input:\n\n"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      173,
+      0,
+      29,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      193,
+      0,
+      144,
+      0,
+      "STRING"
+    ],
+    [
+      3,
+      149,
+      0,
+      144,
+      1,
+      "CLIP"
+    ],
+    [
+      4,
+      159,
+      0,
+      146,
+      0,
+      "MODEL"
+    ],
+    [
+      5,
+      144,
+      0,
+      146,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      6,
+      151,
+      0,
+      146,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      7,
+      145,
+      0,
+      146,
+      3,
+      "LATENT"
+    ],
+    [
+      8,
+      144,
+      0,
+      151,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      9,
+      148,
+      0,
+      152,
+      0,
+      "MODEL"
+    ],
+    [
+      10,
+      160,
+      0,
+      159,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      11,
+      148,
+      0,
+      159,
+      1,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      12,
+      152,
+      0,
+      159,
+      2,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      13,
+      152,
+      0,
+      172,
+      0,
+      "MODEL"
+    ],
+    [
+      14,
+      144,
+      0,
+      172,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      15,
+      151,
+      0,
+      172,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      16,
+      187,
+      0,
+      172,
+      3,
+      "LATENT"
+    ],
+    [
+      17,
+      172,
+      0,
+      173,
+      0,
+      "LATENT"
+    ],
+    [
+      18,
+      150,
+      0,
+      173,
+      1,
+      "VAE"
+    ],
+    [
+      19,
+      188,
+      0,
+      187,
+      0,
+      "IMAGE"
+    ],
+    [
+      20,
+      150,
+      0,
+      187,
+      1,
+      "VAE"
+    ],
+    [
+      21,
+      146,
+      0,
+      188,
+      0,
+      "LATENT"
+    ],
+    [
+      22,
+      150,
+      0,
+      188,
+      1,
+      "VAE"
+    ],
+    [
+      23,
+      195,
+      0,
+      189,
+      0,
+      "STRING"
+    ],
+    [
+      24,
+      156,
+      0,
+      189,
+      1,
+      "STRING"
+    ],
+    [
+      25,
+      149,
+      0,
+      190,
+      0,
+      "CLIP"
+    ],
+    [
+      26,
+      189,
+      0,
+      190,
+      1,
+      "STRING"
+    ],
+    [
+      27,
+      194,
+      0,
+      191,
+      0,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      28,
+      191,
+      0,
+      192,
+      0,
+      "STRING"
+    ],
+    [
+      29,
+      160,
+      0,
+      193,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      30,
+      191,
+      0,
+      193,
+      1,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      31,
+      192,
+      0,
+      193,
+      2,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      32,
+      161,
+      0,
+      194,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      33,
+      156,
+      0,
+      194,
+      1,
+      "COMFY_MATCHTYPE_V3"
+    ],
+    [
+      34,
+      190,
+      0,
+      194,
+      2,
+      "COMFY_MATCHTYPE_V3"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

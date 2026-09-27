@@ -168,15 +168,50 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Calliope backend server")
     parser.add_argument("--host", default=None, help="Bind host (default: from config)")
     parser.add_argument("--port", type=int, default=None, help="Bind port (default: from config)")
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Dev only: restart the server when a .py file under calliope/ changes",
+    )
     args = parser.parse_args()
 
     host = args.host or settings.host
     port = args.port or settings.port
 
-    app = create_app()
-    uvicorn = __import__("uvicorn")
-    uvicorn.run(app, host=host, port=port)
+    if args.reload and not getattr(sys, "frozen", False):
+        # Not uvicorn's --reload: on Windows it restarts the server by sending
+        # CTRL_C_EVENT, which never arrives without an interactive console
+        # (start-bg.bat, IDE runners) — the old process kept serving stale
+        # code. watchfiles stops the child with os.kill(SIGINT), which on
+        # Windows is TerminateProcess: reliable, but skips lifespan shutdown.
+        # Startup recovers what that leaves behind (stale running jobs →
+        # pending, orphaned agent sessions → idle) — so a restart mid-render
+        # re-queues that job.
+        from watchfiles import PythonFilter, run_process
+
+        src_dir = Path(__file__).resolve().parent
+        logger.info("Dev reload: watching %s", src_dir)
+        run_process(
+            src_dir,
+            target=_serve,
+            args=(host, port),
+            watch_filter=PythonFilter(),
+            callback=lambda changes: logger.info(
+                "Code changed (%s) — restarting backend",
+                ", ".join(sorted(Path(p).name for _, p in changes)),
+            ),
+        )
+        return 0
+
+    _serve(host, port)
     return 0
+
+
+def _serve(host: str, port: int) -> None:
+    """Build the app and run uvicorn (module-level so reload can spawn it)."""
+    import uvicorn
+
+    uvicorn.run(create_app(), host=host, port=port)
 
 
 if __name__ == "__main__":

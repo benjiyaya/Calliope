@@ -199,14 +199,14 @@ class WorkflowCreate(BaseModel):
     kind: Literal["image", "video"] = "image"
     workflow_json: dict[str, Any]
     description: str | None = None
-    prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
+    prompt_profile: Literal["prose", "minimax_h3_ref", "minimax_h3_base"] | None = None
 
 
 class WorkflowUpdate(BaseModel):
     name: str | None = None
     kind: Literal["image", "video"] | None = None
     description: str | None = None
-    prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
+    prompt_profile: Literal["prose", "minimax_h3_ref", "minimax_h3_base"] | None = None
     is_enabled: bool | None = None
 
 

@@ -840,6 +840,7 @@ export const fr: Dict = {
 	'wf.countVideo': '{n} vidéos',
 	'wf.countSaved': '{n} enregistrés',
 	'wf.profileH3': "Cas d'usage",
+	'wf.profileH3Base': 'MiniMax H3 base (texte/image vers vidéo)',
 	'wf.profileProse': 'Ce workflow génère {kind} à partir de {target}.',
 	'wf.promptFormat': 'Format du prompt',
 	'wf.noInputs': 'Aucune entrée détectée',

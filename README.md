@@ -193,6 +193,17 @@ In ComfyUI, use **Save (API Format)** — not the regular UI workflow graph form
 
 Settings → Workflows → import the JSON → **analyze** → check the preview shows the expected **role** next to each input → save → enable the workflow where you want to use it (Assets, Playground, per scene).
 
+#### Low VRAM (8GB) Workflows
+For consumer GPUs with 8GB VRAM (e.g. RTX 4060, RTX 3070), optimized ready-to-import workflows are available in `example_ComfyUI_workflows/`:
+- `video_minimax_h3_r2v_*_LowVRAM_API.json` (1-ref through 5-ref Reference-to-Video)
+- `minimax_h3-Turbo_Text2Video_20260813_LowVRAM_API.json` (Text-to-Video)
+- `minimax_h3-Turbo_Image2Video_20260813_LowVRAM_API.json` (Image-to-Video)
+
+These workflows are tuned to prevent out-of-memory errors by:
+- Using `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` and `minimax_h3_ref2va_pruned_int8_convrot.safetensors`
+- Integrating `LayerUtility: PurgeVRAM V2` to unload text encoder and diffusion models between stages
+- Setting tuned resolution and scheduler steps suitable for 8GB cards.
+
 ### 5. Troubleshooting
 
 If ComfyUI "doesn't know what to generate" or jobs come back empty:

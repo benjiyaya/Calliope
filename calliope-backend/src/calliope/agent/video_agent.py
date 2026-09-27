@@ -10,11 +10,16 @@ from typing import Any
 
 from calliope.agent.llm import LLMClient
 from calliope.agent.prompts import (
+    build_minimax_h3_base_messages,
     build_minimax_h3_ref_messages,
+    minimax_h3_base_fallback,
     minimax_h3_ref_fallback,
     scene_video_prompt,
+    video_appearance,
+    video_setting,
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
+from calliope.comfyui.profiles import H3_PROFILES
 from calliope.comfyui.roles import input_has_role
 from calliope.comfyui.smart_fill import ref_image_slots, smart_fill_inputs
 from calliope.config import settings
@@ -25,55 +30,66 @@ from calliope.queue.manager import queue_manager
 logger = logging.getLogger("calliope.video_agent")
 
 
+def _cast_entry(c: dict[str, Any]) -> dict[str, Any]:
+    return {"name": c.get("name"), "appearance": video_appearance(c)}
+
+
 def _h3_subjects(
     characters: list[dict[str, Any]],
     location: dict[str, Any] | None,
     loc_image: str | None,
     inputs: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Ordered subject roster + ref image paths for the H3 ref profile.
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    """Ordered subject roster + ref image paths + text-only cast (H3 ref profile).
 
     Order = ref wiring order: scene characters first (scene order), then the
     location. Capped at the workflow's generic (Input:image) slot count so
     <Subject N> always matches an actually-wired reference image.
+
+    The cap only limits IMAGES: characters left without a slot come back as
+    the text-only cast, and the location reaches the prompt through its
+    setting text either way (see _build_prompt) — a 1-slot workflow used to
+    drop the whole environment, text included.
     """
     subjects: list[dict[str, Any]] = []
     paths: list[str] = []
+    cap = len(ref_image_slots(inputs))
+    extra_cast: list[dict[str, Any]] = []
     for c in characters:
         img = c.get("sheet_path") or c.get("portrait_path")
-        if not img:
+        if not img or len(subjects) >= cap:
+            extra_cast.append(_cast_entry(c))
             continue
         subjects.append(
             {
                 "index": len(subjects) + 1,
                 "kind": "character",
                 "name": c.get("name"),
-                "appearance": c.get("consistency_prompt") or c.get("appearance") or "",
+                "appearance": video_appearance(c),
             }
         )
         paths.append(img)
-    if loc_image:
-        loc = location or {}
+    if loc_image and len(subjects) < cap:
+        setting = video_setting(location) or {"name": "the location", "description": ""}
         subjects.append(
             {
                 "index": len(subjects) + 1,
                 "kind": "location",
-                "name": loc.get("name"),
-                "appearance": loc.get("consistency_prompt") or loc.get("description") or "",
+                "name": setting["name"],
+                "appearance": setting["description"],
             }
         )
         paths.append(loc_image)
-    cap = len(ref_image_slots(inputs))
-    return subjects[:cap], paths[:cap]
+    return subjects, paths, extra_cast
 
 
-async def _h3_rewrite(
-    scene: dict[str, Any],
-    subjects: list[dict[str, Any]],
+async def _llm_rewrite(
+    messages: list[dict[str, str]],
+    fallback,  # type: ignore[no-untyped-def]  # () -> str
     *,
-    timeout: float = 120.0,
+    timeout: float,
 ) -> str:
-    """LLM rewrite into H3's six-section format, deterministic template on failure.
+    """LLM rewrite into an H3 format, deterministic template on failure.
 
     The timeout bounds the whole wait for a dead endpoint before the template
     kicks in — the preview path passes a short value so the UI fails fast.
@@ -81,15 +97,58 @@ async def _h3_rewrite(
     client = LLMClient.for_role("video", timeout=timeout)
     try:
         return await client.chat(
-            build_minimax_h3_ref_messages(scene, subjects),
+            messages,
             temperature=0.4,
             extra_body=settings.h3_rewrite_extra_body or None,
         )
     except Exception as exc:
-        logger.warning("MiniMax H3 prompt rewrite failed (%s); using fallback template", exc)
-        return minimax_h3_ref_fallback(scene, subjects)
+        logger.warning(
+            "MiniMax H3 prompt rewrite failed (%s); using fallback template",
+            f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
+        )
+        return fallback()
     finally:
         await client.close()
+
+
+async def _build_prompt(
+    profile: str,
+    scene: dict[str, Any],
+    characters: list[dict[str, Any]],
+    loc_row: dict[str, Any] | None,
+    loc_image: str | None,
+    inputs: list[dict[str, Any]],
+    *,
+    timeout: float = 120.0,
+) -> tuple[str, list[str]]:
+    """The generated prompt for a clip + the ref image paths to wire (H3 ref only).
+
+    Shared by preview and enqueue so what the user previews is what renders.
+    The location's setting text is passed to every profile — independent of
+    whether its image got a ref slot.
+    """
+    setting = video_setting(loc_row)
+    if profile == "minimax_h3_ref":
+        subjects, ref_paths, extra_cast = _h3_subjects(characters, loc_row, loc_image, inputs)
+        prompt = await _llm_rewrite(
+            build_minimax_h3_ref_messages(
+                scene, subjects, setting=setting, extra_cast=extra_cast
+            ),
+            lambda: minimax_h3_ref_fallback(
+                scene, subjects, setting=setting, extra_cast=extra_cast
+            ),
+            timeout=timeout,
+        )
+        return prompt, ref_paths
+    if profile == "minimax_h3_base":
+        cast = [_cast_entry(c) for c in characters]
+        prompt = await _llm_rewrite(
+            build_minimax_h3_base_messages(scene, cast, setting=setting),
+            lambda: minimax_h3_base_fallback(scene, cast, setting=setting),
+            timeout=timeout,
+        )
+        return prompt, []
+    return scene_video_prompt(scene, characters, loc_row), []
 
 
 def _video_input(inputs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -316,7 +375,7 @@ async def preview_clip_prompt(
     profile = workflow.get("prompt_profile") or "prose"
     based_on = _clip_prompt_hash({**clip, "character_ids": [c["id"] for c in characters]})
 
-    if profile == "minimax_h3_ref":
+    if profile in H3_PROFILES:
         # Fresh saved draft short-circuits the LLM call
         draft = _stored_prompt_draft(clip)
         if draft:
@@ -328,16 +387,15 @@ async def preview_clip_prompt(
                     "from_draft": True,
                     "based_on": based_on,
                 }
-        subjects, _ = _h3_subjects(characters, loc_row, loc_image, inputs)
         await event_bus.publish(
             "agent.thinking",
             {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
         )
-        # Preview is interactive — fail fast to the deterministic template
-        # instead of making the user wait out a dead endpoint.
-        prompt = await _h3_rewrite(scene, subjects, timeout=30.0)
-    else:
-        prompt = scene_video_prompt(scene, characters)
+    # Preview is interactive — fail fast to the deterministic template
+    # instead of making the user wait out a dead endpoint.
+    prompt, _ = await _build_prompt(
+        profile, scene, characters, loc_row, loc_image, inputs, timeout=30.0
+    )
     return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
 
 
@@ -470,8 +528,10 @@ async def enqueue_video_jobs(
                 extra_values.update(
                     {k: v for k, v in input_values_override.items() if v not in (None, "")}
                 )
-            if profile == "minimax_h3_ref":
-                subjects, ref_paths = _h3_subjects(characters, loc_row, loc_image, inputs)
+            if profile in H3_PROFILES:
+                ref_paths: list[str] = []
+                if profile == "minimax_h3_ref":
+                    _, ref_paths, _ = _h3_subjects(characters, loc_row, loc_image, inputs)
                 # Prompt precedence: explicit request → saved (fresh) draft → LLM.
                 explicit_prompt = (prompts or {}).get(clip["id"])
                 fresh_draft = None
@@ -493,7 +553,9 @@ async def enqueue_video_jobs(
                             "project_id": project_id,
                         },
                     )
-                    prompt = await _h3_rewrite(scene, subjects)
+                    prompt, _ = await _build_prompt(
+                        profile, scene, characters, loc_row, loc_image, inputs
+                    )
                 values = smart_fill_inputs(
                     inputs,
                     prompt=prompt,
@@ -503,7 +565,7 @@ async def enqueue_video_jobs(
                 )
             else:
                 prompt = (prompts or {}).get(clip["id"]) or scene_video_prompt(
-                    scene, characters
+                    scene, characters, loc_row
                 )
                 values = smart_fill_inputs(
                     inputs,

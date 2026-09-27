@@ -840,6 +840,7 @@ export const ja: Dict = {
 	'wf.countVideo': 'ビデオ {n} 件',
 	'wf.countSaved': '{n} 件保存',
 	'wf.profileH3': '用途',
+	'wf.profileH3Base': 'MiniMax H3 ベース（テキスト/画像から動画）',
 	'wf.profileProse': 'このワークフローは {target} から {kind} を生成します。',
 	'wf.promptFormat': 'プロンプト形式',
 	'wf.noInputs': '入力が検出されませんでした',

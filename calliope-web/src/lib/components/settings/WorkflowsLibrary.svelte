@@ -280,6 +280,7 @@
 				<select class="field-select" bind:value={wfProfile}>
 					<option value="prose">{t('wf.profileProse')}</option>
 					<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
+					<option value="minimax_h3_base">{t('wf.profileH3Base')}</option>
 				</select>
 			</label>
 			<label class="field">
@@ -337,6 +338,7 @@
 								<select class="field-select" bind:value={editProfile}>
 									<option value="prose">{t('wf.profileProse')}</option>
 									<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
+									<option value="minimax_h3_base">{t('wf.profileH3Base')}</option>
 								</select>
 							</label>
 							<p class="field-hint">{t('wf.jsonLocked')}</p>
@@ -355,6 +357,8 @@
 										<span class="kind-badge" class:video={wf.kind === 'video'}>{wf.kind}</span>
 										{#if wf.prompt_profile === 'minimax_h3_ref'}
 											<span class="kind-badge h3">H3-ref</span>
+										{:else if wf.prompt_profile === 'minimax_h3_base'}
+											<span class="kind-badge h3">H3-base</span>
 										{/if}
 										<span class="count">{t('wf.inputsCount', { count: wf.input_schema?.length ?? 0 })}</span>
 										<span class="count">{t('wf.outputsCount', { count: wf.output_schema?.length ?? 0 })}</span>

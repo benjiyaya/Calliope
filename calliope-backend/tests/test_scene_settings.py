@@ -122,10 +122,10 @@ def test_enqueue_merges_stored_input_values(client, monkeypatch):
         conn.close()
 
     # Skip the LLM rewrite — the fallback template is deterministic
-    async def fake_rewrite(scene_, subjects):
+    async def fake_rewrite(messages, fallback, **kwargs):
         return "fallback"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._llm_rewrite", fake_rewrite)
 
     from calliope.queue.manager import queue_manager
 
@@ -161,10 +161,10 @@ def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
     finally:
         conn.close()
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(messages, fallback, **kwargs):
         return "H3 REWRITE"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._llm_rewrite", fake_rewrite)
 
     queue_manager.paused = True
     try:
@@ -232,11 +232,11 @@ def test_preview_prompt_fresh_draft_shortcircuits_llm(client, monkeypatch):
 
     called = []
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(messages, fallback, **kwargs):
         called.append(1)
         return "SHOULD NOT BE USED"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._llm_rewrite", fake_rewrite)
 
     result = asyncio_run(preview_clip_prompt(pid, clip_id))
     assert result["prompt"] == "MY SAVED DRAFT"
@@ -309,10 +309,10 @@ def test_enqueue_prompts_override(client, monkeypatch):
     finally:
         conn.close()
 
-    async def fake_rewrite(scene_, subjects):
+    async def fake_rewrite(messages, fallback, **kwargs):
         return "LLM VERSION"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._llm_rewrite", fake_rewrite)
 
     from calliope.queue.manager import queue_manager
 

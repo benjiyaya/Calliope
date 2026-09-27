@@ -1,0 +1,336 @@
+{
+  "115": {
+    "class_type": "ResolutionSelector",
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 0.4,
+      "multiple": 32
+    },
+    "_meta": {
+      "title": "Resolution Selector (Size)"
+    }
+  },
+  "131": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "132",
+        0
+      ],
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
+    },
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "132": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 5
+    },
+    "_meta": {
+      "title": "(input:duration) Duration"
+    }
+  },
+  "138": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    },
+    "_meta": {
+      "title": "(input:prompt) Text Prompt"
+    }
+  },
+  "148": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "CharSheet_00002_.png"
+    },
+    "_meta": {
+      "title": "(input:image) Ref 1"
+    }
+  },
+  "161": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax-h3\\minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "162": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "161",
+        0
+      ],
+      "lora_name": "minimax-h3\\minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "strength_model": 1
+    },
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "163": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "minimax-h3\\qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "164": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "165": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "166": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {
+      "model": [
+        "167",
+        0
+      ],
+      "shift_video": 12,
+      "shift_audio": 3
+    },
+    "_meta": {
+      "title": "ModelSamplingMiniMaxH3"
+    }
+  },
+  "167": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": [
+        "162",
+        0
+      ],
+      "sage_attention": "auto",
+      "allow_compile": false
+    },
+    "_meta": {
+      "title": "Patch Sage Attention KJ"
+    }
+  },
+  "169": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "170": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "166",
+        0
+      ],
+      "scheduler": "beta",
+      "steps": 4,
+      "denoise": 1
+    },
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "171": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 1043441231554445
+    },
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "172": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "166",
+        0
+      ],
+      "conditioning": [
+        "300",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "173": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "171",
+        0
+      ],
+      "guider": [
+        "172",
+        0
+      ],
+      "sampler": [
+        "169",
+        0
+      ],
+      "sigmas": [
+        "170",
+        0
+      ],
+      "latent_image": [
+        "178",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "174": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "301",
+        0
+      ],
+      "vae": [
+        "164",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "175": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "173",
+        0
+      ],
+      "vae": [
+        "165",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "176": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "174",
+        0
+      ],
+      "audio": [
+        "175",
+        0
+      ],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Calliope/vid",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": false,
+      "meta_batch": "yuv420p",
+      "vae": 19
+    },
+    "_meta": {
+      "title": "(output:video) Video"
+    }
+  },
+  "178": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "clip": [
+        "163",
+        0
+      ],
+      "prompt": [
+        "138",
+        0
+      ],
+      "width": [
+        "115",
+        0
+      ],
+      "height": [
+        "115",
+        1
+      ],
+      "length": [
+        "131",
+        1
+      ],
+      "vae": [
+        "164",
+        0
+      ],
+      "audio_vae": [
+        "165",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "148",
+        0
+      ],
+      "ref_image_size": "match"
+    },
+    "_meta": {
+      "title": "MiniMax H3 Reference to Video"
+    }
+  },
+  "300": {
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "inputs": {
+      "anything": [
+        "178",
+        0
+      ],
+      "purge_cache": true,
+      "purge_models": true
+    },
+    "_meta": {
+      "title": "Free VRAM (drop text encoder)"
+    }
+  },
+  "301": {
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "inputs": {
+      "anything": [
+        "173",
+        0
+      ],
+      "purge_cache": true,
+      "purge_models": true
+    },
+    "_meta": {
+      "title": "Free VRAM (drop video model)"
+    }
+  }
+}

@@ -1,0 +1,253 @@
+{
+  "115": {
+    "class_type": "ResolutionSelector",
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 0.4,
+      "multiple": 32
+    },
+    "_meta": {
+      "title": "Resolution Selector (Size)"
+    }
+  },
+  "207": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "208": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax-h3\\minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "209": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "225",
+        0
+      ],
+      "vae": [
+        "208",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "210": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "301",
+        0
+      ],
+      "vae": [
+        "207",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "215": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax-h3\\minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "216": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "minimax-h3\\qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "219": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "216",
+        0
+      ],
+      "vae": [
+        "207",
+        0
+      ],
+      "prompt": [
+        "6005",
+        0
+      ],
+      "width": [
+        "115",
+        0
+      ],
+      "height": [
+        "115",
+        1
+      ],
+      "length": [
+        "220",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "MiniMax H3 Image to Video"
+    }
+  },
+  "220": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "221",
+        0
+      ],
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
+    },
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "221": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 5
+    },
+    "_meta": {
+      "title": "(input:Duration) Seconds"
+    }
+  },
+  "224": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "219",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
+  },
+  "225": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "215",
+        0
+      ],
+      "positive": [
+        "300",
+        0
+      ],
+      "negative": [
+        "224",
+        0
+      ],
+      "latent_image": [
+        "219",
+        1
+      ],
+      "seed": 42,
+      "steps": "fixed",
+      "cfg": 20,
+      "sampler_name": 1,
+      "scheduler": "res_multistep",
+      "denoise": "simple"
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "300": {
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "inputs": {
+      "anything": [
+        "219",
+        0
+      ],
+      "purge_cache": true,
+      "purge_models": true
+    },
+    "_meta": {
+      "title": "Free VRAM (drop text encoder)"
+    }
+  },
+  "301": {
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "inputs": {
+      "anything": [
+        "225",
+        0
+      ],
+      "purge_cache": true,
+      "purge_models": true
+    },
+    "_meta": {
+      "title": "Free VRAM (drop video model)"
+    }
+  },
+  "5978": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "210",
+        0
+      ],
+      "frame_rate": [
+        "5986",
+        0
+      ],
+      "audio": [
+        "209",
+        0
+      ],
+      "loop_count": 0,
+      "filename_prefix": "Calliope/vid-h3base",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": false,
+      "meta_batch": "yuv420p",
+      "vae": 19
+    },
+    "_meta": {
+      "title": "(output:video) Video"
+    }
+  },
+  "5986": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 24
+    },
+    "_meta": {
+      "title": "(input:FPS)"
+    }
+  },
+  "6005": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    },
+    "_meta": {
+      "title": "(input:prompt) Text Prompt"
+    }
+  }
+}

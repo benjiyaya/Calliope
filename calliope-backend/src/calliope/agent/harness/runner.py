@@ -399,10 +399,14 @@ class AgentRunner:
             raise
         except Exception as exc:  # noqa: BLE001 — surfaced to the chat as the reply
             logger.exception("Agent turn failed for session %s", session_id)
+            # httpx.ReadTimeout / TimeoutError stringify EMPTY — name the type
+            # so the chat never shows a bare "Agent error:" (same as the
+            # sub-agent path in orchestrator.py).
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
             self._persist_message(
                 session_id,
                 role="assistant",
-                content=f"Agent error: {exc}",
+                content=f"Agent error: {detail}",
                 status="error",
             )
             self._set_status(session_id, "error")
