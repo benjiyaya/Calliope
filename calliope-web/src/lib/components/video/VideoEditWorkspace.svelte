@@ -7,6 +7,7 @@
 	import type { Clip, Job, Scene, Workflow } from '$lib/api';
 	import OmniComposer from '$lib/components/OmniComposer.svelte';
 	import type { AssetOption } from '$lib/assetPicker';
+	import { carryValuesAcrossWorkflows, sanitizeWorkflowValues } from '$lib/comfy/carryValues';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import ClipMonitor from './ClipMonitor.svelte';
 	import ClipSourceModal from './ClipSourceModal.svelte';
@@ -231,8 +232,14 @@ import { t } from '$lib/i18n.svelte';
 				jobs={clipJobs}
 				{workflow}
 				sceneVideoPath={selectedClip?.clip.clip_path ?? selected.video_path}
-				onCopySettings={(values) => {
-					formValues = { ...formValues, ...values };
+				onCopySettings={(values, jobWorkflowId) => {
+					// A job from another workflow keys its values by THAT workflow's nodeIds.
+					const source =
+						jobWorkflowId != null && jobWorkflowId !== workflow?.id
+							? workflows.find((w) => w.id === jobWorkflowId)?.input_schema
+							: workflow?.input_schema;
+					const copied = carryValuesAcrossWorkflows(values, source, workflow?.input_schema);
+					formValues = sanitizeWorkflowValues({ ...formValues, ...copied }, workflow?.input_schema);
 					onFormChange?.({ ...formValues });
 				}}
 				onApplyToScene={(j, path) => onApplyToClip?.(j, path)}

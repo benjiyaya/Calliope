@@ -22,8 +22,9 @@
 		/** Full job list for the scene, newest first (drives history). */
 		jobs?: Job[];
 		workflow?: Workflow | null;
-		/** Load a job's input_values back into the video form. */
-		onCopySettings?: (values: Record<string, string | number>) => void;
+		/** Load a job's input_values back into the video form (with the job's workflow, so the
+		 *  form can remap nodeIds if that job used a different workflow). */
+		onCopySettings?: (values: Record<string, string | number>, workflowId: number | null) => void;
 		/** The scene's current video_path — marks which render is live. */
 		sceneVideoPath?: string | null;
 		/** Make this job's output the scene's current clip. */
@@ -144,7 +145,7 @@ function applyToScene() {
 		for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
 			if (typeof v === 'string' || typeof v === 'number') values[k] = v;
 		}
-		onCopySettings(values);
+		onCopySettings(values, activeJob.workflow_id ?? null);
 		open = false;
 	}
 
