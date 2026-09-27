@@ -199,6 +199,8 @@ For consumer GPUs with 8GB VRAM (e.g. RTX 4060, RTX 3070), optimized ready-to-im
 - `minimax_h3-Turbo_Text2Video_20260813_LowVRAM_API.json` (Text-to-Video)
 - `minimax_h3-Turbo_Image2Video_20260813_LowVRAM_API.json` (Image-to-Video)
 
+Their visual canvas counterparts (for drag-and-drop into ComfyUI) are provided in `Calliope_Optimized/`.
+
 These workflows are tuned to prevent out-of-memory errors by:
 - Using `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` and `minimax_h3_ref2va_pruned_int8_convrot.safetensors`
 - Integrating `LayerUtility: PurgeVRAM V2` to unload text encoder and diffusion models between stages
@@ -224,6 +226,7 @@ This project is licensed under the [MIT License](LICENSE)
 ## Repo layout
 
 ```text
+Calliope_Optimized/          visual ComfyUI canvas workflows (LiteGraph format) for 8GB Low VRAM
 calliope-backend/            FastAPI backend (Python)
 calliope-web/                SvelteKit frontend
 example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
