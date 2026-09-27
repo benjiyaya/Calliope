@@ -683,8 +683,10 @@ MINIMAX_H3_REF_SYSTEM = (
     "say that its camera and physical performance drive the motion.\n"
     "3. retention_analysis: one line per subject: '<Subject N> (appears in [Shot 1]…): "
     "fully_preserved - <which defined features are retained>.' One line per reference "
-    "video: '<Video N> (motion across [Shot 1]…): motion_preserved - <camera, timing, "
-    "and physical action kept from the clip>.'\n"
+    "video: '<Video N> (camera movement and action timing): attribute_transfer - <camera, "
+    "timing, and physical action taken from the clip>.' Every line uses one of H3's fixed "
+    "visual markers — fully_preserved, partially_preserved, attribute_transfer, "
+    "weak_reference — and no other word.\n"
     "4. detailed_description: the main body, 150–350 words. Open with one or two style "
     "sentences (lighting, palette, medium) BEFORE '[Shot 1]'. '[Shot 1]' has no timestamp; "
     "later cuts use '[Shot N] At MM:SS.mmm, …'. For clips under ~8 seconds prefer a single "
@@ -832,7 +834,7 @@ def minimax_h3_ref_fallback(
             "Preserve its camera movement, action timing, and physical performance."
         )
         retention.append(
-            f"<Video {v['index']}> (motion across [Shot 1]): motion_preserved - "
+            f"<Video {v['index']}> (camera movement and action timing): attribute_transfer - "
             "camera path, timing, and physical performance from the reference video "
             "are retained."
         )
