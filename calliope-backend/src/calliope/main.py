@@ -108,7 +108,10 @@ async def lifespan(app: FastAPI):
     runner.recover_orphaned_sessions()
     await queue_worker.start()
     logger.info("Calliope started — db=%s dry_run=%s", settings.db_path, settings.dry_run)
-    yield
+    # The MCP endpoint's session manager needs its task group for the app's
+    # whole lifetime (see calliope.mcp_server).
+    async with app.state.mcp_manager.run():
+        yield
     from calliope.agent.harness.runner import runner
 
     await runner.shutdown()
@@ -154,6 +157,18 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     )
     async def api_not_found(full_path: str) -> None:
         raise HTTPException(status_code=404, detail=f"API route not found: /api/{full_path}")
+
+    # MCP server for Claude Code & co. Registered before the SPA mount, which
+    # would otherwise swallow /mcp. Tools run in this process, so the web app
+    # sees every change live on the event bus.
+    from starlette.routing import Route
+
+    from calliope.mcp_server import MCPEndpoint, build_session_manager
+
+    app.state.mcp_manager = build_session_manager()
+    app.router.routes.append(
+        Route("/mcp", endpoint=MCPEndpoint(app.state.mcp_manager), methods=["GET", "POST", "DELETE"])
+    )
 
     resolved_static = static_dir if static_dir is not None else Path(__file__).resolve().parent / "static"
     if resolved_static.exists():

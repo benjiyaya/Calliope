@@ -434,7 +434,8 @@ async def t_enqueue_asset_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             conn.close()
         would_hit = (counts["c"] or 0) + (counts["l"] or 0) + (counts["i"] or 0)
         latest = session_log.latest_user_message(ctx.session_id) or ""
-        if would_hit > 3 and not allows_bulk_enqueue(latest, would_hit):
+        # MCP: the client's permission prompt shows the call's arguments.
+        if would_hit > 3 and ctx.origin != "mcp" and not allows_bulk_enqueue(latest, would_hit):
             return {
                 "ok": False,
                 "error": (
@@ -559,7 +560,8 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
     if not resolved_clips:
         return {"ok": False, "error": "No matching clips to enqueue"}
 
-    allowed_bulk = allows_bulk_video_enqueue(latest, len(resolved_clips))
+    # MCP: the client's permission prompt shows the call's arguments.
+    allowed_bulk = ctx.origin == "mcp" or allows_bulk_video_enqueue(latest, len(resolved_clips))
     if not allowed_bulk:
         return {
             "ok": False,

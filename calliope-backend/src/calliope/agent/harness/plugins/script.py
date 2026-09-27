@@ -814,7 +814,8 @@ async def t_break_into_shots(ctx: ToolContext, args: dict[str, Any]) -> dict[str
         return {"ok": False, "error": "No matching scenes to expand"}
 
     latest = session_log.latest_user_message(ctx.session_id) or ""
-    if len(resolved) > 3 and not allows_bulk_video_enqueue(latest, len(resolved)):
+    # MCP: the client's permission prompt shows the call's arguments.
+    if len(resolved) > 3 and ctx.origin != "mcp" and not allows_bulk_video_enqueue(latest, len(resolved)):
         return {
             "ok": False,
             "error": (

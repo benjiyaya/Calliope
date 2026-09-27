@@ -153,6 +153,11 @@ def allows_bulk_video_enqueue(text: str, count: int) -> bool:
 
 def user_allows_render(ctx: ToolContext) -> bool:
     """Render permission from explicit user acts only (see module docstring)."""
+    if ctx.origin == "mcp":
+        # MCP calls have no chat to read intent from: the MCP client's
+        # per-tool permission prompt is the user's explicit act (render tools
+        # carry destructiveHint so clients ask). See calliope.mcp_server.
+        return True
     if has_structured_approval(ctx, "render"):
         return True
     from calliope.agent.harness import log as session_log

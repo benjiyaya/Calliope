@@ -63,6 +63,10 @@ def _user_confirmed_replacement(ctx: ToolContext) -> bool:
     from calliope.agent.harness import log as session_log
     from calliope.agent.harness.policy import has_structured_approval
 
+    if ctx.origin == "mcp":
+        # The MCP client's permission prompt is the confirmation (these tools
+        # carry destructiveHint). See calliope.mcp_server.
+        return True
     if has_structured_approval(ctx, "destructive_replace"):
         return True
     return is_confirmation(session_log.latest_user_message(ctx.session_id) or "")

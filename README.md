@@ -87,6 +87,16 @@ The app walks a project through four stages — **Story, Assets, Script, Video**
 
 **Agents** is a chat-driven way to run the same pipeline: talk to a production agent that operates Calliope through tools (create project, draft story, write script, queue asset/video renders, watch jobs). Every chat session is bound to at most one project — start a **Sandbox** chat with no project and the agent materializes one via `create_project`, linking the session automatically; or link a session to an existing project and ask for edits. Complex builds are decomposed by a planner into sub-agents (story → script → assets → video). Everything the agent does goes through the same database and render queue the project UI reads — nothing bypasses the normal pipeline. When the agent waits on renders (`wait_for_jobs`), it uses the same **Poll timeout** as the queue worker (default 30 minutes).
 
+### Drive Calliope from Claude Code (MCP)
+
+The backend is also an **MCP server** at `http://127.0.0.1:8247/mcp` (streamable HTTP), so Claude Code — or any MCP client — can run the whole pipeline with the same tools the in-app agent uses: create/select a project, write the story (beats, characters, locations, items), the script (scenes, clips, `break_into_shots`), queue reference images and video clips, and watch jobs. Tools run **inside the backend**, so every change shows up live in the web app.
+
+```bash
+claude mcp add --transport http calliope http://127.0.0.1:8247/mcp
+```
+
+Opening Claude Code in this folder also picks up the bundled `.mcp.json`. Start with `list_projects` → `select_project` (or `create_project`, which selects the new project); the selection is kept on a **Claude Code (MCP)** session. Rendering tools (`enqueue_asset_jobs`, `enqueue_video_jobs`, `run_workflow`) and deletions are flagged destructive, so Claude Code asks before running them — that prompt replaces the chat-based render approval. Build Scene, AI Canvas, `ask_user` and `run_command` stay in the app. The endpoint only answers `localhost` / `127.0.0.1` hosts.
+
 ## ComfyUI workflows (important)
 
 Calliope does **not** hardcode Comfy node IDs. It discovers editable nodes from **role tags** in the node titles of an **API Format** workflow JSON. The `example_ComfyUI_workflows/` folder in this repo contains ready-to-import examples (MiniMax H3 reference-to-video, krea2 text-to-image, character sheet).
