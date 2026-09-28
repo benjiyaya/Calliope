@@ -622,7 +622,13 @@ async def preview_clip_prompt(
                 extra_cast=_text_only_cast(characters, subjects),
                 timeout=30.0,
             )
-        critic = await _critique_or_unavailable(prompt, plan, clip_id)
+        if from_draft and meta.get("source") == "mcp":
+            # Written by an MCP client against this plan (set_clip_prompts):
+            # Calliope's LLM does not re-judge it — on a slow local model the
+            # critic only added a timeout and a warning to every preview.
+            critic = {"ok": True, "notes": []}
+        else:
+            critic = await _critique_or_unavailable(prompt, plan, clip_id)
         # A dead or unreadable judge leaves this prompt in place and reports
         # the note. The rewrite already falls back to the template when that
         # call itself fails.

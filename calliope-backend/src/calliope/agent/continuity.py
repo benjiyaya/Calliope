@@ -482,7 +482,8 @@ async def ensure_continuity_plan(
     ``llm=False`` (MCP client content) the model is never called: the stored
     plan is re-fitted, or a deterministic board plan is used (not persisted).
     Either way ``based_on`` stays the stored value, so prompt drafts written
-    against this plan stay fresh.
+    against this plan stay fresh. With no stored plan the board plan is saved
+    as the client's (source "client").
     """
     board = load_board(project_id)
     basis = basis_hash(board, live_refs)
@@ -497,8 +498,14 @@ async def ensure_continuity_plan(
         stored["refreshed"] = False
         return stored
     if not llm:
+        # No plan yet and the MCP client writes the content: keep the board
+        # plan as the client's, so drafts written against it stay fresh when
+        # the UI later opens them (the UI would otherwise ask the LLM for a
+        # plan and change the ledger under every draft).
         plan = deterministic_plan(board)
-        plan["based_on"] = ""
+        plan["based_on"] = basis
+        plan["source"] = "client"
+        _persist(project_id, plan)
         plan["refreshed"] = False
         return plan
     try:

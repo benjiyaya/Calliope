@@ -188,6 +188,14 @@ def test_prompts_brief_set_and_enqueue(client, no_llm):
     assert not err and ok["saved"]
     assert _call("get_prompt_brief", {"clip_ids": [clip_id]})[0]["clips"][0]["draft_fresh"] is True
 
+    # The UI's Review prompt shows the client draft at once: no LLM rewrite,
+    # no continuity critic (every LLM entry point is trapped here).
+    from calliope.agent.video_agent import preview_clip_prompt
+
+    preview = asyncio.run(preview_clip_prompt(pid, clip_id, workflow_id=wf["id"]))
+    assert preview["from_draft"] is True and preview["prompt"] == H3_REF_PROMPT
+    assert preview["critic"] == {"ok": True, "notes": []}
+
     from calliope.queue.manager import queue_manager
 
     queue_manager.paused = True
