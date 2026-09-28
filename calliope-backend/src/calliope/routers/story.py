@@ -247,13 +247,71 @@ async def _iter_story_chunks(
         }
 
 
+def story_brief(project_id: int) -> dict[str, Any]:
+    """What the story model would receive — for an MCP client to write the story."""
+    conn = get_db(settings.db_path)
+    try:
+        project = _require_project(conn, project_id)
+    finally:
+        conn.close()
+    required = recommend_beat_count(project.get("target_duration"))
+    messages = build_story_messages(
+        title=project["title"],
+        idea=project["idea"],
+        genre=project["genre"],
+        tone=project["tone"],
+        target_duration=project["target_duration"],
+    )
+    return {
+        "system": messages[0]["content"],
+        "user": messages[1]["content"]
+        + f"\n\nReturn exactly {required} beats (order_index 1..{required}).",
+        "required_beats": required,
+    }
+
+
+async def _content_chunks(content: dict[str, Any]):
+    """Client-supplied story as the single chunk the persistence loop expects."""
+    beats = [dict(b) for b in content.get("beats") or [] if isinstance(b, dict)]
+    for index, beat in enumerate(beats, start=1):
+        beat["order_index"] = index
+    yield {
+        "title": content.get("title"),
+        "logline": content.get("logline"),
+        "characters": [c for c in content.get("characters") or [] if isinstance(c, dict)],
+        "locations": [c for c in content.get("locations") or [] if isinstance(c, dict)],
+        "items": [c for c in content.get("items") or [] if isinstance(c, dict)],
+        "beats": beats,
+    }
+
+
 @router.post("/{project_id}/generate-story")
-async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any]:
+async def generate_story(
+    project_id: int, replace: bool = True, content: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Draft the story with the LLM, or save ``content`` supplied by an MCP client.
+
+    Client content goes through the exact same persistence as a model draft;
+    it is validated BEFORE anything is deleted, so a short draft never wipes
+    the existing story.
+    """
     conn = get_db(settings.db_path)
     try:
         project = _require_project(conn, project_id)
 
         required_beats = recommend_beat_count(project.get("target_duration"))
+        if content is not None:
+            if not isinstance(content, dict):
+                raise HTTPException(status_code=422, detail="content must be a JSON object")
+            given = len([b for b in content.get("beats") or [] if isinstance(b, dict)])
+            if given < required_beats:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"content has {given} beats but target "
+                        f"'{project.get('target_duration')}' requires {required_beats}."
+                    ),
+                )
         await event_bus.publish(
             "agent.thinking",
             {
@@ -273,7 +331,12 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
         written = 0
         replace_started = False
 
-        async for chunk in _iter_story_chunks(project_id, project, required_beats):
+        chunks = (
+            _content_chunks(content)
+            if content is not None
+            else _iter_story_chunks(project_id, project, required_beats)
+        )
+        async for chunk in chunks:
             if title is None:
                 title = chunk.get("title")
                 logline = chunk.get("logline")

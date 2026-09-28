@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -40,6 +40,7 @@ class SettingsUpdate(BaseModel):
     agent_hardening_prompt: str | None = Field(None, max_length=20000)
     agent_history_char_budget: int | None = Field(None, ge=10_000, le=2_000_000)
     h3_rewrite_extra_body: dict[str, Any] | None = None
+    mcp_content_source: Literal["client", "calliope"] | None = None
     dry_run: bool | None = None
 
 

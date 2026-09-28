@@ -63,7 +63,18 @@ matching skill first when unsure (list_skills / read_skill — e.g.
 scene-to-video). Rendering (enqueue_asset_jobs, enqueue_video_jobs,
 run_workflow) queues real GPU work one job at a time; poll with
 get_job_status / wait_for_jobs. generate_story / generate_script with
-replace=true DELETE existing content."""
+replace=true DELETE existing content.
+
+YOU write the content (Settings → Agent → MCP content source = client, the
+default): Calliope's own LLM is not used. generate_story, generate_script,
+break_into_shots and set_continuity_plan called WITHOUT content/plan return a
+brief — the exact instructions and context — then call them again WITH
+content/plan to save it (same validation as Calliope's drafts; nothing is
+deleted until the content passes). Video: get_prompt_brief → write each H3
+prompt → set_clip_prompts → enqueue_video_jobs (clips without a current
+prompt are refused). Pipeline: story → script (scenes may carry their clips)
+→ set_continuity_plan → reference images → prompts → render. If the setting
+is "calliope", the same tools generate with Calliope's LLM instead."""
 
 SELECT_PROJECT_TOOL = types.Tool(
     name="select_project",

@@ -30,6 +30,7 @@ from calliope.agent.prompts import (
     video_setting,
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
+from calliope.comfyui.profiles import H3_PROFILES
 from calliope.comfyui.roles import input_has_role
 from calliope.comfyui.smart_fill import ref_image_slots, ref_video_slots, smart_fill_inputs
 from calliope.config import settings
@@ -697,7 +698,15 @@ async def enqueue_video_jobs(
     input_values_override: dict[str, Any] | None = None,
     prompts: dict[int, str] | None = None,
     session_id: int | None = None,
+    llm: bool = True,
 ) -> list[dict[str, Any]]:
+    """Queue one video job per clip.
+
+    ``llm=False`` (MCP client content): Calliope's LLM is never called — the
+    continuity plan is the stored/deterministic one and every H3 clip must
+    carry an explicit prompt or a fresh draft (set_clip_prompts); callers
+    check that first with client_prompt_states so nothing is half-queued.
+    """
     await event_bus.publish(
         "agent.thinking", {"message": "Queuing video jobs…", "project_id": project_id}
     )
@@ -797,7 +806,7 @@ async def enqueue_video_jobs(
                             for c in clips
                         }
                     continuity_plan = await ensure_continuity_plan(
-                        project_id, live_refs=live_refs
+                        project_id, live_refs=live_refs, llm=llm
                     )
                 subjects, ref_paths, videos = resolve_h3_references(
                     inputs, extra_values, characters, loc_row, loc_image
@@ -829,6 +838,8 @@ async def enqueue_video_jobs(
                             "project_id": project_id,
                         },
                     )
+                    if not llm:
+                        raise ValueError(_client_prompt_missing(clip))
                     prompt = await _h3_rewrite(
                         scene,
                         subjects,
@@ -861,6 +872,8 @@ async def enqueue_video_jobs(
                             "project_id": project_id,
                         },
                     )
+                    if not llm:
+                        raise ValueError(_client_prompt_missing(clip))
                     prompt = await _h3_base_rewrite(scene, characters, loc_row)
                 values = smart_fill_inputs(
                     inputs, prompt=prompt, duration=duration, extra=extra_values
@@ -955,6 +968,178 @@ async def enqueue_video_jobs(
     finally:
         conn.close()
     return jobs
+
+
+# ── MCP client content: prompt briefs and drafts ─────────────────────────
+
+_H3_SECTIONS = {
+    "minimax_h3_ref": (
+        "subject_definitions:",
+        "summary:",
+        "retention_analysis:",
+        "detailed_description:",
+        "overall_soundscape:",
+        "non_diegetic_music:",
+    ),
+    "minimax_h3_base": (
+        "integrated_multimodal_description:",
+        "overall_soundscape:",
+        "non_diegetic_music:",
+    ),
+}
+
+
+def _client_prompt_missing(clip: dict[str, Any]) -> str:
+    return (
+        f"Clip {_clip_label(clip)} has no current prompt. Over MCP the client writes "
+        "H3 prompts: get_prompt_brief, then set_clip_prompts, then enqueue again."
+    )
+
+
+def validate_prompt_format(profile: str, text: str) -> str | None:
+    """Error text when a prompt does not follow its profile's format, else None."""
+    if not isinstance(text, str) or not text.strip():
+        return "prompt is empty"
+    sections = _H3_SECTIONS.get(profile)
+    if not sections:
+        return None
+    lowered = text.lower()
+    positions = [lowered.find(s) for s in sections]
+    missing = [s for s, pos in zip(sections, positions) if pos < 0]
+    if missing:
+        return f"missing section(s): {', '.join(missing)}"
+    if positions != sorted(positions):
+        return f"sections out of order — expected {' → '.join(sections)}"
+    return None
+
+
+async def client_prompt_states(
+    project_id: int,
+    clip_ids: list[int],
+    *,
+    workflow_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Per clip: profile, the H3 rewrite brief, and whether a fresh draft exists.
+
+    Mirrors enqueue_video_jobs' per-clip computation with ``llm=False`` (same
+    references, same continuity ledger, same draft hash), so a draft saved
+    with the ``based_on`` computed here is exactly what enqueue accepts.
+    """
+    plan = await ensure_continuity_plan(project_id, llm=False)
+    ledger = str(plan.get("based_on") or "")
+    conn = get_db(settings.db_path)
+    try:
+        clips = _fetch_clips(conn, project_id, clip_ids=clip_ids)
+        states: list[dict[str, Any]] = []
+        for clip in clips:
+            workflow = _get_workflow(workflow_id or clip.get("workflow_id"))
+            inputs = parse_dynamic_inputs(_workflow_json(workflow)) if workflow else []
+            profile = (workflow or {}).get("prompt_profile") or "prose"
+            characters = [
+                row_to_dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT c.* FROM characters c
+                    JOIN scene_characters sc ON sc.character_id = c.id
+                    WHERE sc.scene_id = ?
+                    """,
+                    (clip["scene_id"],),
+                ).fetchall()
+            ]
+            loc_image = clip.get("env_image_path")
+            loc_row: dict[str, Any] | None = None
+            if clip.get("location_id"):
+                row = conn.execute(
+                    "SELECT name, description, consistency_prompt, reference_image_path "
+                    "FROM locations WHERE id = ?",
+                    (clip["location_id"],),
+                ).fetchone()
+                if row:
+                    loc_row = row_to_dict(row)
+                    if not loc_image:
+                        loc_image = loc_row["reference_image_path"]
+            scene = _scene_fields_from_clip(clip, characters)
+            hash_input = {**clip, "character_ids": [c["id"] for c in characters]}
+            state: dict[str, Any] = {
+                "clip_id": int(clip["id"]),
+                "label": _clip_label(clip),
+                "profile": profile,
+                "workflow": (workflow or {}).get("name"),
+            }
+            if profile == "minimax_h3_ref":
+                subjects, ref_paths, videos = resolve_h3_references(
+                    inputs, _stored_input_values(clip), characters, loc_row, loc_image
+                )
+                ref_sig = _reference_signature(ref_paths, [v["path"] for v in videos])
+                state["based_on"] = _clip_prompt_hash(hash_input, references=ref_sig, ledger=ledger)
+                messages = build_minimax_h3_ref_messages(
+                    scene,
+                    subjects,
+                    videos=videos,
+                    continuity=continuity_lock_text(plan, int(clip["id"])),
+                    setting=video_setting(loc_row),
+                    extra_cast=_text_only_cast(characters, subjects),
+                )
+                state["system"], state["user"] = messages[0]["content"], messages[1]["content"]
+                state["reference_files"] = ref_paths + [v["path"] for v in videos]
+            elif profile == "minimax_h3_base":
+                state["based_on"] = _clip_prompt_hash(hash_input)
+                cast = [{"name": c.get("name"), "appearance": video_appearance(c)} for c in characters]
+                messages = build_minimax_h3_base_messages(scene, cast, setting=video_setting(loc_row))
+                state["system"], state["user"] = messages[0]["content"], messages[1]["content"]
+            else:
+                # Prose workflows use Calliope's deterministic template — no LLM.
+                state["based_on"] = _clip_prompt_hash(hash_input)
+                state["prompt"] = scene_video_prompt(scene, characters, loc_row)
+            state["needs_prompt"] = profile in H3_PROFILES
+            draft = _stored_prompt_draft(clip)
+            meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
+            state["draft_fresh"] = bool(draft) and meta.get("based_on") == state["based_on"]
+            states.append(state)
+        return states
+    finally:
+        conn.close()
+
+
+async def save_client_prompts(
+    project_id: int,
+    prompts: dict[int, str],
+    *,
+    workflow_id: int | None = None,
+) -> dict[str, Any]:
+    """Save MCP-client prompts as the clips' drafts (what "Review prompt" shows)."""
+    states = {
+        s["clip_id"]: s
+        for s in await client_prompt_states(project_id, list(prompts), workflow_id=workflow_id)
+    }
+    saved: list[str] = []
+    errors: dict[str, str] = {}
+    conn = get_db(settings.db_path)
+    try:
+        for clip_id, text in prompts.items():
+            state = states.get(int(clip_id))
+            if state is None:
+                errors[str(clip_id)] = "no such clip in this project"
+                continue
+            problem = validate_prompt_format(state["profile"], text)
+            if problem:
+                errors[state["label"]] = f"{state['profile']}: {problem}"
+                continue
+            row = conn.execute(
+                "SELECT video_settings_json FROM clips WHERE id = ?", (int(clip_id),)
+            ).fetchone()
+            data = _clip_video_settings(dict(row)) if row else {}
+            data["prompt_draft"] = text.strip()
+            data["prompt_draft_meta"] = {"based_on": state["based_on"], "source": "mcp"}
+            conn.execute(
+                "UPDATE clips SET video_settings_json = ? WHERE id = ?",
+                (json.dumps(data, ensure_ascii=False), int(clip_id)),
+            )
+            saved.append(state["label"])
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": not errors, "saved": saved, "errors": errors}
 
 
 def _clip_label(clip: dict[str, Any]) -> str:

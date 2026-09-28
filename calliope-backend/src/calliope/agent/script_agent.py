@@ -196,50 +196,110 @@ def _persist_scenes(
     return created
 
 
+def _script_board(conn, project_id: int, scene_count: int | None) -> dict[str, Any]:
+    """Project, story and the required scene count — shared by the LLM and the brief."""
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise ValueError("Project not found")
+    p = row_to_dict(project)
+
+    def rows(sql: str) -> list[dict[str, Any]]:
+        return [row_to_dict(r) for r in conn.execute(sql, (project_id,)).fetchall()]
+
+    existing_n = conn.execute(
+        "SELECT COUNT(*) AS n FROM scenes WHERE project_id = ?", (project_id,)
+    ).fetchone()["n"]
+    recommended = recommend_scene_count(p.get("target_duration"))
+    requested = scene_count if scene_count and scene_count > 0 else existing_n
+    required = max(recommended, int(requested)) if requested else recommended
+    return {
+        "p": p,
+        "beats": rows("SELECT * FROM story_beats WHERE project_id = ? ORDER BY order_index"),
+        "characters": rows("SELECT * FROM characters WHERE project_id = ?"),
+        "locations": rows("SELECT * FROM locations WHERE project_id = ?"),
+        "existing_n": existing_n,
+        "recommended": recommended,
+        "required": required,
+    }
+
+
+def script_brief(project_id: int, scene_count: int | None = None) -> dict[str, Any]:
+    """What the script model would receive — for an MCP client to write the script."""
+    from calliope.agent.prompts import DEFAULT_CLIP_DURATION_SEC
+
+    conn = get_db(settings.db_path)
+    try:
+        board = _script_board(conn, project_id, scene_count)
+    finally:
+        conn.close()
+    required = board["required"]
+    messages = build_script_chunk_messages(
+        title=board["p"]["title"],
+        idea=board["p"].get("idea"),
+        beats=board["beats"],
+        characters=board["characters"],
+        locations=board["locations"],
+        target_duration=board["p"].get("target_duration"),
+        scene_count=required,
+        chunk_start=1,
+        chunk_scenes=required,
+        previous_tail=[],
+    )
+    return {
+        "system": messages[0]["content"],
+        "user": messages[1]["content"],
+        "required_scenes": required,
+        "characters": [{"id": c["id"], "name": c["name"]} for c in board["characters"]],
+        "locations": [{"id": loc["id"], "name": loc["name"]} for loc in board["locations"]],
+        "clips": (
+            "Optional per scene: \"clips\": [{description, shot_size (wide|medium|closeUp|"
+            "insert|overShoulder), duration_sec (3-"
+            f"{DEFAULT_CLIP_DURATION_SEC}), dialog_lines_covered: [1-based line numbers of the "
+            "scene dialog], chain_from_prev}] — every dialogue line in exactly one clip. "
+            "Scenes without clips keep one default clip (break_into_shots can split them later)."
+        ),
+    }
+
+
 async def generate_script(
     project_id: int,
     *,
     replace: bool = True,
     scene_count: int | None = None,
     with_clips: bool = True,
+    content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Write the script with the LLM, or save ``content`` from an MCP client.
+
+    Client content — {"scenes": [{heading, action, dialog, location_id,
+    character_ids, clips?}]} — goes through the same persistence; it is
+    validated before anything is deleted and never calls the LLM (scenes
+    that bring their own clips are split with them, the rest keep their
+    default clip).
+    """
     await event_bus.publish(
         "agent.thinking", {"message": "Writing scene script…", "project_id": project_id}
     )
     conn = get_db(settings.db_path)
     try:
-        project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not project:
-            raise ValueError("Project not found")
-        p = row_to_dict(project)
-        beats = [
-            row_to_dict(r)
-            for r in conn.execute(
-                "SELECT * FROM story_beats WHERE project_id = ? ORDER BY order_index",
-                (project_id,),
-            ).fetchall()
-        ]
-        characters = [
-            row_to_dict(r)
-            for r in conn.execute(
-                "SELECT * FROM characters WHERE project_id = ?", (project_id,)
-            ).fetchall()
-        ]
-        locations = [
-            row_to_dict(r)
-            for r in conn.execute(
-                "SELECT * FROM locations WHERE project_id = ?", (project_id,)
-            ).fetchall()
-        ]
-
-        existing_n = conn.execute(
-            "SELECT COUNT(*) AS n FROM scenes WHERE project_id = ?",
-            (project_id,),
-        ).fetchone()["n"]
-        recommended = recommend_scene_count(p.get("target_duration"))
         # Prefer explicit request, else keep at least the board the user already built
-        requested = scene_count if scene_count and scene_count > 0 else existing_n
-        required_scenes = max(recommended, int(requested)) if requested else recommended
+        board = _script_board(conn, project_id, scene_count)
+        p, beats = board["p"], board["beats"]
+        characters, locations = board["characters"], board["locations"]
+        existing_n, recommended = board["existing_n"], board["recommended"]
+        required_scenes = board["required"]
+        client_scenes: list[dict[str, Any]] | None = None
+        if content is not None:
+            if not isinstance(content, dict):
+                raise ValueError("content must be a JSON object: {\"scenes\": [...]}")
+            client_scenes = [dict(s) for s in content.get("scenes") or [] if isinstance(s, dict)]
+            if len(client_scenes) < required_scenes:
+                raise ValueError(
+                    f"content has {len(client_scenes)} scenes but {required_scenes} are required "
+                    f"(target duration suggests {recommended}; the board had {existing_n})."
+                )
+            for index, scene in enumerate(client_scenes, start=1):
+                scene["order_index"] = index
 
         await event_bus.publish(
             "agent.thinking",
@@ -258,14 +318,23 @@ async def generate_script(
         # Small boards (one chunk) keep the exact single-call behavior.
         created: list[dict[str, Any]] = []
         first_chunk = True
-        async for scenes in _iter_scene_chunks(
-            project_id=project_id,
-            p=p,
-            beats=beats,
-            characters=characters,
-            locations=locations,
-            required_scenes=required_scenes,
-        ):
+
+        async def _client_chunks():
+            yield client_scenes
+
+        chunks = (
+            _client_chunks()
+            if client_scenes is not None
+            else _iter_scene_chunks(
+                project_id=project_id,
+                p=p,
+                beats=beats,
+                characters=characters,
+                locations=locations,
+                required_scenes=required_scenes,
+            )
+        )
+        async for scenes in chunks:
             if replace and first_chunk:
                 # Clear the old board only once the first replacement chunk is
                 # in hand — a failed first chunk leaves the old script intact.
@@ -339,7 +408,24 @@ async def generate_script(
         # expanded. The default clip from `_persist_scenes` is what gets
         # replaced here, so nothing is lost if this stage is interrupted.
         clips_summary: list[dict[str, Any]] = []
-        if with_clips and created:
+        without_clips: list[int] = []
+        if client_scenes is not None:
+            # Client content never calls the coverage LLM: split the scenes
+            # that brought their clips, report the ones that did not.
+            provided = {
+                int(row["id"]): scene.get("clips")
+                for row, scene in zip(created, client_scenes)
+                if scene.get("clips")
+            }
+            without_clips = [int(r["order_index"]) for r in created if int(r["id"]) not in provided]
+            if provided:
+                from calliope.agent.coverage_agent import expand_scene_coverage
+
+                coverage = await expand_scene_coverage(
+                    project_id, list(provided), provided=provided
+                )
+                clips_summary = coverage.get("scenes") or []
+        elif with_clips and created:
             await event_bus.publish(
                 "agent.thinking",
                 {
@@ -364,11 +450,18 @@ async def generate_script(
                 },
             )
 
-        return {
+        result = {
             "ok": True,
             "scenes": created,
             "clips": clips_summary,
             "generated": {"scenes": created},
         }
+        if without_clips:
+            result["scenes_without_clips"] = without_clips
+            result["note"] = (
+                "These scenes kept one default clip; split them with break_into_shots "
+                "(content) if they need coverage."
+            )
+        return result
     finally:
         conn.close()

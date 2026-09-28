@@ -385,6 +385,9 @@ def _persist(project_id: int, plan: dict[str, Any]) -> None:
         "requirements": plan.get("requirements") or {},
         "shots": plan.get("shots") or [],
         "based_on": plan.get("based_on") or "",
+        # "client" = written by the MCP client (set_continuity_plan); such a
+        # plan is never silently replaced by Calliope's LLM.
+        "source": plan.get("source") or "calliope",
     }
     conn = get_db(settings.db_path)
     try:
@@ -397,7 +400,7 @@ def _persist(project_id: int, plan: dict[str, Any]) -> None:
         conn.close()
 
 
-def _board_digest(board: dict[str, Any]) -> str:
+def _board_digest(board: dict[str, Any], max_chars: int = 14000) -> str:
     project = board["project"]
     lines = [
         f"Title: {project.get('title') or ''}",
@@ -435,8 +438,8 @@ def _board_digest(board: dict[str, Any]) -> str:
         lines.append(f"  shot size: {clip.get('shot_size') or ''}")
         lines.append(f"  refs: {', '.join(_clip_ref_paths(clip, None))}")
     text = "\n".join(lines)
-    if len(text) > 14000:
-        text = text[:14000] + "\n[board truncated]"
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[board truncated]"
     return text
 
 
@@ -466,18 +469,38 @@ async def ensure_continuity_plan(
     *,
     force: bool = False,
     live_refs: dict[int, list[str]] | None = None,
+    llm: bool = True,
 ) -> dict[str, Any]:
     """Return the project's plan, rewriting it when the board hash is stale.
 
     A dead model falls back to a deterministic plan. The call never raises for
     model failures.
+
+    A plan the MCP client wrote (source "client") is kept when the board
+    moves on — every render changes a clip's footage and so the basis — and
+    is re-fitted to the current clips instead of being rewritten. With
+    ``llm=False`` (MCP client content) the model is never called: the stored
+    plan is re-fitted, or a deterministic board plan is used (not persisted).
+    Either way ``based_on`` stays the stored value, so prompt drafts written
+    against this plan stay fresh.
     """
     board = load_board(project_id)
     basis = basis_hash(board, live_refs)
     stored = _parse_stored(board["project"].get("continuity_json"))
+    if stored and not force and (stored.get("source") == "client" or not llm):
+        plan = normalize_plan(stored, board)
+        plan["based_on"] = stored.get("based_on") or ""
+        plan["source"] = stored.get("source") or "calliope"
+        plan["refreshed"] = False
+        return plan
     if stored and not force and stored.get("based_on") == basis:
         stored["refreshed"] = False
         return stored
+    if not llm:
+        plan = deterministic_plan(board)
+        plan["based_on"] = ""
+        plan["refreshed"] = False
+        return plan
     try:
         plan = normalize_plan(await _llm_plan(board), board)
     except Exception as exc:
@@ -487,6 +510,38 @@ async def ensure_continuity_plan(
     _persist(project_id, plan)
     plan["refreshed"] = True
     return plan
+
+
+def continuity_brief(project_id: int) -> dict[str, Any]:
+    """What Calliope's plan model would receive — for an MCP client to write the plan."""
+    board = load_board(project_id)
+    return {
+        "system": _PLAN_SYSTEM,
+        "user": "Write the continuity ledger for this board.\n\n"
+        + _board_digest(board, max_chars=120_000),
+        "clip_ids": [int(c["id"]) for c in board["clips"]],
+    }
+
+
+def set_continuity_plan(project_id: int, raw: dict[str, Any]) -> dict[str, Any]:
+    """Save a plan written by the MCP client (normalized onto the board's clips)."""
+    if not isinstance(raw, dict):
+        raise ValueError("plan must be a JSON object with overview, requirements and shots")
+    board = load_board(project_id)
+    if not board["clips"]:
+        raise ValueError("This project has no clips yet — write the script and shots first")
+    plan = normalize_plan(raw, board)
+    given = {_as_int(s.get("clip_id")) for s in raw.get("shots") or [] if isinstance(s, dict)}
+    board_ids = [int(c["id"]) for c in board["clips"]]
+    plan["based_on"] = basis_hash(board)
+    plan["source"] = "client"
+    _persist(project_id, plan)
+    return {
+        "based_on": plan["based_on"],
+        "shots": len(plan["shots"]),
+        "missing_clip_ids": [cid for cid in board_ids if cid not in given],
+        "unknown_clip_ids": sorted(c for c in given if c is not None and c not in board_ids),
+    }
 
 
 def continuity_lock_text(plan: dict[str, Any] | None, clip_id: int) -> str:

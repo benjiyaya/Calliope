@@ -74,11 +74,23 @@ def register(registry: ToolRegistry) -> None:
                 "agent, then break every scene into shot clips (with_clips, "
                 "default true). DESTRUCTIVE: replace=true (default) DELETES all "
                 "existing scenes first. If the user only wants tweaks, use "
-                "update_scene / add_scene instead."
+                "update_scene / add_scene instead. With `content` the script is "
+                "saved as given instead of being written by Calliope's LLM; over "
+                "MCP (client content mode) a call without `content` returns the "
+                "brief to write it from."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "content": {
+                        "type": "object",
+                        "description": (
+                            "The script to save instead of generating it: {scenes: [{heading, "
+                            "action, dialog ('SPEAKER (cue): line' per line), location_id, "
+                            "character_ids, clips?}]} — at least the brief's required_scenes, "
+                            "in playback order. clips per scene follow the brief's clip format."
+                        ),
+                    },
                     "scene_count": {"type": "integer", "minimum": 1},
                     "with_clips": {
                         "type": "boolean",
@@ -195,6 +207,15 @@ def register(registry: ToolRegistry) -> None:
                         "type": "string",
                         "description": "Optional style/direction hints for the split",
                     },
+                    "content": {
+                        "type": "object",
+                        "description": (
+                            "Clips to save instead of the coverage LLM: {scenes: [{scene_id "
+                            "or order, clips: [{description, shot_size, duration_sec, "
+                            "dialog_lines_covered, chain_from_prev}]}]}. Over MCP (client "
+                            "content mode) a call without it returns one brief per scene."
+                        ),
+                    },
                 },
             },
             executor=t_break_into_shots,
@@ -224,6 +245,35 @@ def register(registry: ToolRegistry) -> None:
             },
             executor=t_refresh_continuity_plan,
             category="script",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="set_continuity_plan",
+            description=(
+                "Save the project's continuity plan written by the MCP client (the "
+                "timed ledger H3 prompts must follow: film overview, nine locked "
+                "requirements, one shot row per clip). Without `plan` it returns the "
+                "brief: the plan format and the whole board (clips in playback order, "
+                "dialogue, references). A client plan is never replaced by Calliope's "
+                "LLM; prompts written before it become stale."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "object",
+                        "description": (
+                            "{overview: {style, pace, soundscape, camera_grammar, lighting}, "
+                            "requirements: {style, subjects, actions, dialogue, sound, camera, "
+                            "lighting, spatial, scene}, shots: [{clip_id, window, action, "
+                            "speakers, camera, lighting, spatial, state_after}]}"
+                        ),
+                    }
+                },
+            },
+            executor=t_set_continuity_plan,
+            category="mcp_content",
         )
     )
     registry.register(
@@ -431,13 +481,27 @@ def register(registry: ToolRegistry) -> None:
 async def t_generate_script(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     from calliope.agent.script_agent import generate_script as _gen
 
+    from calliope.agent.content_source import brief_result, client_supplies_content
+    from calliope.agent.script_agent import script_brief
+
     scene_count = args.get("scene_count")
-    return await _gen(
-        ctx.project_id,
-        replace=bool(args.get("replace", True)),
-        scene_count=int(scene_count) if scene_count else None,
-        with_clips=bool(args.get("with_clips", True)),
-    )
+    content = args.get("content")
+    if content is None and client_supplies_content(ctx):
+        return brief_result(
+            "generate_script",
+            script_brief(ctx.project_id, int(scene_count) if scene_count else None),
+            content_hint="content={scenes: [...]}",
+        )
+    try:
+        return await _gen(
+            ctx.project_id,
+            replace=bool(args.get("replace", True)),
+            scene_count=int(scene_count) if scene_count else None,
+            with_clips=bool(args.get("with_clips", True)),
+            content=content,
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 async def t_list_scenes(ctx: ToolContext, args: dict[str, Any]) -> list[dict[str, Any]]:
@@ -767,14 +831,37 @@ async def t_list_clips(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
 
 
 async def t_break_into_shots(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    from calliope.agent.coverage_agent import expand_scene_coverage
+    from calliope.agent.coverage_agent import coverage_briefs, expand_scene_coverage
     from calliope.agent.harness import log as session_log
     from calliope.agent.harness.policy import allows_bulk_video_enqueue
+
+    from calliope.agent.content_source import brief_result, client_supplies_content
 
     scene_ids = [int(i) for i in (args.get("scene_ids") or [])]
     orders = [int(i) for i in (args.get("orders") or [])]
     all_scenes = bool(args.get("all_scenes"))
     guidance = str(args.get("guidance") or "").strip() or None
+    content = args.get("content")
+    provided: dict[int, list[dict[str, Any]]] | None = None
+    if content is not None:
+        # Client clips name their scenes; the scope comes from the content.
+        if not isinstance(content, dict) or not isinstance(content.get("scenes"), list):
+            return {"ok": False, "error": "content must be {\"scenes\": [{scene_id or order, clips}]}"}
+        provided = {}
+        conn = _db()
+        try:
+            for entry in content["scenes"]:
+                if not isinstance(entry, dict):
+                    continue
+                found, err = resolve_scene_ref(
+                    conn, ctx.project_id, scene_id=entry.get("scene_id"), order=entry.get("order")
+                )
+                if err:
+                    return {"ok": False, "error": err}
+                provided[int(found)] = entry.get("clips") or []
+        finally:
+            conn.close()
+        scene_ids, orders, all_scenes = list(provided), [], False
 
     if not scene_ids and not orders and not all_scenes:
         return {
@@ -813,6 +900,13 @@ async def t_break_into_shots(ctx: ToolContext, args: dict[str, Any]) -> dict[str
     if not resolved:
         return {"ok": False, "error": "No matching scenes to expand"}
 
+    if provided is None and client_supplies_content(ctx):
+        return brief_result(
+            "break_into_shots",
+            {"scenes": coverage_briefs(ctx.project_id, resolved, guidance=guidance)},
+            content_hint="content={scenes: [{scene_id, clips: [...]}]}",
+        )
+
     latest = session_log.latest_user_message(ctx.session_id) or ""
     # MCP: the client's permission prompt shows the call's arguments.
     if len(resolved) > 3 and ctx.origin != "mcp" and not allows_bulk_video_enqueue(latest, len(resolved)):
@@ -826,7 +920,7 @@ async def t_break_into_shots(ctx: ToolContext, args: dict[str, Any]) -> dict[str
 
     try:
         result = await expand_scene_coverage(
-            ctx.project_id, resolved, guidance=guidance
+            ctx.project_id, resolved, guidance=guidance, provided=provided
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
@@ -841,10 +935,17 @@ async def t_break_into_shots(ctx: ToolContext, args: dict[str, Any]) -> dict[str
 
 async def t_refresh_continuity_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     """Rewrite the project continuity ledger from the current board."""
-    from calliope.agent.continuity import ensure_continuity_plan
+    from calliope.agent.content_source import brief_result, client_supplies_content
+    from calliope.agent.continuity import continuity_brief, ensure_continuity_plan
 
     if not ctx.project_id:
         return {"ok": False, "error": "Link a project before refreshing the continuity plan"}
+    if client_supplies_content(ctx):
+        return brief_result(
+            "set_continuity_plan",
+            continuity_brief(int(ctx.project_id)),
+            content_hint="plan={overview, requirements, shots}",
+        )
     force = bool(args.get("force", True))
     plan = await ensure_continuity_plan(int(ctx.project_id), force=force)
     return {
@@ -852,6 +953,30 @@ async def t_refresh_continuity_plan(ctx: ToolContext, args: dict[str, Any]) -> d
         "based_on": plan.get("based_on") or "",
         "shots": len(plan.get("shots") or []),
         "refreshed": bool(plan.get("refreshed")),
+    }
+
+
+async def t_set_continuity_plan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    """Save a continuity plan written by the MCP client (brief when none given)."""
+    from calliope.agent.content_source import brief_result
+    from calliope.agent.continuity import continuity_brief, set_continuity_plan
+
+    plan = args.get("plan")
+    if plan is None:
+        return brief_result(
+            "set_continuity_plan",
+            continuity_brief(int(ctx.project_id)),
+            content_hint="plan={overview, requirements, shots}",
+        )
+    try:
+        saved = set_continuity_plan(int(ctx.project_id), plan)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {
+        "ok": True,
+        **saved,
+        "note": "Prompts written before this plan are now stale — refresh them with "
+        "get_prompt_brief / set_clip_prompts.",
     }
 
 

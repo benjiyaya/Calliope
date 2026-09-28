@@ -55,6 +55,7 @@
 		agent_hardening_prompt: 'agent',
 		agent_llm_assignments: 'agent',
 		agent_history_char_budget: 'agent',
+		mcp_content_source: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
 		agent_workspace_dir: 'storage',
@@ -608,6 +609,22 @@
 							<p class="field-hint">{t(role.hintKey)}</p>
 						</label>
 					{/each}
+				</section>
+				<section class="panel">
+					<h1>{t('settings.mcpContentSection')}</h1>
+					<p class="lead">{t('settings.mcpContentLead')}</p>
+					<label class="field">
+						<span class="field-label">{t('settings.mcpContentField')}</span>
+						<select
+							class="field-input"
+							value={String(fieldValue('mcp_content_source', s.mcp_content_source ?? 'client'))}
+							onchange={(e) => (draft.mcp_content_source = e.currentTarget.value)}
+						>
+							<option value="client">{t('settings.mcpContentClient')}</option>
+							<option value="calliope">{t('settings.mcpContentCalliope')}</option>
+						</select>
+						<p class="field-hint">{t('settings.mcpContentHint')}</p>
+					</label>
 				</section>
 				<section class="panel">
 					<h1>{t('settings.hardeningSection')}</h1>

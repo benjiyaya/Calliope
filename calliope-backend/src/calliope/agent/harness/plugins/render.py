@@ -123,6 +123,61 @@ def register(registry: ToolRegistry) -> None:
             requires_approval=True,
         )
     )
+    _targets = {
+        "clip_ids": {"type": "array", "items": {"type": "integer"}},
+        "refs": {"type": "array", "items": {"type": "string"}, "description": "Clip labels like '#3.2'"},
+        "orders": {"type": "array", "items": {"type": "integer"}, "description": "Scene order numbers"},
+        "scene_ids": {"type": "array", "items": {"type": "integer"}},
+        "all_clips": {"type": "boolean"},
+        "workflow_id": {"type": "integer", "description": "Workflow the render will use (default: the clip's)"},
+    }
+    registry.register(
+        ToolDefinition(
+            name="get_prompt_brief",
+            description=(
+                "For MCP clients that write the video prompts themselves: per clip, the "
+                "exact brief Calliope's H3 rewrite would receive (format rules, wired "
+                "reference images/videos as <Subject N>/<Video N>, the scene's setting, "
+                "cast, dialogue and continuity slice) and whether a current draft exists. "
+                "Same clip selection as enqueue_video_jobs. Write the prompts, then "
+                "set_clip_prompts."
+            ),
+            parameters={"type": "object", "properties": _targets},
+            executor=t_get_prompt_brief,
+            category="mcp_content",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="set_clip_prompts",
+            description=(
+                "Save video prompts written by the MCP client as the clips' drafts (shown "
+                "in Review prompt; used by enqueue_video_jobs). Each prompt is checked "
+                "against its workflow's format: six H3 sections for reference-to-video, "
+                "three fields for H3 base. Invalid prompts are reported, valid ones saved."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prompts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "clip_id": {"type": "integer"},
+                                "prompt": {"type": "string"},
+                            },
+                            "required": ["clip_id", "prompt"],
+                        },
+                    },
+                    "workflow_id": _targets["workflow_id"],
+                },
+                "required": ["prompts"],
+            },
+            executor=t_set_clip_prompts,
+            category="mcp_content",
+        )
+    )
     registry.register(
         ToolDefinition(
             name="run_workflow",
@@ -469,21 +524,23 @@ def _int_list(raw: Any) -> list[int]:
     return out
 
 
-async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    from calliope.agent.harness import log as session_log
+def _resolve_video_targets(
+    ctx: ToolContext, args: dict[str, Any], *, verb: str = "enqueue"
+) -> tuple[list[int], dict[str, Any] | None]:
+    """Clip ids named by clip_ids / refs / orders / scene_ids / all_clips.
+
+    Shared by enqueue_video_jobs and get_prompt_brief. Returns (ids, error).
+    """
     from calliope.agent.harness.plugins.script import (
         _resolve_clip_ref,
         resolve_scene_ref,
     )
-    from calliope.agent.harness.policy import allows_bulk_video_enqueue
-    from calliope.agent.video_agent import enqueue_video_jobs as _enqueue
 
     clip_ids = _int_list(args.get("clip_ids"))
     refs = [str(r) for r in (args.get("refs") or []) if str(r).strip()]
     scene_ids = _int_list(args.get("scene_ids"))
     orders = _int_list(args.get("orders"))
     all_clips = bool(args.get("all_clips") or args.get("all_scenes"))
-    latest = session_log.latest_user_message(ctx.session_id) or ""
 
     # Clip-level resolution: exact clips win over scene expansion.
     resolved_clips: list[int] = []
@@ -493,12 +550,12 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             for cid in clip_ids:
                 found, err = _resolve_clip_ref(conn, ctx.project_id, clip_id=cid)
                 if err:
-                    return {"ok": False, "error": err}
+                    return [], {"ok": False, "error": err}
                 resolved_clips.append(found)
             for ref in refs:
                 found, err = _resolve_clip_ref(conn, ctx.project_id, ref=ref)
                 if err:
-                    return {"ok": False, "error": err}
+                    return [], {"ok": False, "error": err}
                 resolved_clips.append(found)
         finally:
             conn.close()
@@ -510,12 +567,12 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             for sid in scene_ids:
                 found, err = resolve_scene_ref(conn, ctx.project_id, scene_id=sid)
                 if err:
-                    return {"ok": False, "error": err}
+                    return [], {"ok": False, "error": err}
                 resolved_scenes.append(found)
             for order in orders:
                 found, err = resolve_scene_ref(conn, ctx.project_id, order=order)
                 if err:
-                    return {"ok": False, "error": err}
+                    return [], {"ok": False, "error": err}
                 resolved_scenes.append(found)
             # Scene shorthand expands to ALL of that scene's clips (playback order).
             if resolved_scenes:
@@ -543,7 +600,7 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             finally:
                 conn.close()
         else:
-            return {
+            return [], {
                 "ok": False,
                 "error": (
                     "Say which clips: pass refs ('#3.2') or clip_ids from "
@@ -558,7 +615,21 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
     resolved_clips = [c for c in resolved_clips if not (c in seen or seen.add(c))]
 
     if not resolved_clips:
-        return {"ok": False, "error": "No matching clips to enqueue"}
+        return [], {"ok": False, "error": f"No matching clips to {verb}"}
+    return resolved_clips, None
+
+
+async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    from calliope.agent.content_source import client_supplies_content
+    from calliope.agent.harness import log as session_log
+    from calliope.agent.harness.policy import allows_bulk_video_enqueue
+    from calliope.agent.video_agent import client_prompt_states
+    from calliope.agent.video_agent import enqueue_video_jobs as _enqueue
+
+    latest = session_log.latest_user_message(ctx.session_id) or ""
+    resolved_clips, error = _resolve_video_targets(ctx, args)
+    if error:
+        return error
 
     # MCP: the client's permission prompt shows the call's arguments.
     allowed_bulk = ctx.origin == "mcp" or allows_bulk_video_enqueue(latest, len(resolved_clips))
@@ -572,16 +643,78 @@ async def t_enqueue_video_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[s
             ),
         }
 
+    client = client_supplies_content(ctx)
+    if client:
+        # Check every clip BEFORE queuing anything: enqueue supersedes old
+        # jobs and clears renders per clip, so a mid-batch refusal would
+        # leave the batch half-done.
+        states = await client_prompt_states(
+            ctx.project_id, resolved_clips, workflow_id=args.get("workflow_id")
+        )
+        missing = [s["label"] for s in states if s["needs_prompt"] and not s["draft_fresh"]]
+        if missing:
+            return {
+                "ok": False,
+                "error": (
+                    f"{len(missing)} clip(s) have no current prompt. Over MCP the client "
+                    "writes H3 prompts: get_prompt_brief for these clips, then "
+                    "set_clip_prompts, then enqueue again."
+                ),
+                "missing": missing,
+            }
     try:
         jobs = await _enqueue(
             ctx.project_id,
             clip_ids=resolved_clips,
             workflow_id=args.get("workflow_id"),
             session_id=ctx.session_id,
+            llm=not client,
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     return {"jobs": jobs, "count": len(jobs), "clip_ids": resolved_clips}
+
+
+async def t_get_prompt_brief(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    from calliope.agent.video_agent import client_prompt_states
+
+    clip_ids, error = _resolve_video_targets(ctx, args, verb="describe")
+    if error:
+        return error
+    states = await client_prompt_states(
+        ctx.project_id, clip_ids, workflow_id=args.get("workflow_id")
+    )
+    # The system prompt is the same for every clip of a profile: send it once.
+    systems: dict[str, str] = {}
+    clips = []
+    for state in states:
+        row = {k: v for k, v in state.items() if k not in ("system", "based_on")}
+        if "system" in state:
+            systems[state["profile"]] = state["system"]
+        clips.append(row)
+    return {
+        "ok": True,
+        "system": systems,
+        "clips": clips,
+        "next": (
+            "For each clip with needs_prompt, write the prompt following system[profile] "
+            "and the clip's user brief, then call set_clip_prompts. Prose clips need no prompt."
+        ),
+    }
+
+
+async def t_set_clip_prompts(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    from calliope.agent.video_agent import save_client_prompts
+
+    prompts: dict[int, str] = {}
+    for entry in args.get("prompts") or []:
+        if isinstance(entry, dict) and entry.get("clip_id") is not None:
+            prompts[int(entry["clip_id"])] = str(entry.get("prompt") or "")
+    if not prompts:
+        return {"ok": False, "error": "prompts must be [{clip_id, prompt}, ...]"}
+    return await save_client_prompts(
+        ctx.project_id, prompts, workflow_id=args.get("workflow_id")
+    )
 
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}

@@ -180,18 +180,77 @@ def _normalize_clips(
     return clips
 
 
+def coverage_briefs(
+    project_id: int,
+    scene_ids: list[int],
+    *,
+    guidance: str | None = None,
+    clip_cap: int | None = None,
+) -> list[dict[str, Any]]:
+    """What the coverage model would receive per scene — for an MCP client."""
+    cap = clip_cap or DEFAULT_CLIP_DURATION_SEC
+    conn = get_db(settings.db_path)
+    try:
+        all_scenes = [
+            row_to_dict(r)
+            for r in conn.execute(
+                "SELECT * FROM scenes WHERE project_id = ? ORDER BY order_index", (project_id,)
+            ).fetchall()
+        ]
+        characters = [
+            row_to_dict(r)
+            for r in conn.execute(
+                "SELECT id, name, appearance FROM characters WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    wanted = set(scene_ids)
+    briefs: list[dict[str, Any]] = []
+    for scene in all_scenes:
+        if scene["id"] not in wanted:
+            continue
+        messages = _coverage_messages(
+            scene=scene,
+            characters=characters,
+            previous_heading=next(
+                (s["heading"] for s in all_scenes if s["order_index"] < scene["order_index"]), None
+            ),
+            next_heading=next(
+                (s["heading"] for s in all_scenes if s["order_index"] > scene["order_index"]), None
+            ),
+            clip_cap=cap,
+        )
+        if guidance:
+            messages[1]["content"] += f"\n\nExtra direction from the user: {guidance}"
+        briefs.append(
+            {
+                "scene_id": scene["id"],
+                "order": scene["order_index"],
+                "system": messages[0]["content"],
+                "user": messages[1]["content"],
+            }
+        )
+    return briefs
+
+
 async def expand_scene_coverage(
     project_id: int,
     scene_ids: list[int] | None = None,
     *,
     guidance: str | None = None,
     clip_cap: int | None = None,
+    provided: dict[int, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Break scenes into shot clips, replacing each scene's existing clips.
 
     Expands ALL of the project's scenes when scene_ids is None. Each expanded
     scene's old clips are deleted inside the same transaction that inserts the
     new ones (its chain_from_prev migrates onto clip #1). Returns a summary.
+
+    ``provided`` maps scene id → clip list written by an MCP client: those
+    scenes skip the LLM and go through the same validation (_normalize_clips)
+    and replace transaction.
     """
     cap = clip_cap or DEFAULT_CLIP_DURATION_SEC
     conn = get_db(settings.db_path)
@@ -234,18 +293,23 @@ async def expand_scene_coverage(
                     "project_id": project_id,
                 },
             )
-            messages = _coverage_messages(
-                scene=scene,
-                characters=characters,
-                previous_heading=prev_heading,
-                next_heading=next_heading,
-                clip_cap=cap,
-            )
-            if guidance:
-                messages[1]["content"] += f"\n\nExtra direction from the user: {guidance}"
-            result = await generate_structured(messages, temperature=0.5)
-            raw_clips = result.get("clips") or []
-            if not raw_clips:
+            if provided is not None:
+                raw_clips = [c for c in provided.get(scene["id"]) or [] if isinstance(c, dict)]
+                if not raw_clips:
+                    raise ValueError(f"Scene {scene['order_index']}: no clips supplied")
+            else:
+                messages = _coverage_messages(
+                    scene=scene,
+                    characters=characters,
+                    previous_heading=prev_heading,
+                    next_heading=next_heading,
+                    clip_cap=cap,
+                )
+                if guidance:
+                    messages[1]["content"] += f"\n\nExtra direction from the user: {guidance}"
+                result = await generate_structured(messages, temperature=0.5)
+                raw_clips = result.get("clips") or []
+            if not raw_clips and provided is None:
                 retry = [
                     messages[0],
                     {

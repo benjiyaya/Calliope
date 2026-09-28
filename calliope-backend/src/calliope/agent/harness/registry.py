@@ -42,6 +42,9 @@ _SCENE_ALLOWED_TOOLS = {
     "forget_memory",
 }
 
+# Tools only MCP clients see (they supply content instead of Calliope's LLM).
+MCP_CONTENT_CATEGORY = "mcp_content"
+
 # Invented agent tool — there is no export_video; Cut + UI Export video instead.
 GUARD_NO_EXPORT_VIDEO_TOOL = "guard_no_export_video_tool"
 EXPORT_VIDEO_DENIED_NAMES = frozenset({"export_video", "exportVideo"})
@@ -185,6 +188,10 @@ class ToolRegistry:
         # calls at worst.
         if t.category == "shot" and ctx.origin != "scene":
             return False
+        # Client-content tools (write prompts / continuity plan by hand) exist
+        # only for MCP clients; the in-app agent generates with Calliope's LLM.
+        if t.category == MCP_CONTENT_CATEGORY and ctx.origin != "mcp":
+            return False
         # Build Scene surface: shot tools + minimal base ONLY. A missing tool
         # is harder to misuse than one that fails at execute time.
         if ctx.origin == "scene" and not _scene_scoped(t):
@@ -253,6 +260,8 @@ class ToolRegistry:
                     "Call unlink_project first to return this session to sandbox."
                 ),
             }
+        if t.category == MCP_CONTENT_CATEGORY and ctx.origin != "mcp":
+            return {"ok": False, "error": f"{name} is only available to MCP clients"}
         if ctx.origin == "scene" and not _scene_scoped(t):
             extra = ""
             if name in {"enqueue_video_jobs", "enqueue_asset_jobs", "run_workflow"} or name.startswith(

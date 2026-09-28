@@ -22,7 +22,10 @@ def register(registry: ToolRegistry) -> None:
                 "locations. DESTRUCTIVE: replace=true (default) DELETES existing "
                 "beats, characters AND locations first. If the project already "
                 "has a story and the user only wants changes, prefer "
-                "replace=false or confirm before replacing."
+                "replace=false or confirm before replacing. With `content` the "
+                "story is saved as given instead of being drafted by Calliope's LLM; "
+                "over MCP (client content mode) a call without `content` returns "
+                "the brief to write it from."
             ),
             parameters={
                 "type": "object",
@@ -30,7 +33,17 @@ def register(registry: ToolRegistry) -> None:
                     "replace": {
                         "type": "boolean",
                         "description": "Replace existing beats/characters/locations (default true = destructive)",
-                    }
+                    },
+                    "content": {
+                        "type": "object",
+                        "description": (
+                            "The story to save instead of generating it: {title, logline, "
+                            "characters: [{name, role, age, appearance, personality}], "
+                            "locations: [{name, description}], items: [{name, description}], "
+                            "beats: [{title, description}]} — at least the brief's "
+                            "required_beats beats, in order."
+                        ),
+                    },
                 },
             },
             executor=t_generate_story,
@@ -424,8 +437,18 @@ def _register_asset_crud(registry: ToolRegistry) -> None:
 async def t_generate_story(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     from calliope.routers.story import generate_story as _generate_story
 
+    from calliope.agent.content_source import brief_result, client_supplies_content
+    from calliope.routers.story import story_brief
+
     replace = args.get("replace", True)
-    return await _generate_story(ctx.project_id, replace=bool(replace))
+    content = args.get("content")
+    if content is None and client_supplies_content(ctx):
+        return brief_result(
+            "generate_story",
+            story_brief(ctx.project_id),
+            content_hint="content={title, logline, characters, locations, items, beats}",
+        )
+    return await _generate_story(ctx.project_id, replace=bool(replace), content=content)
 
 
 async def t_get_story(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:

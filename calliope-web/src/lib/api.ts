@@ -103,6 +103,8 @@ export interface Settings {
 	agent_max_steps: number;
 	agent_hardening_prompt: string;
 	agent_history_char_budget: number;
+	/** Who writes content for MCP calls: the MCP client or Calliope's LLM. */
+	mcp_content_source?: 'client' | 'calliope';
 	agent_llm_assignments: Record<string, string | null>;
 	agent_shell_enabled: boolean;
 	dry_run: boolean;

@@ -148,6 +148,11 @@ class Settings(BaseSettings):
     # by default — never sent unless set, since strict servers reject unknown
     # fields.
     h3_rewrite_extra_body: dict[str, Any] = Field(default_factory=dict)
+    # Who writes story / script / shots / H3 prompts / continuity for calls
+    # that arrive over MCP (calliope.mcp_server): "client" = the MCP client
+    # (e.g. Claude Code) supplies the content and Calliope's LLM is never
+    # called; "calliope" = Calliope's own LLM, as for the in-app agent.
+    mcp_content_source: str = "client"
     dry_run: bool = False  # off by default — real ComfyUI jobs
 
     @property
@@ -348,6 +353,7 @@ class Settings(BaseSettings):
             "agent_history_char_budget": self.agent_history_char_budget,
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
+            "mcp_content_source": self.mcp_content_source,
             "dry_run": bool(self.dry_run),
         }
 
@@ -443,6 +449,7 @@ class Settings(BaseSettings):
             "agent_history_char_budget": self.agent_history_char_budget,
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
+            "mcp_content_source": self.mcp_content_source,
             "dry_run": bool(self.dry_run),
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
