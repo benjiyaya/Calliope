@@ -440,6 +440,19 @@ def _board_digest(board: dict[str, Any]) -> str:
     return text
 
 
+def _h3_extra_body() -> dict[str, Any] | None:
+    """The H3 rewrite's per-call request extras, reused by the continuity plan.
+
+    The plan runs in the H3 compile path on the same model as the rewrite. On a
+    thinking model without these extras it reasons at length for a JSON answer
+    (qwen3.8-27b via oMLX: 6,415 tokens / 216 s; with them 1,936 tokens / 65 s and
+    still a well-formed plan). The critic deliberately keeps the model's default:
+    with thinking off it answered in seconds, but two of its three notes
+    contradicted the prompt it judged.
+    """
+    return settings.h3_rewrite_extra_body or None
+
+
 async def _llm_plan(board: dict[str, Any]) -> dict[str, Any]:
     client = LLMClient.for_role("video", timeout=PLAN_TIMEOUT_SEC)
     try:
@@ -452,6 +465,7 @@ async def _llm_plan(board: dict[str, Any]) -> dict[str, Any]:
                 },
             ],
             temperature=0.2,
+            extra_body=_h3_extra_body(),
         )
         data = extract_json(raw)
     finally:
