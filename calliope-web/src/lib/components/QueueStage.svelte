@@ -17,6 +17,7 @@
 	import { compactInputValues } from '$lib/comfy/promptInput';
 	import { createUploadManager } from '$lib/comfy/useUpload.svelte';
 	import { normalizeInputRole } from '$lib/comfy/parser';
+	import { carryValuesAcrossWorkflows, sanitizeWorkflowValues } from '$lib/comfy/carryValues';
 	import type { ComfyDynamicInput } from '$lib/comfy/types';
 	import type { AssetOption } from '$lib/assetPicker';
 	import { shotApi } from '$lib/shot/api';
@@ -245,19 +246,22 @@
 				}
 			}
 			const stored = formCache.get(id);
+			// Saved setups can carry another workflow's values (pre-fix workflow switches), so
+			// drop the impossible ones and let this workflow's defaults apply again.
+			const schema = workflowForClip(entry.clip, entry.scene)?.input_schema;
 			if (stored) {
-				formValues = { ...stored };
+				formValues = sanitizeWorkflowValues({ ...stored }, schema);
 			} else if (entry.clip.video_settings?.input_values) {
 				// First open of a persisted clip setup: hydrate from the clip row.
 				formValues = {
 					...seedClipDefaults(entry),
-					...entry.clip.video_settings.input_values,
+					...sanitizeWorkflowValues(entry.clip.video_settings.input_values, schema),
 				};
 			} else if (entry.scene.video_settings?.input_values) {
 				// Legacy un-expanded clip: scene row carries the setup.
 				formValues = {
 					...seedClipDefaults(entry),
-					...entry.scene.video_settings.input_values,
+					...sanitizeWorkflowValues(entry.scene.video_settings.input_values, schema),
 				};
 			} else {
 				formValues = { ...seedClipDefaults(entry) };
@@ -960,7 +964,16 @@ const generateOne = createMutation({
 			onStep={step}
 		onWorkflowChange={(id) => {
 			if (!selClip) return;
+			const from = workflowForClip(selClip, selected);
 			selectedWorkflow = { ...selectedWorkflow, [selClip.id]: Number(id) };
+			const to = workflowForClip(selClip, selected);
+			if (from?.id === to?.id) return;
+			// nodeIds mean different things in different workflows: keep only values whose
+			// node has the same role and kind in both; the new workflow's defaults fill the rest.
+			formValues = {
+				...(selectedEntry ? seedClipDefaults(selectedEntry) : {}),
+				...carryValuesAcrossWorkflows(formValues, from?.input_schema, to?.input_schema),
+			};
 		}}
 		onGenerate={() => {
 			if (selClip) $generateOne.mutate({ clipId: selClip.id, sceneId: selected.id });
