@@ -11,7 +11,9 @@ Calliope is a local-first story-to-video studio. You type a story idea; Calliope
 
 <img width="1976" height="1154" alt="Screenshot 2026-09-13 025721" src="https://github.com/user-attachments/assets/b58fcecf-b6be-41ac-91d8-9f0df2fd8f21" />
 
-Demos: 
+
+## Demo
+
 From Script to Video Locally Using Calliope 1.5 https://youtu.be/JcGqt3DYn6c
 
 ## Install — from source (npm + Python)
