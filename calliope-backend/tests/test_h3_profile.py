@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from calliope.agent.prompts import minimax_h3_ref_fallback
+from calliope.agent.prompts import MINIMAX_H3_REF_SYSTEM, minimax_h3_ref_fallback
 from calliope.comfyui.parser import parse_dynamic_inputs, parse_dynamic_outputs
 from calliope.comfyui.profiles import detect_prompt_profile
 from calliope.comfyui.smart_fill import ref_image_slots, smart_fill_inputs
@@ -124,7 +124,8 @@ def test_h3_fallback_includes_user_image_and_video():
     text = minimax_h3_ref_fallback(scene, subjects, videos)
     assert '<Subject 1> is the reference image in <Picture 1> ("mercs")' in text
     assert "<Video 1>" in text
-    assert "motion_preserved" in text
+    assert "attribute_transfer" in text
+    assert "motion_preserved" not in text
     assert "Motion and camera follow <Video 1>." in text
     assert "Rooftops" not in text
 
@@ -273,3 +274,18 @@ def test_h3_fallback_dialog_delivery_cue():
     text = minimax_h3_ref_fallback(scene, subjects)
     # Cue kept as delivery direction; speaker still matched to the subject
     assert "<Subject 1> (S1) says whispering, <d>[English] Did you hear that?</d>" in text
+
+
+def test_h3_ref_prompt_uses_only_the_fixed_retention_markers():
+    """H3 reads four fixed visual retention markers; an invented one is not one of them.
+
+    The list is the one in skills_builtin/h3-video-prompt-enhancer/references/
+    ref2va-format.md ("using ONLY these fixed markers"), which covers <Video N> too.
+    """
+    markers = ("fully_preserved", "partially_preserved", "attribute_transfer", "weak_reference")
+    for marker in markers:
+        assert marker in MINIMAX_H3_REF_SYSTEM
+    assert "motion_preserved" not in MINIMAX_H3_REF_SYSTEM
+    videos = [{"index": 1, "path": "fight.mp4", "name": "fight.mp4"}]
+    text = minimax_h3_ref_fallback({"heading": "INT. HALL", "action": "He runs."}, [], videos)
+    assert "<Video 1> (camera movement and action timing): attribute_transfer - " in text
