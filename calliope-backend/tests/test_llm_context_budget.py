@@ -7,8 +7,15 @@ window — a guaranteed overflow that no amount of downstream trimming fixes.
 """
 from __future__ import annotations
 
+import pytest
+
 import calliope.config as config_module
-from calliope.agent.llm import estimate_prompt_tokens, resolve_max_tokens
+from calliope.agent.llm import (
+    ContextWindowTooSmall,
+    _payload_messages_for_estimate,
+    estimate_prompt_tokens,
+    resolve_max_tokens,
+)
 from calliope.config import settings
 
 
@@ -16,7 +23,7 @@ def _use_profile(**overrides):
     """Point the active profile at a known model/window, restoring on teardown."""
     settings.agent_history_char_budget = overrides.pop("char_budget", 0)
     settings.llm_context_tokens = overrides.pop("global_ctx", 0)
-    settings.llm_context_fallback_tokens = overrides.pop("fallback_ctx", 8192)
+    settings.llm_context_fallback_tokens = overrides.pop("fallback_ctx", 32768)
     settings.agent_history_token_share = overrides.pop("share", 0.5)
     settings.llm_chars_per_token = overrides.pop("chars_per_token", 1.6)
     settings.llm_max_output_tokens = overrides.pop("max_output", 4096)
@@ -105,12 +112,68 @@ def test_reply_ceiling_defaults_instead_of_leaving_it_to_the_server(monkeypatch)
         _restore()
 
 
-def test_reply_ceiling_is_clamped_when_the_prompt_fills_the_window(monkeypatch):
+def test_reply_ceiling_is_clamped_when_the_prompt_leaves_little_room(monkeypatch):
+    """Prompt fits, but not with the full ceiling → clamp down, not to zero."""
+    _use_profile(profiles=[{"id": "p", "model": "m", "context_tokens": 32768}], max_output=4096)
+    try:
+        # ~30k tokens of prompt against a 32768 window: room remains, so this
+        # is a clamp rather than the raise below.
+        big = [{"role": "user", "content": "汉" * 48_000}]
+        ceiling = resolve_max_tokens(big, None)
+        assert ceiling is not None and 0 < ceiling < 4096
+    finally:
+        _restore()
+
+
+def test_prompt_that_cannot_fit_raises_instead_of_degrading_to_256():
+    """The regression that broke story drafting (2026-10-03).
+
+    An 8k assumed window against a ~7.8k real prompt left `headroom` at 0, and
+    the old `max(256, headroom)` floor turned that into a 256-token reply. With
+    thinking enabled the reasoning ate the whole budget, the model could not
+    emit a tool call, and the agent just said "Done." with nothing created —
+    indistinguishable from a model that refused to work. There is no honest
+    ceiling when the prompt itself does not fit, so this must raise.
+    """
     _use_profile(profiles=[{"id": "p", "model": "m", "context_tokens": 8192}], max_output=4096)
     try:
-        huge = [{"role": "user", "content": "汉" * 400_000}]
-        ceiling = resolve_max_tokens(huge, None)
-        assert ceiling is not None and ceiling < 4096
+        big = [{"role": "user", "content": "汉" * 100_000}]
+        with pytest.raises(ContextWindowTooSmall):
+            resolve_max_tokens(big, None)
+    finally:
+        _restore()
+
+
+def test_tool_carrying_agent_turn_is_not_starved_by_the_fallback_window():
+    """A story-role turn must keep a usable ceiling on a fresh, unprobed config.
+
+    Reproduces the live failure shape: tool schemas (~5k tokens) plus a real
+    project brief, with no probed `context_tokens` yet.
+    """
+    _use_profile(profiles=[{"id": "p", "model": "m"}], max_output=4096)
+    try:
+        settings.llm_context_fallback_tokens = 32768
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"tool_{i}",
+                    "description": "创建一个角色、场景或道具。" * 20,
+                    "parameters": {"properties": {"name": {"type": "string"}}},
+                },
+            }
+            for i in range(17)
+        ]
+        messages = [
+            {"role": "system", "content": "You are a specialized sub-agent. " * 10},
+            {"role": "user", "content": "起草故事线：" + "陈默发现自己的备份被标记删除。" * 60},
+        ]
+        ceiling = resolve_max_tokens(
+            _payload_messages_for_estimate(messages, tools), None
+        )
+        assert ceiling is not None
+        # The old fallback (8192) put this at 256.
+        assert ceiling >= 1024
     finally:
         _restore()
 
@@ -119,6 +182,51 @@ def test_zero_max_output_leaves_the_field_off(monkeypatch):
     _use_profile(profiles=[{"id": "p", "model": "m", "context_tokens": 8192}], max_output=0)
     try:
         assert resolve_max_tokens([{"role": "user", "content": "hi"}], None) is None
+    finally:
+        _restore()
+
+
+def test_probed_context_tokens_survive_profile_normalization():
+    """A probed window must not be erased on the next config load.
+
+    `ensure_llm_profiles` rebuilds each profile from a fixed whitelist, so a
+    field missing from it is dropped on EVERY load: the probe wrote 131072, it
+    was saved, and the next boot silently reverted to the fallback. The window
+    is the input to the whole budget, so losing it is not cosmetic.
+    """
+    settings.llm_profiles = [
+        {
+            "id": "p",
+            "name": "llama.cpp",
+            "base_url": "http://h/v1",
+            "model": "m",
+            "api_key": None,
+            "thinking": "high",
+            "context_tokens": 131072,
+        }
+    ]
+    settings.llm_active_id = "p"
+    try:
+        settings.ensure_llm_profiles()
+        assert settings.llm_profiles[0]["context_tokens"] == 131072
+        assert settings.context_window_tokens() == 131072
+    finally:
+        _restore()
+
+
+def test_nonsense_context_tokens_degrade_to_unprobed():
+    _use_profile(fallback_ctx=32768)
+    settings.llm_profiles = [
+        {"id": "p", "model": "m", "context_tokens": "not-a-number"},
+        {"id": "q", "model": "m", "context_tokens": -5},
+    ]
+    settings.llm_active_id = "p"
+    try:
+        settings.ensure_llm_profiles()
+        assert settings.llm_profiles[0]["context_tokens"] == 0
+        assert settings.llm_profiles[1]["context_tokens"] == 0
+        # Falls back rather than trusting a garbage window.
+        assert settings.context_window_tokens() == 32768
     finally:
         _restore()
 

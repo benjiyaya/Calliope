@@ -42,6 +42,50 @@ def _llm_for_role(role: str) -> LLMClient:
         return for_role(role)
     return factory()
 
+
+# Tables whose row count is the honest measure of "did the swarm do anything".
+_CONTENT_TABLES = ("story_beats", "characters", "locations", "items", "scenes", "clips")
+
+
+def _content_counts(project_id: int | None) -> dict[str, int] | None:
+    """How much content the project actually holds, per table.
+
+    Read straight from the DB because it is the one source the synthesis LLM
+    cannot argue with: a sub-agent's self-report is a claim, this is the state.
+
+    Returns None when the counts could not be read at all, which is deliberately
+    distinct from all-zeros. "I could not check" and "I checked and it is empty"
+    must not collapse into the same value, or a DB error would make the swarm
+    announce that nothing was produced on a project that is actually full.
+    """
+    if project_id is None:
+        return None
+    conn = None
+    try:
+        from calliope.agent.harness.registry import _db
+
+        conn = _db()
+        counts: dict[str, int] = {}
+        for table in _CONTENT_TABLES:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+            counts[table] = int(row["n"]) if row is not None else 0
+        return counts
+    except Exception:  # noqa: BLE001 — report "unknown", never a fake zero
+        logger.exception("Content counts unavailable for project %s", project_id)
+        return None
+    finally:
+        # get_db hands out a fresh connection per call; leaving it open pins the
+        # file, and on Windows that makes the DB undeletable — which broke test
+        # teardown for every suite that runs a swarm turn.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("Closing count connection failed", exc_info=True)
+
 # LLM context window bound: the last N user turns are replayed into each
 # request. Tool exchanges never span user turns, so tool_call/result pairs
 # always survive the trim intact.
@@ -623,12 +667,30 @@ async def orchestrate(
         await emit({"role": "assistant", "content": final})
         return final
 
+    # Ground truth before synthesis. A sub-agent that stops early reports itself
+    # in one word ("Done."), and the synthesis LLM will happily expand that into
+    # a full page of work it never did (observed live 2026-10-03, project 3
+    # 意识回收计划: zero beats/characters/locations created, final message claimed
+    # "beats, characters, environments, and misc. items were produced"). The
+    # counts below are read from the DB, so they cannot be talked into agreeing.
+    produced = _content_counts(ctx.project_id)
+    counts_text = (
+        ", ".join(f"{k}={v}" for k, v in produced.items())
+        if produced is not None
+        else "unavailable (could not be read)"
+    )
+
     # Synthesis: plain LLM call over sub-agent reports.
     synthesis_in = (
         "User goal:\n"
         f"{goal}\n\nSub-agent reports:\n" + "\n\n".join(results)
+        + "\n\nActual content in the project right now (authoritative): "
+        + counts_text
         + "\n\nWrite a concise final summary for the user: what was done, "
-        "job ids enqueued, and any failures. Plain text."
+        "job ids enqueued, and any failures. Plain text. "
+        "Report ONLY what the counts above and the reports actually show. "
+        "If a count is 0, say plainly that nothing was created — never infer "
+        "completed work from a report that merely claims it."
     )
     client = _llm_for_role("planner")
     try:
@@ -636,7 +698,13 @@ async def orchestrate(
             [
                 {
                     "role": "system",
-                    "content": "You are the swarm's lead. Summarize sub-agent work for the user. Be concrete.",
+                    "content": (
+                        "You are the swarm's lead. Summarize sub-agent work for "
+                        "the user. Be concrete, and never overstate it: the "
+                        "project's real content counts are given to you and are "
+                        "the authority on what exists. A sub-agent saying 'Done.' "
+                        "does not mean the work happened."
+                    ),
                 },
                 {"role": "user", "content": synthesis_in},
             ],
@@ -650,6 +718,23 @@ async def orchestrate(
         final = "Work finished. Sub-agent reports:\n\n" + "\n\n".join(results)
     finally:
         await client.close()
+
+    # Prompting is not a guarantee. When a story/script goal left the project
+    # completely empty, prepend the fact regardless of what the summary claims —
+    # a confident false "all content was produced" is the one failure mode the
+    # operator cannot detect on their own (they see the empty project and the
+    # contradicting message, and have to guess which one is lying).
+    if produced is not None and not any(produced.values()):
+        truth = (
+            "No content was created. The project is still empty "
+            f"({', '.join(f'{k}=0' for k in produced)}), "
+            "so nothing was actually produced this turn."
+        )
+        logger.warning(
+            "Swarm produced no content for project %s: %s", ctx.project_id, truth
+        )
+        final = truth + "\n\n" + final
+
     session_log.append_event(
         session_id,
         session_log.ASSISTANT_MESSAGE,

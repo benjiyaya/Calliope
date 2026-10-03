@@ -91,6 +91,16 @@ def estimate_prompt_tokens(messages: list[dict[str, Any]]) -> int:
     return int(total_chars / chars_per_token) + image_parts * 1024
 
 
+class ContextWindowTooSmall(RuntimeError):
+    """The estimated prompt does not fit the window the operator has configured.
+
+    This is a configuration fault, not a transient one: a prompt that overflows
+    a real window cannot be fixed by sending fewer output tokens, so there is no
+    honest `max_tokens` to fall back to. Raising keeps the failure visible at
+    the call site instead of degrading the turn into a near-silent truncation.
+    """
+
+
 def resolve_max_tokens(
     messages: list[dict[str, Any]],
     requested: int | None,
@@ -104,6 +114,16 @@ def resolve_max_tokens(
     from the output side. The value is then clamped so the estimated prompt
     plus the reply still fits the model's window; the clamp is logged because it
     silently shortens an answer.
+
+    A prompt that does not fit at all RAISES rather than clamping. The previous
+    `max(256, headroom)` floor turned a too-small window into a 256-token reply,
+    which with `thinking` enabled consumed the whole budget on reasoning and left
+    the model unable to emit a tool call — the agent then just said "Done." with
+    nothing created (observed live 2026-10-03, project 3 意识回收计划, story task).
+    That silent degradation is far worse than a loud failure: it looked like a
+    model that refused to work. The near-miss case (prompt fits, but not with
+    the full configured ceiling) is still clamped, just with a floor that leaves
+    room for a real answer.
     """
     if requested is not None:
         return requested
@@ -111,16 +131,27 @@ def resolve_max_tokens(
     if configured <= 0:
         return None
     window = max(1024, int(settings.context_window_tokens()))
-    headroom = window - estimate_prompt_tokens(messages) - reserve
+    estimate = estimate_prompt_tokens(messages)
+    if estimate + reserve >= window:
+        raise ContextWindowTooSmall(
+            f"Estimated prompt is {estimate} tokens, which does not fit the "
+            f"configured {window}-token context window (reserve {reserve}). "
+            "Either the prompt is genuinely too long — trim the history budget "
+            "or split the task — or `context_tokens` is wrong. Re-run the "
+            "connectivity test (Settings → LLM → Test connection) so the real "
+            "window is read from the server; until then nothing is sent, "
+            "because any reply ceiling would silently truncate the answer."
+        )
+    headroom = window - estimate - reserve
     if headroom < configured:
         logger.warning(
             "Clamping max_tokens %d -> %d: estimated prompt leaves only %d of %d tokens",
             configured,
-            max(256, headroom),
-            max(0, headroom),
+            headroom,
+            headroom,
             window,
         )
-        configured = max(256, headroom)
+        configured = headroom
     return configured
 
 

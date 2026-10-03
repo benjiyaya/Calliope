@@ -442,8 +442,8 @@
 			const bits: string[] = [];
 			if (m.vision) bits.push(t('settings.probeVision'));
 			if (m.ctx) bits.push(`${(m.ctx / 1024) | 0}K`);
-			if (m.reasoning_disabled) bits.push(t('settings.probeNoThinking'));
-			else if (m.reasoning_effort) bits.push(`${t('settings.probeThink')}:${m.reasoning_effort}`);
+			if (m.reasoning_disabled) bits.push('reasoning_disabled');
+			else if (m.reasoning_effort) bits.push(`reasoning_effort:${m.reasoning_effort}`);
 			if (m.loaded === 'loaded') bits.push(t('settings.probeLoaded'));
 			return { id: m.id, label: bits.length ? `${m.id}  ·  ${bits.join(' · ')}` : m.id, info: m };
 		});
@@ -691,8 +691,13 @@
 													thinking: e.currentTarget.value as ThinkingMode,
 												})}
 										>
+											<!-- Raw wire values, never translated: these tokens ARE the
+											     payload (`chat_template_kwargs.reasoning_effort`) that the
+											     probe echoes back, and a model only accepts what its own
+											     chat template lists. A translated label hides both the
+											     value the operator picked and the mismatch that rejects it. -->
 											{#each THINKING_MODES as mode (mode)}
-												<option value={mode}>{t(`settings.thinking_${mode}`)}</option>
+												<option value={mode}>{mode}</option>
 											{/each}
 										</select>
 										<p class="field-hint">{t('settings.thinkingHint')}</p>
@@ -709,6 +714,14 @@
 													{#if probe.latency_ms !== null}
 														· {t('settings.probeTotal')}: {probe.latency_ms} ms
 													{/if}
+												</p>
+												<!-- The exact payload the server received, so the option above can
+											     be checked against what went on the wire. `default` sends
+											     `{}` — nothing, so the model's own template decides. -->
+												<p class="probe-line muted">
+													thinking: {probe.thinking} · thinking_sent: {JSON.stringify(
+														probe.thinking_sent ?? {},
+													)}
 												</p>
 												{#if probe.reasoning_chars > 0}
 													<p class="probe-line">

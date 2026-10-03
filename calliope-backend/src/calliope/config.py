@@ -61,6 +61,20 @@ def normalize_thinking(value: Any) -> str | None:
     return v if v in (THINKING_OFF, *THINKING_LEVELS) else None
 
 
+def _coerce_context_tokens(value: Any) -> int:
+    """A probed context window as a usable positive int; 0 = never probed.
+
+    Stored values arrive as str/int/None from the config file and from the
+    settings form, and a nonsense value must degrade to "unknown" (0) rather
+    than to a window that would then be trusted by context_window_tokens().
+    """
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
 def _strip_path_str(value: str | Path | None) -> str | None:
     """Normalize path strings; strip accidental wrapping quotes from UI paste."""
     if value is None:
@@ -194,7 +208,13 @@ class Settings(BaseSettings):
     # for the per-step system prompt + tool schemas, which the char trim never
     # sees because prompts.assemble() rebuilds them outside the history list.
     agent_history_token_share: float = 0.5
-    llm_context_fallback_tokens: int = 8192
+    # Window assumed before any probe has run. 8192 was too small to be safe:
+    # a tool-using agent turn carries the system prompt plus every tool schema
+    # (the story role alone is ~5k tokens), so an 8k assumption both starved the
+    # reply ceiling and looked like a broken agent. 32k is the smallest window
+    # modern local models are served with in practice, and an over-estimate is
+    # harmless — the server truncates/reports, it does not silently misbehave.
+    llm_context_fallback_tokens: int = 32768
     # Characters per token. 1.6 is deliberately conservative for mixed CJK/ASCII;
     # too high overflows the window, too low truncates history needlessly.
     llm_chars_per_token: float = 1.6
@@ -274,6 +294,13 @@ class Settings(BaseSettings):
                         # started with --reasoning-effort xhigh would otherwise
                         # burn 10k+ reasoning tokens on every formatting rewrite.
                         "thinking": normalize_thinking(item.get("thinking")),
+                        # Must survive normalization: this rebuilds the dict from
+                        # a fixed whitelist, so a field missing here is silently
+                        # dropped on EVERY load — the probed window was written,
+                        # saved, and then erased before it could ever be used.
+                        "context_tokens": _coerce_context_tokens(
+                            item.get("context_tokens")
+                        ),
                     }
                 )
             if not normalized:
@@ -331,7 +358,7 @@ class Settings(BaseSettings):
                 continue
             if n > 0:
                 return n
-        return max(1024, int(self.llm_context_fallback_tokens or 8192))
+        return max(1024, int(self.llm_context_fallback_tokens or 32768))
 
     def history_char_budget(self) -> int:
         """Character ceiling for the derived chat history.
