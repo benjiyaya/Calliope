@@ -5,6 +5,8 @@ Covers:
    client must retry without the field instead of failing the whole request.
 2. "Extra data: line 1 column 308" — models emitting valid JSON followed by
    trailing prose/chatter; extract_json must recover the object.
+3. A connect-level failure (DNS, refused port, handshake timeout) must be
+   replayed instead of killing the whole agent turn.
 """
 from __future__ import annotations
 
@@ -114,6 +116,170 @@ class _SequenceRouter(_FakeRouter):
         self.calls += 1
         self.content = content
         return await super().__call__(request)
+
+
+class _FlakyConnectRouter(_FakeRouter):
+    """Refuses the first `fail_times` connects, then serves normally.
+
+    The failure is raised from inside the transport handler so it surfaces at
+    exactly the same point httpx would surface a real DNS failure — stubbing the
+    call site instead would bypass the very `except` branch under test.
+    """
+
+    def __init__(self, content: str, fail_times: int) -> None:
+        super().__init__(content, reject_response_format=False)
+        self.fail_times = fail_times
+        self.attempts = 0
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        if self.attempts <= self.fail_times:
+            # The literal error the runner reported: [Errno 11001] on Windows.
+            raise httpx.ConnectError(
+                "[Errno 11001] getaddrinfo failed", request=request
+            )
+        return await super().__call__(request)
+
+
+class _ToolsRejectingRouter(_FakeRouter):
+    """400s any request that carries a `tools` field, like an LM Studio build."""
+
+    def __init__(self, content: str) -> None:
+        super().__init__(content, reject_response_format=False)
+        self.attempts = 0
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        body = json.loads(request.content.decode())
+        if body.get("tools"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "tools are not supported"}},
+            )
+        return await super().__call__(request)
+
+
+@pytest.fixture
+def no_retry_sleep(monkeypatch):
+    """Keep the backoff out of the test clock."""
+    import calliope.agent.llm as llm_module
+
+    async def instant(_seconds):
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", instant)
+
+
+async def test_blocking_chat_replays_a_connect_failure(monkeypatch, no_retry_sleep):
+    """A DNS blip must not end the turn — the identical request works later.
+
+    Observed 2026-10-03: `[Errno 11001] getaddrinfo failed` 20 s after a backend
+    start failed a whole agent turn with no retry on the transport path, and the
+    same request succeeded two minutes afterwards.
+    """
+    router = _FlakyConnectRouter(content='{"ok": true}', fail_times=2)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router)))
+
+    text = await client.chat([{"role": "user", "content": "hi"}])
+
+    assert text == '{"ok": true}'
+    assert router.attempts == 3  # 2 refused + 1 served
+
+
+async def test_blocking_chat_gives_up_after_the_attempt_budget(
+    monkeypatch, no_retry_sleep
+):
+    from calliope.agent.llm import _CONNECT_ATTEMPTS
+
+    router = _FlakyConnectRouter(content="unused", fail_times=99)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router)))
+
+    with pytest.raises(httpx.ConnectError):
+        await client.chat([{"role": "user", "content": "hi"}])
+
+    # Bounded, not an unbounded loop: 1 attempt + 2 replays.
+    assert router.attempts == _CONNECT_ATTEMPTS
+
+
+async def test_streaming_chat_replays_a_connect_failure(monkeypatch, no_retry_sleep):
+    """The streaming path failed too — its connect used to be unretryable.
+
+    `client.stream()` defers connecting to `__aenter__`, so the failure raised
+    with no handler in reach. The stream must be built and sent explicitly for
+    the replay to exist at all.
+    """
+    router = _FlakyConnectRouter(content="hello", fail_times=1)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router)))
+
+    events = [
+        ev
+        async for ev in client.chat_stream([{"role": "user", "content": "hi"}])
+    ]
+
+    assert router.attempts == 2
+    assert any(ev.get("type") == "delta" for ev in events)
+    assert events[-1]["type"] == "done"
+
+
+async def test_a_rejected_tools_field_still_drops_instead_of_replaying(monkeypatch):
+    """The connect replay must not interfere with the HTTP-400 fallbacks.
+
+    They are different failures with different fixes: a 400 means the server
+    dislikes a field (drop it), a connect error means it never answered
+    (resend). Conflating them would either hide the 400 or duplicate a request.
+    """
+    router = _ToolsRejectingRouter(content="no tools here")
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router)))
+
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "ping", "description": "d", "parameters": {}},
+        }
+    ]
+    out = await client.chat_with_tools([{"role": "user", "content": "hi"}], tools=tools)
+
+    assert out["tool_calls"] == []
+    # Exactly two requests: the rejected one and the tools-dropped retry. No
+    # connect replay is involved — a 400 is not a connect failure.
+    assert router.attempts == 2
+
+
+async def test_stream_response_is_closed_even_when_parsing_raises(monkeypatch):
+    """The explicit send() means the response is no longer context-managed.
+
+    Every early return — raise_for_status, a 400 that gets re-read, a mid-stream
+    error payload — now has to close the response itself or the connection is
+    leaked back into the pool.
+    """
+    class _Raiser(_FakeRouter):
+        served: httpx.Response | None = None
+
+        async def __call__(self, request: httpx.Request) -> httpx.Response:
+            # Mid-stream error payload: _parse_sse turns this into RuntimeError.
+            type(self).served = httpx.Response(
+                200,
+                content=b'data: {"error": {"message": "boom"}}\n\n',
+                headers={"content-type": "text/event-stream"},
+                request=request,
+            )
+            return type(self).served
+
+    router = _Raiser(content="unused", reject_response_format=False)
+    client = LLMClient()
+    monkeypatch.setattr(client, "client", httpx.AsyncClient(transport=httpx.MockTransport(router)))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async for _ in client.chat_stream([{"role": "user", "content": "hi"}]):
+            pass
+
+    assert _Raiser.served is not None
+    assert _Raiser.served.is_closed
+    assert not client.client.is_closed
 
 
 async def test_chat_retries_without_response_format_on_400(monkeypatch):

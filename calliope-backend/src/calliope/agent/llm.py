@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -38,6 +39,14 @@ _STREAM_UNSUPPORTED_STATUS = frozenset({400, 404, 405, 501})
 # Set when an endpoint rejects multimodal image parts — later calls in this
 # process skip the parts-provision step entirely (text-only fallback).
 _TEXT_ONLY_ENDPOINTS: set[str] = set()
+
+# Failures that mean the request never reached the model: DNS did not resolve,
+# the port is refused, or the TCP handshake timed out. Replaying those is safe
+# because there is no partial reply to duplicate. A drop MID-response is
+# deliberately not retried — part of the answer may already have been consumed.
+_TRANSIENT_CONNECT = (httpx.ConnectError, httpx.ConnectTimeout)
+_CONNECT_ATTEMPTS = 3
+_CONNECT_RETRY_BASE_SEC = 0.5
 
 
 _PROTECTED_PAYLOAD_KEYS = frozenset({"model", "messages", "stream"})
@@ -365,6 +374,57 @@ class LLMClient:
             )
         return content
 
+    async def _post_json(self, url: str, payload: dict[str, Any]) -> httpx.Response:
+        """POST with the endpoint unreachable on connect, retried."""
+        delay = _CONNECT_RETRY_BASE_SEC
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            try:
+                return await self.client.post(url, headers=self._headers(), json=payload)
+            except _TRANSIENT_CONNECT as exc:
+                if attempt >= _CONNECT_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "LLM endpoint unreachable (%s); retry %d/%d in %.1fs",
+                    exc,
+                    attempt,
+                    _CONNECT_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _open_stream(
+        self, url: str, payload: dict[str, Any]
+    ) -> httpx.Response:
+        """Open a streaming response, retrying connect-level failures.
+
+        `client.stream()` defers the connect to `__aenter__`, which leaves the
+        failure outside any retry this code controls. Building and sending the
+        request explicitly makes the connect attempt observable. The caller owns
+        the returned response and must `aclose()` it.
+        """
+        delay = _CONNECT_RETRY_BASE_SEC
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            try:
+                request = self.client.build_request(
+                    "POST", url, headers=self._headers(), json=payload
+                )
+                return await self.client.send(request, stream=True)
+            except _TRANSIENT_CONNECT as exc:
+                if attempt >= _CONNECT_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "LLM endpoint unreachable (%s); retry %d/%d in %.1fs",
+                    exc,
+                    attempt,
+                    _CONNECT_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise AssertionError("unreachable")  # pragma: no cover
+
     async def _chat_blocking(
         self,
         messages: list[dict[str, str]],
@@ -388,7 +448,7 @@ class LLMClient:
 
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM request to %s with model %s", url, self.model)
-        resp = await self.client.post(url, headers=self._headers(), json=payload)
+        resp = await self._post_json(url, payload)
         if resp.status_code == 400 and "response_format" in payload:
             # Some OpenAI-compatible servers (e.g. LM Studio) reject the
             # response_format field outright — retry without it.
@@ -396,7 +456,7 @@ class LLMClient:
                 "Server rejected response_format (HTTP 400); retrying without it"
             )
             payload.pop("response_format")
-            resp = await self.client.post(url, headers=self._headers(), json=payload)
+            resp = await self._post_json(url, payload)
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
@@ -616,7 +676,8 @@ class LLMClient:
         tool_acc: dict[int, dict[str, Any]] = {}
         while True:
             retry_without: str | None = None
-            async with self.client.stream("POST", url, headers=self._headers(), json=payload) as resp:
+            resp = await self._open_stream(url, payload)
+            try:
                 if resp.status_code == 400:
                     # Read body for logging, then drop optional fields one at a
                     # time before giving up.
@@ -630,6 +691,8 @@ class LLMClient:
                     resp.raise_for_status()
                     async for ev in self._parse_sse(resp, tool_acc):
                         yield ev
+            finally:
+                await resp.aclose()
             if retry_without is None:
                 break
             logger.warning("Retrying stream without %s", retry_without)

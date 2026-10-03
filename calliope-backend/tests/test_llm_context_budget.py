@@ -7,6 +7,8 @@ window — a guaranteed overflow that no amount of downstream trimming fixes.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import calliope.config as config_module
@@ -229,6 +231,60 @@ def test_nonsense_context_tokens_degrade_to_unprobed():
         assert settings.context_window_tokens() == 32768
     finally:
         _restore()
+
+
+def test_test_session_never_writes_the_live_config():
+    """The suite must not be able to overwrite the operator's config file.
+
+    CONFIG_FILE is a module constant, deliberately independent of `data_dir`,
+    so redirecting data_dir at a temp dir does NOT redirect it. Tests that
+    exercise the real save path therefore persisted the whole live singleton
+    into calliope_config.json — which is how a probed `context_tokens:
+    131072` silently became 0 after a plain `pytest` run (observed 2026-10-03,
+    project 3 draft failing with a starved reply budget).
+    """
+    import calliope.config as config_module
+
+    real = config_module.BACKEND_ROOT / "calliope_config.json"
+    assert config_module.CONFIG_FILE.resolve() != real.resolve()
+    assert config_module.CONFIG_FILE.name == "calliope_test_config.json"
+
+
+def test_context_knobs_survive_a_save_reload_round_trip():
+    """Settings the operator can edit must actually be persisted.
+
+    `to_public_dict()` exposed llm_max_output_tokens, llm_context_tokens,
+    llm_context_fallback_tokens and llm_chars_per_token, and the Settings form
+    writes them — but save_config_file() omitted them, so every restart reverted
+    to the defaults and a tuned value looked like it had been lost.
+    """
+    import calliope.config as config_module
+
+    s = config_module.settings
+    prev = (
+        s.llm_context_tokens,
+        s.llm_context_fallback_tokens,
+        s.llm_chars_per_token,
+        s.llm_max_output_tokens,
+    )
+    try:
+        s.llm_context_tokens = 0
+        s.llm_context_fallback_tokens = 40960
+        s.llm_chars_per_token = 1.4
+        s.llm_max_output_tokens = 2048
+        s.save_config_file()
+        written = json.loads(config_module.CONFIG_FILE.read_text(encoding="utf-8"))
+        assert written["llm_context_fallback_tokens"] == 40960
+        assert written["llm_chars_per_token"] == 1.4
+        assert written["llm_max_output_tokens"] == 2048
+        assert written["llm_context_tokens"] == 0
+    finally:
+        (
+            s.llm_context_tokens,
+            s.llm_context_fallback_tokens,
+            s.llm_chars_per_token,
+            s.llm_max_output_tokens,
+        ) = prev
 
 
 def test_image_parts_are_not_measured_by_base64_length(monkeypatch):

@@ -98,3 +98,80 @@ def test_short_story_stays_single_call(client, fake_llm):
     assert len(story["beats"]) == 4
     # one call only (4 beats <= STORY_CHUNK)
     assert len(fake_llm) == 1
+
+
+def test_generated_counts_every_table_it_wrote(client, fake_llm):
+    """The response must name each table, not just beats.
+
+    The agent reads this dict as its only evidence of what exists. Reporting
+    `{"beats": 50}` alone made a story agent conclude the cast had not been
+    created and stop without adding it — on a run where the LLM had actually
+    returned and the router had actually inserted 4 characters, 4 locations and
+    8 items (observed 2026-10-03, project 3).
+    """
+    r = client.post(
+        "/api/projects",
+        json={"title": "Counted", "idea": "epic", "target_duration": "10 minutes"},
+    )
+    pid = r.json()["id"]
+    resp = client.post(f"/api/projects/{pid}/generate-story")
+    assert resp.status_code == 200, resp.text
+    generated = resp.json()["generated"]
+    assert generated == {
+        "beats": 50,
+        "characters": 1,
+        "locations": 1,
+        "items": 1,
+    }
+    # And the counts agree with what is actually in the DB.
+    story = client.get(f"/api/projects/{pid}/story").json()
+    assert len(story["beats"]) == generated["beats"]
+    assert len(story["characters"]) == generated["characters"]
+    assert len(story["locations"]) == generated["locations"]
+    assert len(story["items"]) == generated["items"]
+
+
+def test_missing_cast_is_reported_as_zero_not_omitted(client, monkeypatch):
+    """A brief with no cast must say `characters: 0`, so the agent can act on it.
+
+    Silently omitting the key is what made the shortfall invisible: the agent
+    could not tell "the cast came back empty, go add it" from "the tool does
+    not manage the cast".
+    """
+    import calliope.routers.story as story_router
+
+    async def fake(messages, temperature=0.7):
+        user = messages[1]["content"]
+        import re
+
+        m = re.search(r"exactly (\d+) beats", user)
+        chunk_n = int(m.group(1)) if m else 4
+        m2 = re.search(r"order_index (\d+) through (\d+)", user)
+        start = int(m2.group(1)) if m2 else 1
+        is_brief = "OUTPUT SCHEMA" in user and "characters" in user
+        out = {"beats": _beats(chunk_n, start)}
+        if is_brief:
+            out = {
+                "title": "Castless",
+                "logline": "No cast came back.",
+                "characters": [],
+                "locations": [],
+                "items": [],
+                **out,
+            }
+        return out
+
+    monkeypatch.setattr(story_router, "generate_structured", fake)
+
+    r = client.post(
+        "/api/projects",
+        json={"title": "Castless", "idea": "epic", "target_duration": "10 minutes"},
+    )
+    pid = r.json()["id"]
+    resp = client.post(f"/api/projects/{pid}/generate-story")
+    assert resp.status_code == 200, resp.text
+    generated = resp.json()["generated"]
+    assert generated["beats"] == 50
+    assert generated["characters"] == 0
+    assert generated["locations"] == 0
+    assert generated["items"] == 0

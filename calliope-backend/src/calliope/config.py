@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import tempfile
 import uuid
@@ -21,7 +22,16 @@ if getattr(sys, "frozen", False):
     BACKEND_ROOT = Path(sys.executable).resolve().parent
 else:
     BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = BACKEND_ROOT / "calliope_config.json"
+
+# Overridable so the test session can never write the operator's real config.
+# CONFIG_FILE is a module constant, deliberately independent of `data_dir`, so
+# pointing data_dir at a temp dir does NOT redirect it: any test that calls
+# save_config_file() persists the whole live singleton — including profiles and
+# paths another test replaced — straight into calliope_config.json. That is how
+# a probed `context_tokens: 131072` silently became 0 after a test run
+# (observed 2026-10-03). conftest sets this before importing calliope.
+_CONFIG_OVERRIDE = os.environ.get("CALLIOPE_CONFIG_FILE", "").strip()
+CONFIG_FILE = Path(_CONFIG_OVERRIDE) if _CONFIG_OVERRIDE else BACKEND_ROOT / "calliope_config.json"
 
 logger = logging.getLogger("calliope.config")
 DEFAULT_DATA_DIR = BACKEND_ROOT / "data"
@@ -625,6 +635,14 @@ class Settings(BaseSettings):
             "agent_hardening_prompt": self.agent_hardening_prompt,
             "agent_history_char_budget": int(self.agent_history_char_budget or 0),
             "agent_history_token_share": float(self.agent_history_token_share),
+            # Context-window knobs. Editable in Settings and exposed by
+            # to_public_dict(), but missing here — so every restart reverted
+            # them to the defaults and a saved value was indistinguishable from
+            # a lost one.
+            "llm_context_tokens": int(self.llm_context_tokens or 0),
+            "llm_context_fallback_tokens": int(self.llm_context_fallback_tokens),
+            "llm_chars_per_token": float(self.llm_chars_per_token),
+            "llm_max_output_tokens": int(self.llm_max_output_tokens),
             # Derived values are deliberately NOT persisted: they are computed
             # from the profile's probed context window, which changes on its own.
             # Writing them here would also put keys that collide with Settings

@@ -272,6 +272,11 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
         logline: str | None = None
         written = 0
         replace_started = False
+        # What was actually inserted. Reported back to the caller AND used as
+        # the post-condition check: the agent reads this dict and decides
+        # whether the goal is met, so under-reporting here makes it skip work
+        # that was done, and over-reporting hides work that was not.
+        seeded = {"characters": 0, "locations": 0, "items": 0}
 
         async for chunk in _iter_story_chunks(project_id, project, required_beats):
             if title is None:
@@ -324,6 +329,7 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
                                 "consistency_prompt": character_sheet_prompt(row_seed),
                             },
                         )
+                        seeded["characters"] += 1
                     elif seed_kind == "locations":
                         description = entity.get("description", "") or ""
                         loc_seed = {"name": entity.get("name", ""), "description": description}
@@ -338,6 +344,7 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
                                 "consistency_prompt": location_reference_prompt(loc_seed),
                             },
                         )
+                        seeded["locations"] += 1
                     else:
                         description = entity.get("description", "") or ""
                         item_seed = {"name": entity.get("name", ""), "description": description}
@@ -352,6 +359,7 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
                                 "consistency_prompt": item_reference_prompt(item_seed),
                             },
                         )
+                        seeded["items"] += 1
 
             for beat in chunk.get("beats") or []:
                 conn.execute(
@@ -394,10 +402,30 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
             "story.ready",
             {
                 "project_id": project_id,
-                "message": f"Story drafted — {beat_n} beats",
+                "message": (
+                    f"Story drafted — {beat_n} beats, "
+                    f"{seeded['characters']} characters, "
+                    f"{seeded['locations']} locations, {seeded['items']} items"
+                ),
             },
         )
-        return {"ok": True, "project_id": project_id, "generated": {"beats": beat_n}}
+        # Report EVERY table that was written. This dict is the agent's only
+        # evidence of what exists: reporting `{"beats": 50}` alone made a story
+        # agent conclude the cast had not been created and stop without adding
+        # it (observed 2026-10-03, project 3 — the LLM had returned 4 characters
+        # and they were inserted, but the tool said "beats" and the agent moved
+        # on). Silent zero counts are the failure mode to avoid: an agent must be
+        # able to see that the cast came back empty and retry it.
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "generated": {
+                "beats": beat_n,
+                "characters": seeded["characters"],
+                "locations": seeded["locations"],
+                "items": seeded["items"],
+            },
+        }
     except HTTPException:
         raise
     except Exception as exc:

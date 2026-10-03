@@ -178,9 +178,13 @@ def test_swarm_roles_cover_pipeline_categories():
         "assets": {"assets"},
         "video": {"video"},
     }
-    # Story-category ENTITY CRUD is planner-routed to the assets role (the
-    # standard EDIT pipeline: story → script → "add/update assets text") —
-    # only beats stay with the story role.
+    # Story-category ENTITY CRUD must be reachable from the assets role (the
+    # standard EDIT pipeline: story → script → "add/update assets text"). It is
+    # ALSO in the story role now: generate_story seeds the cast only when the
+    # model's brief happened to include it, so a story task that names the cast
+    # needs a way to add what is missing rather than reporting an empty one
+    # (observed 2026-10-03, project 3). The override keeps asserting assets;
+    # the story side is covered by test_story_role_can_backfill_the_cast.
     overrides = {
         name: {"assets"}
         for name in (
