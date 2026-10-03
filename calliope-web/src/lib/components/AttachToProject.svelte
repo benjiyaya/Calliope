@@ -146,7 +146,7 @@
 	{#if attached && !open}
 		<div class="attached" role="status">
 			<span class="attached-check" aria-hidden="true"><Icon name="check" size={14} /></span>
-			<span class="attached-text">{t('attach.addedTo')} <strong>{attached.title}</strong></span>
+			<span class="attached-text">{t('attach.addedTo', { title: attached.title })}</span>
 			<a class="attached-link" href={stageLink}>{t('attach.viewInProject')}</a>
 			<button
 				class="attached-dismiss"
@@ -291,10 +291,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-	.attached-text strong {
-		color: var(--text-primary);
-		font-weight: 600;
 	}
 	.attached-link {
 		color: var(--accent);

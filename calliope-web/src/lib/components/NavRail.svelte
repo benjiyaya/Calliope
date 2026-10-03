@@ -46,7 +46,7 @@
 			<span class="icon">
 				<Icon name={item.icon} size={20} />
 				{#if count > 0}
-					<span class="badge" aria-label={t('nav.countActive', { count })}>
+					<span class="badge" aria-label={t('nav.countActive', { count: count })}>
 						{count > 9 ? '9+' : count}
 					</span>
 				{/if}

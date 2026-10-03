@@ -122,7 +122,7 @@
 		const key = `${clip?.id ?? -(scene?.id ?? 0)}|${mediaSlotKey()}`;
 		if (attemptedFor === key) return;
 		attemptedFor = key;
-		$preview.mutate();
+		$preview.mutate({});
 	});
 
 	/** Fallback body when resolve fails: the clip's beat or the scene prose. */

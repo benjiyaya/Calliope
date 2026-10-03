@@ -566,9 +566,9 @@ const generateOne = createMutation({
 				skipped: data.skipped,
 			});
 			if (data.endpoint_dead) {
-				toast.error(t('queue.compileEndpointDead', { summary }));
+				toast.error(t('queue.compileEndpointDead', { summary: summary }));
 			} else if (data.failed > 0) {
-				toast.error(t('queue.compileSomeFailed', { summary, failed: data.failed }));
+				toast.error(t('queue.compileSomeFailed', { summary: summary, failed: data.failed }));
 			} else if (data.compiled === 0) {
 				toast.success(t('queue.compileNothingMissing', { skipped: data.skipped }));
 			} else {

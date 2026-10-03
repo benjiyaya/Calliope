@@ -212,7 +212,10 @@
 						{/each}
 					</div>
 				{/if}
-				<div class="stats-strip" aria-label={t('activity.queueStats')}>
+				<div
+					class="stats-strip"
+					aria-label={t('activity.queueStats', { active: stats.running, queued: stats.queued })}
+				>
 					<span><span class="sd sd-running" aria-hidden="true"></span>{stats.running} {t('activity.running').toLowerCase()}</span>
 					<span><span class="sd sd-queued" aria-hidden="true"></span>{stats.queued} {t('activity.queued').toLowerCase()}</span>
 					<span><span class="sd sd-done" aria-hidden="true"></span>{stats.done} {t('activity.done')}</span>

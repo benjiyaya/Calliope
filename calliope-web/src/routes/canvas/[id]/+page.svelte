@@ -312,7 +312,7 @@
 		await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
 		const failed = results.filter((r) => r.status === 'rejected').length;
 		if (failed > 0) {
-			toast.error(t('canvas.deleteFailed'));
+			toast.error(t('canvas.deleteFailed', { count: failed }));
 			return;
 		}
 		if (fileDeletedCount > 0 && keptCount > 0) {
