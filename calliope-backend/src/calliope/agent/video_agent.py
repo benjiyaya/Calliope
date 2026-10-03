@@ -27,7 +27,12 @@ from calliope.agent.prompts import (
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.roles import input_has_role
-from calliope.comfyui.smart_fill import ref_image_slots, ref_video_slots, smart_fill_inputs
+from calliope.comfyui.smart_fill import (
+    ref_audio_slots,
+    ref_image_slots,
+    ref_video_slots,
+    smart_fill_inputs,
+)
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
@@ -160,13 +165,33 @@ def resolve_h3_references(
     return subjects, image_paths, videos
 
 
-def _reference_signature(image_paths: list[str], video_paths: list[str]) -> str:
+def resolve_ref_audios(inputs: list[dict[str, Any]], values: dict[str, Any]) -> list[str]:
+    """Paths the user put in ``(Input:audio)`` slots, in node-id order.
+
+    Unlike images and videos, audio has no story roster to fall back on: a slot
+    is either filled with a file the user chose or it stays empty.
+    """
+    paths: list[str] = []
+    for slot in ref_audio_slots(inputs):
+        path = _form_media_path(values, slot["nodeId"])
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _reference_signature(
+    image_paths: list[str],
+    video_paths: list[str],
+    audio_paths: list[str] | None = None,
+) -> str:
     """Fingerprint of the files a draft was written against. Empty when none."""
     parts: list[str] = []
     if image_paths:
         parts.append("img=" + ",".join(image_paths))
     if video_paths:
         parts.append("vid=" + ",".join(video_paths))
+    if audio_paths:
+        parts.append("aud=" + ",".join(audio_paths))
     return "|".join(parts)
 
 
@@ -514,7 +539,10 @@ async def preview_clip_prompt(
     subjects, _image_paths, videos = resolve_h3_references(
         inputs, form_values, characters, loc_row, loc_image
     )
-    ref_sig = _reference_signature(_image_paths, [v["path"] for v in videos])
+    ref_audios = resolve_ref_audios(inputs, form_values)
+    ref_sig = _reference_signature(
+        _image_paths, [v["path"] for v in videos], ref_audios
+    )
     hash_clip = {**clip, "character_ids": [c["id"] for c in characters]}
 
     if profile == "minimax_h3_ref":
@@ -712,7 +740,10 @@ async def enqueue_video_jobs(
                 subjects, ref_paths, videos = resolve_h3_references(
                     inputs, extra_values, characters, loc_row, loc_image
                 )
-                ref_sig = _reference_signature(ref_paths, [v["path"] for v in videos])
+                ref_audios = resolve_ref_audios(inputs, extra_values)
+                ref_sig = _reference_signature(
+                    ref_paths, [v["path"] for v in videos], ref_audios
+                )
                 ledger = str((continuity_plan or {}).get("based_on") or "")
                 lock = continuity_lock_text(continuity_plan, int(clip["id"]))
                 # Prompt precedence: explicit request → saved (fresh) draft → LLM.
@@ -747,6 +778,7 @@ async def enqueue_video_jobs(
                     prompt=prompt,
                     ref_images=ref_paths,
                     ref_videos=[v["path"] for v in videos],
+                    ref_audios=ref_audios,
                     duration=duration,
                     extra=extra_values,
                 )

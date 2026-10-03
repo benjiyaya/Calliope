@@ -13,9 +13,12 @@ def _resolve_field(field: str, inputs: dict[str, Any]) -> str:
     Known variants:
     - text ↔ value (PrimitiveString-style nodes expose `value`, not `text`).
     - audio ↔ audio: (VHS_LoadAudio names its widget `audio:` with a colon).
-    The fallback stays guarded to these exact sibling pairs — never a fuzzy
-    match — so an unknown node can't have its values written to some
-    unrelated key ComfyUI would silently ignore.
+
+    Sibling lookup is deliberately narrow — never a fuzzy match — so an unknown
+    node's value lands on the one key we predicted rather than on a
+    lookalike. Note that when the predicted key is absent from *every* pair we
+    still return it unchanged, which does create a key the node never had;
+    ``registry.PROMPT_CLASSES`` exists because that failure mode is silent.
     """
     if field in inputs:
         return field
