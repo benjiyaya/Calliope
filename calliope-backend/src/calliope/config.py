@@ -25,6 +25,39 @@ DEFAULT_DATA_DIR = BACKEND_ROOT / "data"
 DEFAULT_ASSETS_DIR = DEFAULT_DATA_DIR / "assets"
 
 
+# Thinking modes an LLM profile can request per call. Lives here rather than in
+# agent/llm.py because config validates it on every profile save and agent/llm
+# imports config — putting the vocabulary at the bottom of the stack keeps the
+# dependency one-directional.
+#
+#   default -> send nothing, leave the server's own default in place
+#   off     -> chat_template_kwargs.enable_thinking = false
+#   level   -> chat_template_kwargs.reasoning_effort = <level>
+#
+# This matters more than it looks: a llama.cpp server started with
+# `--reasoning-effort xhigh` makes every prompt-formatting rewrite burn 10k+
+# reasoning tokens to emit one sentence.
+#
+# Which *level strings* a given model accepts is decided by its own chat
+# template and is not discoverable from /models — Qwen3-family templates take
+# low|medium|xhigh and silently map `high` to `xhigh`. An unsupported value
+# fails loudly at request time instead of being guessed at here.
+THINKING_DEFAULT = "default"
+THINKING_OFF = "off"
+THINKING_LEVELS = ("low", "medium", "high", "xhigh")
+THINKING_CHOICES = (THINKING_DEFAULT, THINKING_OFF, *THINKING_LEVELS)
+
+
+def normalize_thinking(value: Any) -> str | None:
+    """Coerce a stored/typed thinking mode to a canonical value or None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if not v or v == THINKING_DEFAULT:
+        return None
+    return v if v in (THINKING_OFF, *THINKING_LEVELS) else None
+
+
 def _strip_path_str(value: str | Path | None) -> str | None:
     """Normalize path strings; strip accidental wrapping quotes from UI paste."""
     if value is None:
@@ -184,6 +217,7 @@ class Settings(BaseSettings):
                     "base_url": self.llm_base_url,
                     "model": self.llm_model,
                     "api_key": self.llm_api_key,
+                    "thinking": None,
                 }
             ]
             self.llm_active_id = pid
@@ -207,6 +241,10 @@ class Settings(BaseSettings):
                         "base_url": base_url or self.llm_base_url,
                         "model": model or "llama3.2",
                         "api_key": key,
+                        # None = leave the server's own default alone. A server
+                        # started with --reasoning-effort xhigh would otherwise
+                        # burn 10k+ reasoning tokens on every formatting rewrite.
+                        "thinking": normalize_thinking(item.get("thinking")),
                     }
                 )
             if not normalized:
@@ -234,6 +272,20 @@ class Settings(BaseSettings):
         if profile.get("model"):
             self.llm_model = str(profile["model"])
         self.llm_api_key = profile.get("api_key") if isinstance(profile.get("api_key"), str) else None
+
+    def active_llm_profile(self) -> dict[str, Any]:
+        """The active profile dict, or {} when none is configured.
+
+        Read-only on purpose — unlike resolve_llm_for_role this never runs the
+        ensure/migrate pass, so callers on hot paths (e.g. LLMClient.__init__)
+        can read the current thinking setting without mutating config state.
+        """
+        profiles = self.llm_profiles if isinstance(self.llm_profiles, list) else []
+        active = next((p for p in profiles if isinstance(p, dict) and p.get("id") == self.llm_active_id), None)
+        if active is not None:
+            return active
+        first = next((p for p in profiles if isinstance(p, dict)), None)
+        return first if first is not None else {}
 
     def resolve_llm_for_role(self, role: str) -> dict[str, Any]:
         """Profile dict for an agent role: assignment → active fallback.
@@ -278,6 +330,12 @@ class Settings(BaseSettings):
                     "base_url": base_url or self.llm_base_url,
                     "model": model or "llama3.2",
                     "api_key": api_key,
+                    # Absent from the payload means "keep whatever was saved" —
+                    # an older client that never sends the field must not wipe
+                    # a thinking setting.
+                    "thinking": normalize_thinking(
+                        raw["thinking"] if "thinking" in raw else old.get("thinking")
+                    ),
                 }
             )
         if not new_list:
@@ -318,6 +376,7 @@ class Settings(BaseSettings):
                 "base_url": p["base_url"],
                 "model": p["model"],
                 "api_key": bool(p.get("api_key")),
+                "thinking": p.get("thinking"),
             }
             for p in self.llm_profiles
         ]

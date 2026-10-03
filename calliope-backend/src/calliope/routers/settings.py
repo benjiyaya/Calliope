@@ -5,7 +5,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from calliope.config import AGENT_LLM_ROLES, normalize_path, settings
+from calliope import llm_probe
+from calliope.config import AGENT_LLM_ROLES, THINKING_CHOICES, normalize_path, settings
 
 router = APIRouter()
 
@@ -18,6 +19,25 @@ class LlmProfileIn(BaseModel):
     base_url: str | None = None
     model: str | None = None
     api_key: str | None = None
+    thinking: str | None = None
+
+
+class LlmProbeIn(BaseModel):
+    """Probe a candidate endpoint from the settings form.
+
+    POST rather than GET so the API key travels in a body instead of a query
+    string (which lands in access logs). ``profile_id`` lets the backend fall
+    back to an already-saved key when the form has no unsaved draft.
+    """
+
+    profile_id: str | None = None
+    base_url: str = Field(..., min_length=1, max_length=2000)
+    api_key: str | None = Field(None, max_length=4000)
+    model: str | None = Field(None, max_length=500)
+    thinking: str | None = None
+    # A cold endpoint may spend this long loading the model before the first
+    # token; the httpx timeout bounds the gap BETWEEN chunks, not total time.
+    timeout: float | None = Field(None, ge=5, le=600)
 
 
 class SettingsUpdate(BaseModel):
@@ -43,9 +63,59 @@ class SettingsUpdate(BaseModel):
     dry_run: bool | None = None
 
 
+def _saved_api_key(profile_id: str | None) -> str | None:
+    """Saved key for a profile, so probing an untouched form still authenticates."""
+    if not profile_id:
+        return None
+    for profile in settings.llm_profiles or []:
+        if isinstance(profile, dict) and profile.get("id") == profile_id:
+            key = profile.get("api_key")
+            return key if isinstance(key, str) and key.strip() else None
+    return None
+
+
 @router.get("")
 async def get_settings() -> dict[str, Any]:
     return settings.to_public_dict()
+
+
+@router.get("/llm/thinking-options")
+async def llm_thinking_options() -> dict[str, Any]:
+    return {"options": list(THINKING_CHOICES)}
+
+
+@router.post("/llm/models")
+async def llm_models(payload: LlmProbeIn) -> dict[str, Any]:
+    """List the models an endpoint serves, with per-model capabilities.
+
+    Pure GET against the upstream endpoint — llama.cpp's router mode reports
+    vision support, context size and the effective reasoning effort without
+    loading anything, so this is safe to call while models are unloaded.
+    """
+    api_key = (payload.api_key or "").strip() or _saved_api_key(payload.profile_id)
+    return await llm_probe.fetch_models(payload.base_url, api_key, timeout=30.0)
+
+
+@router.post("/llm/test")
+async def llm_test(payload: LlmProbeIn) -> dict[str, Any]:
+    """Connectivity check: list models, then send one short completion.
+
+    The completion is skipped when the endpoint lists models but not the
+    requested one — that is exactly a mis-typed Model field, and answering it
+    by loading a multi-GB model would be pure waste. Use a generous timeout: a
+    cold endpoint loads the model before its first token.
+    """
+    model = (payload.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    api_key = (payload.api_key or "").strip() or _saved_api_key(payload.profile_id)
+    return await llm_probe.test_endpoint(
+        payload.base_url,
+        model,
+        api_key=api_key,
+        thinking=payload.thinking,
+        timeout=payload.timeout or 180.0,
+    )
 
 
 @router.post("")

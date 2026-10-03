@@ -75,12 +75,74 @@ export interface StoryData {
 	items: Item[];
 }
 
+/**
+ * Per-call thinking mode. `default` sends nothing and leaves the server's own
+ * default alone — note llama.cpp templates commonly default to `xhigh`, which
+ * makes even a one-sentence formatting rewrite burn thousands of reasoning
+ * tokens. Which *level strings* a model accepts is decided by its own chat
+ * template, not by us: Qwen3.x templates take low|medium|xhigh and raise on
+ * anything else.
+ */
+export type ThinkingMode = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface LlmProfile {
 	id: string;
 	name: string;
 	base_url: string;
 	model: string;
 	api_key: boolean;
+	thinking: ThinkingMode;
+}
+
+/** One row from GET {base_url}/models, normalized across server flavours. */
+export interface LlmModelInfo {
+	id: string;
+	/** Accepts image_url content parts (llama.cpp reports this per model). */
+	vision: boolean;
+	modalities: string[];
+	/** --ctx-size, when the server reports it. */
+	ctx: number | null;
+	/** Server-side default effort, e.g. `xhigh`. Null = unknown or disabled. */
+	reasoning_effort: string | null;
+	reasoning_disabled: boolean;
+	/** Speculative decoding backend, e.g. `draft-mtp`. */
+	speculative: string | null;
+	/** llama.cpp load state: `unloaded` | `loading` | `loaded`. */
+	loaded: string | null;
+}
+
+export interface LlmServerInfo {
+	role?: string;
+	build_info?: string;
+	max_instances?: number;
+	models_autoload?: boolean;
+	model_alias?: string;
+}
+
+export interface LlmModelsResponse {
+	ok: boolean;
+	models: LlmModelInfo[];
+	models_url: string | null;
+	server: LlmServerInfo | null;
+	error: string | null;
+}
+
+export interface LlmTestResponse extends LlmModelsResponse {
+	/** The model list was fetched at all — false means the endpoint is down. */
+	reachable: boolean;
+	model: string;
+	/** null = the server does not implement model listing. */
+	model_found: boolean | null;
+	available_models: string[];
+	thinking: ThinkingMode;
+	thinking_sent: Record<string, unknown>;
+	chat_ok: boolean;
+	latency_ms: number | null;
+	first_token_ms: number | null;
+	content: string | null;
+	reasoning_chars: number;
+	reasoning_preview: string | null;
+	usage: Record<string, unknown> | null;
 }
 
 export interface Settings {
@@ -267,6 +329,33 @@ export const settings = {
 	get: () => api<Settings>('/api/settings'),
 	update: (payload: Record<string, unknown>) =>
 		api<Settings>('/api/settings', { method: 'POST', body: JSON.stringify(payload) }),
+	/**
+	 * List the models an endpoint serves. `api_key` is only sent when the form
+	 * holds an unsaved draft; otherwise the backend falls back to the key saved
+	 * on `profile_id`. Pure metadata — llama.cpp answers without loading a model.
+	 */
+	llmModels: (payload: { profile_id?: string; base_url: string; api_key?: string }) =>
+		api<LlmModelsResponse>('/api/settings/llm/models', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	/**
+	 * Connectivity check: lists models, then sends one short completion with the
+	 * profile's thinking setting applied. Loads the model on a cold endpoint, so
+	 * pass a generous `timeout`.
+	 */
+	llmTest: (payload: {
+		profile_id?: string;
+		base_url: string;
+		model: string;
+		api_key?: string;
+		thinking?: ThinkingMode;
+		timeout?: number;
+	}) =>
+		api<LlmTestResponse>('/api/settings/llm/test', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
 };
 
 export const workflows = {

@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, AsyncIterator
 
 import httpx
 
-from calliope.config import settings
+from calliope.config import (
+    THINKING_CHOICES,
+    THINKING_DEFAULT,
+    THINKING_LEVELS,
+    THINKING_OFF,
+    normalize_thinking,
+    settings,
+)
 
 logger = logging.getLogger("calliope.llm")
+
+# Re-exported so callers can reach the whole thinking vocabulary from one place.
+__all__ = [
+    "LLMClient",
+    "THINKING_CHOICES",
+    "THINKING_DEFAULT",
+    "THINKING_LEVELS",
+    "THINKING_OFF",
+    "extract_json",
+    "normalize_thinking",
+    "thinking_extra_body",
+]
 
 # Status codes that mean "this server does not do SSE streaming at all" —
 # chat()/chat_with_tools() then fall back to one plain blocking POST. Anything
@@ -22,6 +42,27 @@ _TEXT_ONLY_ENDPOINTS: set[str] = set()
 
 _PROTECTED_PAYLOAD_KEYS = frozenset({"model", "messages", "stream"})
 
+# Fields whose value is itself a dict of knobs. Merged key-by-key instead of
+# replaced, so a per-profile thinking setting and a per-call override can both
+# be in flight (e.g. thinking="off" from the profile + reasoning_effort from the
+# H3 rewrite call site) without one clobbering the other.
+_NESTED_EXTRA_KEYS = frozenset({"chat_template_kwargs"})
+
+
+def thinking_extra_body(thinking: Any) -> dict[str, Any]:
+    """Request fields that put `thinking` into effect for one call.
+
+    ``chat_template_kwargs`` is the portable spelling: llama.cpp, vLLM,
+    SGLang and oMLX all forward it into the model's Jinja chat template, which
+    is where the Qwen3-family thinking switch actually lives.
+    """
+    mode = normalize_thinking(thinking)
+    if mode is None:
+        return {}
+    if mode == THINKING_OFF:
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return {"chat_template_kwargs": {"reasoning_effort": mode}}
+
 
 def _merge_extra_body(payload: dict[str, Any], extra_body: dict[str, Any] | None) -> None:
     """Merge caller-supplied OpenAI-compatible request fields into a payload.
@@ -29,10 +70,15 @@ def _merge_extra_body(payload: dict[str, Any], extra_body: dict[str, Any] | None
     Lets one call site pass server-specific knobs (e.g. Qwen3's
     ``chat_template_kwargs: {"enable_thinking": false}`` on oMLX / vLLM / SGLang)
     without the client knowing about them. The identity of the request —
-    model, messages, stream — cannot be overridden.
+    model, messages, stream — cannot be overridden. Later merges win, except
+    inside _NESTED_EXTRA_KEYS which are merged per key.
     """
     for key, value in (extra_body or {}).items():
         if key in _PROTECTED_PAYLOAD_KEYS:
+            continue
+        existing = payload.get(key)
+        if key in _NESTED_EXTRA_KEYS and isinstance(existing, dict) and isinstance(value, dict):
+            payload[key] = {**existing, **value}
             continue
         payload[key] = value
 
@@ -73,6 +119,13 @@ def _looks_like_image_rejection(status_code: int, body: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+def _probe_error(exc: BaseException) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text[:400] if exc.response is not None else ""
+        return f"HTTP {exc.response.status_code}: {body}".strip()
+    return f"{type(exc).__name__}: {exc}"
+
+
 class LLMClient:
     def __init__(
         self,
@@ -80,10 +133,20 @@ class LLMClient:
         model: str | None = None,
         api_key: str | None = None,
         timeout: float = 120.0,
+        thinking: str | None = None,
     ) -> None:
         self.base_url = (base_url or settings.llm_base_url).rstrip("/")
         self.model = model or settings.llm_model
         self.api_key = api_key if api_key is not None else settings.llm_api_key
+        # Thinking mode is a per-profile setting. When the caller did not pick a
+        # profile explicitly, fall back to the active one — otherwise a bare
+        # LLMClient() would silently ignore the user's choice.
+        if thinking is None and base_url is None and model is None:
+            thinking = settings.active_llm_profile().get("thinking")
+        self.thinking = normalize_thinking(thinking)
+        # Applied first on every request so a call-site extra_body can still
+        # override an individual knob (see _merge_extra_body).
+        self.thinking_extra_body = thinking_extra_body(self.thinking)
         # With every completion streamed (chat/chat_with_tools consume
         # chat_stream), the timeout bounds the gap BETWEEN chunks, not total
         # generation time: a thinking model streaming reasoning_content keeps
@@ -104,6 +167,7 @@ class LLMClient:
             model=profile.get("model"),
             api_key=profile.get("api_key") if isinstance(profile.get("api_key"), str) else None,
             timeout=timeout,
+            thinking=profile.get("thinking") if isinstance(profile.get("thinking"), str) else None,
         )
 
     def _headers(self) -> dict[str, str]:
@@ -118,13 +182,14 @@ class LLMClient:
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         outbound = messages
         if self._text_only and _has_image_parts(messages):
             outbound = _strip_image_parts(messages)
         try:
             return await self._chat_collect(
-                outbound, temperature, response_format, extra_body
+                outbound, temperature, response_format, extra_body, max_tokens
             )
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:500] if exc.response is not None else ""
@@ -141,6 +206,7 @@ class LLMClient:
                     temperature,
                     response_format,
                     extra_body,
+                    max_tokens,
                 )
             raise
 
@@ -150,6 +216,7 @@ class LLMClient:
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         try:
             parts: list[str] = []
@@ -159,6 +226,7 @@ class LLMClient:
                 temperature=temperature,
                 response_format=response_format,
                 extra_body=extra_body,
+                max_tokens=max_tokens,
             ):
                 if ev["type"] == "delta":
                     parts.append(ev["content"])
@@ -174,7 +242,7 @@ class LLMClient:
                 exc.response.status_code,
             )
             return await self._chat_blocking(
-                messages, temperature, response_format, extra_body=extra_body
+                messages, temperature, response_format, extra_body, max_tokens
             )
         content = "".join(parts).strip()
         if not content:
@@ -193,6 +261,7 @@ class LLMClient:
         temperature: float = 0.7,
         response_format: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -201,6 +270,9 @@ class LLMClient:
         }
         if response_format:
             payload["response_format"] = response_format
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        _merge_extra_body(payload, self.thinking_extra_body)
         _merge_extra_body(payload, extra_body)
 
         url = f"{self.base_url}/chat/completions"
@@ -221,6 +293,67 @@ class LLMClient:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    async def probe(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = 48,
+    ) -> dict[str, Any]:
+        """One short completion that verifies reachability AND thinking.
+
+        Never raises for an ordinary HTTP / network failure — the settings page
+        renders the whole picture from one dict. Streaming is preferred because
+        it separates time-to-first-token from total time and surfaces reasoning
+        tokens, which is the only honest evidence that a `thinking` setting took
+        effect; servers that reject streaming get one blocking retry.
+        """
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        started = time.perf_counter()
+        first_token_ms: int | None = None
+        content: list[str] = []
+        reasoning: list[str] = []
+        usage: dict[str, Any] | None = None
+
+        def _result(chat_ok: bool, error: str | None) -> dict[str, Any]:
+            reason_text = "".join(reasoning)
+            return {
+                "chat_ok": chat_ok,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "first_token_ms": first_token_ms,
+                "content": "".join(content).strip()[:400] or None,
+                "reasoning_chars": len(reason_text),
+                "reasoning_preview": reason_text.strip()[:200] or None,
+                "usage": usage,
+                "error": error,
+            }
+
+        try:
+            async for ev in self.chat_stream(messages, temperature=0.0, max_tokens=max_tokens):
+                if first_token_ms is None:
+                    first_token_ms = int((time.perf_counter() - started) * 1000)
+                kind = ev.get("type")
+                if kind == "delta":
+                    content.append(ev.get("content") or "")
+                elif kind == "reasoning":
+                    reasoning.append(ev.get("content") or "")
+                elif kind == "usage":
+                    usage = ev.get("usage")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _STREAM_UNSUPPORTED_STATUS:
+                return _result(False, _probe_error(exc))
+            # Streaming itself refused (not the request) — confirm with one
+            # plain call. Reasoning split is unavailable on this path.
+            try:
+                text = await self._chat_blocking(messages, temperature=0.0, max_tokens=max_tokens)
+            except Exception as blocking_exc:  # noqa: BLE001 - reported, not raised
+                return _result(False, _probe_error(blocking_exc))
+            content = [text]
+            return _result(True, None)
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return _result(False, _probe_error(exc))
+
+        return _result(True, None)
 
     async def chat_with_tools(
         self,
@@ -302,6 +435,7 @@ class LLMClient:
             payload["tools"] = tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
+        _merge_extra_body(payload, self.thinking_extra_body)
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM tool-call request to %s with model %s", url, self.model)
         resp = await self.client.post(url, headers=self._headers(), json=payload)
@@ -329,6 +463,7 @@ class LLMClient:
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Streaming completion. Yields event dicts:
 
@@ -355,6 +490,9 @@ class LLMClient:
                 payload["tool_choice"] = tool_choice
         if response_format:
             payload["response_format"] = response_format
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        _merge_extra_body(payload, self.thinking_extra_body)
         _merge_extra_body(payload, extra_body)
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM stream request to %s with model %s", url, self.model)
