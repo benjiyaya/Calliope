@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import tempfile
 import uuid
@@ -21,6 +22,8 @@ if getattr(sys, "frozen", False):
 else:
     BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_FILE = BACKEND_ROOT / "calliope_config.json"
+
+logger = logging.getLogger("calliope.config")
 DEFAULT_DATA_DIR = BACKEND_ROOT / "data"
 DEFAULT_ASSETS_DIR = DEFAULT_DATA_DIR / "assets"
 
@@ -152,6 +155,9 @@ class Settings(BaseSettings):
     # profile so LLMClient and env overrides keep working.
     llm_profiles: list[dict[str, Any]] = Field(default_factory=list)
     llm_active_id: str | None = None
+    # Legacy/global context override for servers that do not report /models
+    # metadata. Per-profile `context_tokens` wins; 0 = probe, then fallback.
+    llm_context_tokens: int = 0
     # role (AGENT_LLM_ROLES) -> LLM profile id; None/absent = use Active LLM
     agent_llm_assignments: dict[str, str | None] = Field(default_factory=dict)
 
@@ -169,10 +175,33 @@ class Settings(BaseSettings):
     queue_max_retries: int = 2
     agent_max_steps: int = 24
     agent_hardening_prompt: str = DEFAULT_AGENT_HARDENING_PROMPT
-    # Character budget (~4 chars/token) for the derived LLM history — the
-    # 40-turn cap alone can still overflow a context window with heavy
-    # multi-step turns. Oldest whole turns drop first; 0 = disabled.
-    agent_history_char_budget: int = 400_000
+
+    # ── Context-window budget ────────────────────────────────────────────────
+    # The chat history used to be trimmed by raw character count against a
+    # hardcoded "~4 chars/token" assumption. That holds for English but is ~2.7x
+    # optimistic for Chinese, which is most of what Calliope sends (workspace
+    # digests, scene text, agent replies) — a 400k-char history was really
+    # ~250k tokens against a 131k window. The budget is now derived from the
+    # model's reported context, minus room for the system prompt, the tool
+    # schemas and the reply.
+    #
+    # `agent_history_char_budget` survives as a manual override: 0 = derive it
+    # from the active profile's `context_tokens` (filled by the model probe
+    # from the server's /models `--ctx-size`), falling back to
+    # `llm_context_fallback_tokens` when the server reports nothing.
+    agent_history_char_budget: int = 0
+    # Fraction of the window the trimmed history may occupy. The remainder pays
+    # for the per-step system prompt + tool schemas, which the char trim never
+    # sees because prompts.assemble() rebuilds them outside the history list.
+    agent_history_token_share: float = 0.5
+    llm_context_fallback_tokens: int = 8192
+    # Characters per token. 1.6 is deliberately conservative for mixed CJK/ASCII;
+    # too high overflows the window, too low truncates history needlessly.
+    llm_chars_per_token: float = 1.6
+    # Sent as `max_tokens` on every real LLM call. Unset means the server
+    # default, which on llama.cpp is unlimited — the reply can then eat the
+    # whole remaining window.
+    llm_max_output_tokens: int = 4096
     # Extra OpenAI-compatible request fields merged into the MiniMax H3 prompt
     # rewrite call only (the `minimax_h3_ref` profile). The rewrite is a
     # formatting task: on a thinking model it can burn 10k+ reasoning tokens per
@@ -287,6 +316,51 @@ class Settings(BaseSettings):
         first = next((p for p in profiles if isinstance(p, dict)), None)
         return first if first is not None else {}
 
+    def context_window_tokens(self) -> int:
+        """Context size of the model that will actually serve the request.
+
+        Prefers the active profile's `context_tokens` (written by the model
+        probe from the server's /models `--ctx-size`), then the legacy
+        `llm_context_tokens`, and finally `llm_context_fallback_tokens` — a
+        server that reports nothing must not be assumed to have a 128k window.
+        """
+        for value in (self.active_llm_profile().get("context_tokens"), self.llm_context_tokens):
+            try:
+                n = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                return n
+        return max(1024, int(self.llm_context_fallback_tokens or 8192))
+
+    def history_char_budget(self) -> int:
+        """Character ceiling for the derived chat history.
+
+        A non-zero `agent_history_char_budget` is an operator override and is
+        returned as-is. Otherwise the ceiling is derived from the model's
+        window: `context * share` tokens, converted at `chars_per_token`. The
+        share leaves room for what the trim cannot see — the per-step system
+        prompt and the full tool schema set, both rebuilt outside the history
+        list by prompts.assemble().
+        """
+        try:
+            override = int(self.agent_history_char_budget or 0)
+        except (TypeError, ValueError):
+            override = 0
+        if override > 0:
+            return override
+        try:
+            share = float(self.agent_history_token_share)
+        except (TypeError, ValueError):
+            share = 0.5
+        share = min(max(share, 0.05), 0.95)
+        try:
+            chars_per_token = float(self.llm_chars_per_token)
+        except (TypeError, ValueError):
+            chars_per_token = 1.6
+        chars_per_token = min(max(chars_per_token, 0.5), 8.0)
+        return int(self.context_window_tokens() * share * chars_per_token)
+
     def resolve_llm_for_role(self, role: str) -> dict[str, Any]:
         """Profile dict for an agent role: assignment → active fallback.
 
@@ -336,6 +410,13 @@ class Settings(BaseSettings):
                     "thinking": normalize_thinking(
                         raw["thinking"] if "thinking" in raw else old.get("thinking")
                     ),
+                    # Same "absent means keep" rule as thinking: the probe fills
+                    # this in, so a save from an older client must not discard it.
+                    "context_tokens": int(
+                        raw["context_tokens"]
+                        if str(raw.get("context_tokens") or "").strip()
+                        else old.get("context_tokens") or 0
+                    ),
                 }
             )
         if not new_list:
@@ -377,6 +458,7 @@ class Settings(BaseSettings):
                 "model": p["model"],
                 "api_key": bool(p.get("api_key")),
                 "thinking": p.get("thinking"),
+                "context_tokens": int(p.get("context_tokens") or 0),
             }
             for p in self.llm_profiles
         ]
@@ -396,6 +478,10 @@ class Settings(BaseSettings):
             "llm_api_key": bool(self.llm_api_key),
             "llm_profiles": profiles,
             "llm_active_id": self.llm_active_id,
+            "llm_context_tokens": int(self.llm_context_tokens or 0),
+            "llm_context_fallback_tokens": int(self.llm_context_fallback_tokens),
+            "llm_chars_per_token": float(self.llm_chars_per_token),
+            "llm_max_output_tokens": int(self.llm_max_output_tokens),
             "agent_llm_assignments": dict(self.agent_llm_assignments or {}),
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
@@ -404,7 +490,10 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
-            "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_history_char_budget": int(self.agent_history_char_budget or 0),
+            "agent_history_token_share": float(self.agent_history_token_share),
+            "agent_history_char_budget_effective": self.history_char_budget(),
+            "context_window_tokens": self.context_window_tokens(),
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
@@ -435,8 +524,16 @@ class Settings(BaseSettings):
         path_keys = {"data_dir", "assets_dir", "agent_workspace_dir"}
         # Ignore legacy comfyui_input_dir / comfyui_output_dir if present in old configs.
         skip_keys = {"comfyui_input_dir", "comfyui_output_dir"}
+        # Checked against the declared FIELDS, not hasattr: a stored key that
+        # happens to share a method's name (context_window_tokens) passes
+        # hasattr and then raises inside pydantic, which takes the whole backend
+        # down on startup. An unrecognised key is a stale file, not a crash.
+        known = set(type(self).model_fields)
         for key, value in data.items():
             if key in skip_keys:
+                continue
+            if key not in known:
+                logger.warning("Ignoring unknown key %r in %s", key, CONFIG_FILE.name)
                 continue
             if key in path_keys:
                 value = normalize_path(value)
@@ -444,7 +541,7 @@ class Settings(BaseSettings):
                 value = bool(value)
             if key == "agent_shell_enabled":
                 value = bool(value)
-            if hasattr(self, key) and key not in {"data_dir", "assets_dir", "agent_workspace_dir"}:
+            if key not in {"data_dir", "assets_dir", "agent_workspace_dir"}:
                 setattr(self, key, value)
 
         data_dir = normalize_path(data.get("data_dir")) or DEFAULT_DATA_DIR
@@ -499,7 +596,13 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
-            "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_history_char_budget": int(self.agent_history_char_budget or 0),
+            "agent_history_token_share": float(self.agent_history_token_share),
+            # Derived values are deliberately NOT persisted: they are computed
+            # from the profile's probed context window, which changes on its own.
+            # Writing them here would also put keys that collide with Settings
+            # methods (context_window_tokens) into the file that load_config_file
+            # setattrs blindly.
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),

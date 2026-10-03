@@ -144,10 +144,10 @@ def test_enqueue_merges_stored_input_values(client, monkeypatch):
         conn.close()
 
     # Skip the LLM rewrite — the fallback template is deterministic
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         return "fallback"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
     from calliope.queue.manager import queue_manager
 
@@ -183,10 +183,10 @@ def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
     finally:
         conn.close()
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         return "H3 REWRITE"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
     queue_manager.paused = True
     try:
@@ -254,11 +254,11 @@ def test_preview_prompt_fresh_draft_shortcircuits_llm(client, monkeypatch):
 
     called = []
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         called.append(1)
         return "SHOULD NOT BE USED"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
     result = asyncio_run(preview_clip_prompt(pid, clip_id))
     assert result["prompt"] == "MY SAVED DRAFT"
@@ -331,10 +331,10 @@ def test_enqueue_prompts_override(client, monkeypatch):
     finally:
         conn.close()
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         return "LLM VERSION"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
     from calliope.queue.manager import queue_manager
 
@@ -462,13 +462,13 @@ def test_preview_prompt_uses_form_references_not_story_cast(client, monkeypatch)
 
     seen: dict = {}
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         seen["subjects"] = subjects
         seen["videos"] = kwargs.get("videos")
         seen["calls"] = seen.get("calls", 0) + 1
         return "REWRITE FROM REFS"
 
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
     form = {
         "148": r"E:\refs\hero.png",

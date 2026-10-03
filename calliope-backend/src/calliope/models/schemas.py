@@ -264,3 +264,22 @@ class PreviewPromptRequest(BaseModel):
     input_values: dict[str, Any] | None = None
     # Skip a fresh saved draft and rewrite from the current references.
     force: bool = False
+
+
+class BatchPromptRequest(BaseModel):
+    """Compile many clips' H3 prompts up front. Queues no render.
+
+    Leave ``clip_ids`` empty for the whole project (in playback order) — that is
+    the "fill in the gaps" case. Pass one id to recompile a single shot.
+    """
+
+    clip_ids: list[int] | None = None
+    workflow_id: int | None = None
+    input_values: dict[str, Any] | None = None
+    # Recompile even when a saved draft is still fresh against its fingerprint.
+    force: bool = True
+    # Skip clips that already carry a draft instead of recompiling them.
+    only_missing: bool = False
+    # Persist each prompt as the clip's draft so the Generate that follows needs
+    # no LLM call. Off means a dry run the UI can show without committing.
+    save: bool = True

@@ -87,7 +87,7 @@ def _touch_clip(name: str) -> str:
     return str(path)
 
 
-def test_continue_scene_requires_video_input_role(client):
+def test_continue_scene_requires_video_input_role(client, caplog):
     pid = _mk_project(client, "No Video WF")
     _add_scene(client, pid, 1)
     scene2 = _add_scene(client, pid, 2)
@@ -98,17 +98,14 @@ def test_continue_scene_requires_video_input_role(client):
     finally:
         conn.close()
 
-    try:
-        asyncio.run(enqueue_video_jobs(pid))
-    except ValueError as exc:
-        assert "no video input" in str(exc)
-        assert "(Input:video)" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for workflow without video role")
+    # The bad clip is SKIPPED, not raised: one scene pointed at a workflow with
+    # no video input must not cost the batch the scene that can render.
+    jobs = asyncio.run(enqueue_video_jobs(pid))
 
-    # Supersede + video_path clear happened for scene 1 before the failure on
-    # scene 2; the failing scene must not have produced a job.
+    assert len(jobs) == 1
     assert len(_job_payloads(pid)) == 1
+    assert "no video input" in caplog.text
+    assert "(Input:video)" in caplog.text
 
 
 def test_continue_scene_uses_previous_clip_path(client):

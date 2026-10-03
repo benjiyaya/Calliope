@@ -64,6 +64,85 @@ def thinking_extra_body(thinking: Any) -> dict[str, Any]:
     return {"chat_template_kwargs": {"reasoning_effort": mode}}
 
 
+def estimate_prompt_tokens(messages: list[dict[str, Any]]) -> int:
+    """Rough token count for a request, using the configured chars-per-token.
+
+    Not a tokenizer — it exists so the reply ceiling can be clamped against the
+    serving model's window. Image parts are counted at a flat rate: base64
+    length wildly overstates them (a 512 KB JPEG is ~700k characters but only a
+    few hundred tokens after decoding), so a flat estimate is closer than the
+    character count and still errs high, which is the safe direction.
+    """
+    chars_per_token = max(float(getattr(settings, "llm_chars_per_token", 1.6) or 1.6), 0.5)
+    total_chars = 0
+    image_parts = 0
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    image_parts += 1
+                else:
+                    total_chars += len(str(part.get("text") or ""))
+    return int(total_chars / chars_per_token) + image_parts * 1024
+
+
+def resolve_max_tokens(
+    messages: list[dict[str, Any]],
+    requested: int | None,
+    *,
+    reserve: int = 1024,
+) -> int | None:
+    """Reply ceiling for a request: the caller's, else the configured default.
+
+    Unset used to mean "server default", which on llama.cpp is unlimited — the
+    reply could then consume whatever the history left and overflow the window
+    from the output side. The value is then clamped so the estimated prompt
+    plus the reply still fits the model's window; the clamp is logged because it
+    silently shortens an answer.
+    """
+    if requested is not None:
+        return requested
+    configured = int(getattr(settings, "llm_max_output_tokens", 0) or 0)
+    if configured <= 0:
+        return None
+    window = max(1024, int(settings.context_window_tokens()))
+    headroom = window - estimate_prompt_tokens(messages) - reserve
+    if headroom < configured:
+        logger.warning(
+            "Clamping max_tokens %d -> %d: estimated prompt leaves only %d of %d tokens",
+            configured,
+            max(256, headroom),
+            max(0, headroom),
+            window,
+        )
+        configured = max(256, headroom)
+    return configured
+
+
+def _payload_messages_for_estimate(
+    messages: list[dict[str, Any]], tools: Any = None
+) -> list[dict[str, Any]]:
+    """Messages plus a stand-in for the tool schemas, for size estimation only.
+
+    The agent loop's system prompt and its full tool schema set are rebuilt
+    outside the trimmed history, so a history-only estimate understates the
+    prompt by tens of thousands of tokens.
+    """
+    out = list(messages)
+    if tools:
+        try:
+            blob = json.dumps(tools, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            blob = str(tools)
+        out.append({"role": "system", "content": blob})
+    return out
+
+
 def _merge_extra_body(payload: dict[str, Any], extra_body: dict[str, Any] | None) -> None:
     """Merge caller-supplied OpenAI-compatible request fields into a payload.
 
@@ -270,8 +349,9 @@ class LLMClient:
         }
         if response_format:
             payload["response_format"] = response_format
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        ceiling = resolve_max_tokens(messages, max_tokens)
+        if ceiling is not None:
+            payload["max_tokens"] = ceiling
         _merge_extra_body(payload, self.thinking_extra_body)
         _merge_extra_body(payload, extra_body)
 
@@ -490,8 +570,14 @@ class LLMClient:
                 payload["tool_choice"] = tool_choice
         if response_format:
             payload["response_format"] = response_format
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        # The tool schemas and the system prompt are invisible to the history
+        # char trim, so the reply ceiling is what keeps a long agent turn inside
+        # the window — measure them, not just the message list.
+        ceiling = resolve_max_tokens(
+            _payload_messages_for_estimate(messages, tools), max_tokens
+        )
+        if ceiling is not None:
+            payload["max_tokens"] = ceiling
         _merge_extra_body(payload, self.thinking_extra_body)
         _merge_extra_body(payload, extra_body)
         url = f"{self.base_url}/chat/completions"

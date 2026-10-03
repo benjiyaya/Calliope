@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from calliope import llm_probe
 from calliope.config import AGENT_LLM_ROLES, THINKING_CHOICES, normalize_path, settings
+
+logger = logging.getLogger("calliope.settings")
 
 router = APIRouter()
 
@@ -20,6 +23,10 @@ class LlmProfileIn(BaseModel):
     model: str | None = None
     api_key: str | None = None
     thinking: str | None = None
+    # Context window of the served model, from the probe's /models metadata
+    # (`--ctx-size`). 0 / absent = ask the server, then fall back — never assume
+    # a large window, or the history budget overflows on the first long turn.
+    context_tokens: int | None = Field(None, ge=0, le=10_000_000)
 
 
 class LlmProbeIn(BaseModel):
@@ -58,7 +65,14 @@ class SettingsUpdate(BaseModel):
     queue_max_retries: int | None = Field(None, ge=0, le=10)
     agent_max_steps: int | None = Field(None, ge=1, le=100)
     agent_hardening_prompt: str | None = Field(None, max_length=20000)
-    agent_history_char_budget: int | None = Field(None, ge=10_000, le=2_000_000)
+    agent_history_char_budget: int | None = Field(
+        None, ge=0, le=2_000_000, description="0 = derive from the model's context window"
+    )
+    agent_history_token_share: float | None = Field(None, ge=0.05, le=0.95)
+    llm_context_tokens: int | None = Field(None, ge=0, le=10_000_000)
+    llm_context_fallback_tokens: int | None = Field(None, ge=1024, le=10_000_000)
+    llm_chars_per_token: float | None = Field(None, ge=0.5, le=8.0)
+    llm_max_output_tokens: int | None = Field(None, ge=0, le=200_000)
     h3_rewrite_extra_body: dict[str, Any] | None = None
     dry_run: bool | None = None
 
@@ -109,13 +123,44 @@ async def llm_test(payload: LlmProbeIn) -> dict[str, Any]:
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
     api_key = (payload.api_key or "").strip() or _saved_api_key(payload.profile_id)
-    return await llm_probe.test_endpoint(
+    result = await llm_probe.test_endpoint(
         payload.base_url,
         model,
         api_key=api_key,
         thinking=payload.thinking,
         timeout=payload.timeout or 180.0,
     )
+    _remember_context_tokens(result, model)
+    return result
+
+
+def _remember_context_tokens(result: dict[str, Any], model: str) -> None:
+    """Cache the served model's context window onto the matching profile.
+
+    The history budget is derived from this, and the only trustworthy source is
+    the server itself. A window the server never reported is never invented —
+    otherwise a dead endpoint would leave a fabricated value behind that
+    silently raises the budget.
+    """
+    try:
+        ctx = int(result.get("context_tokens") or 0)
+    except (TypeError, ValueError):
+        return
+    if ctx <= 0:
+        return
+    for profile in settings.llm_profiles or []:
+        if not isinstance(profile, dict):
+            continue
+        if profile.get("model") == model and profile.get("context_tokens") != ctx:
+            profile["context_tokens"] = ctx
+            settings.save_config_file()
+            logger.info(
+                "Cached context_tokens=%d for profile %s (model %s)",
+                ctx,
+                profile.get("id"),
+                model,
+            )
+            return
 
 
 @router.post("")

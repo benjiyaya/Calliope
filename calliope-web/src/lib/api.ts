@@ -92,6 +92,12 @@ export interface LlmProfile {
 	model: string;
 	api_key: boolean;
 	thinking: ThinkingMode;
+	/**
+	 * Context window of the served model, cached from the probe's /models
+	 * metadata. 0 = never probed, or the server reports none — the backend then
+	 * uses its own fallback rather than assuming a generous window.
+	 */
+	context_tokens: number;
 }
 
 /** One row from GET {base_url}/models, normalized across server flavours. */
@@ -165,6 +171,16 @@ export interface Settings {
 	agent_max_steps: number;
 	agent_hardening_prompt: string;
 	agent_history_char_budget: number;
+	/** Fraction of the context window the trimmed history may occupy. */
+	agent_history_token_share: number;
+	/** Server-computed char ceiling actually in force (override or derived). */
+	agent_history_char_budget_effective: number;
+	/** Context window of the serving model, from the probe or the fallback. */
+	context_window_tokens: number;
+	llm_context_tokens: number;
+	llm_context_fallback_tokens: number;
+	llm_chars_per_token: number;
+	llm_max_output_tokens: number;
 	agent_llm_assignments: Record<string, string | null>;
 	agent_shell_enabled: boolean;
 	dry_run: boolean;
@@ -431,6 +447,43 @@ export const jobsApi = {
 			based_on: string;
 			critic?: { ok: boolean; notes: string[] };
 		}>(`/api/jobs/projects/${projectId}/preview-prompt`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	/**
+	 * Compile H3 prompts without queueing a render. One call covers both
+	 * "recompile this shot" (clip_ids: [id]) and "fill the gaps"
+	 * (only_missing: true). Prompts are saved, so the Generate that follows
+	 * spends no LLM call at all.
+	 */
+	batchPrompt: (
+		projectId: number,
+		payload: {
+			clip_ids?: number[];
+			workflow_id?: number;
+			input_values?: Record<string, unknown>;
+			force?: boolean;
+			only_missing?: boolean;
+			save?: boolean;
+		},
+	) =>
+		api<{
+			results: {
+				clip_id: number;
+				label: string;
+				ok: boolean;
+				prompt?: string;
+				profile?: string;
+				from_draft?: boolean;
+				saved?: boolean;
+				error?: string;
+			}[];
+			skipped: number;
+			total: number;
+			endpoint_dead: boolean;
+			compiled: number;
+			failed: number;
+		}>(`/api/jobs/projects/${projectId}/batch-prompt`, {
 			method: 'POST',
 			body: JSON.stringify(payload),
 		}),

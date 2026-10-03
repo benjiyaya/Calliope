@@ -13,9 +13,16 @@ def test_history_budget_roundtrip(client, monkeypatch):
 
 
 def test_history_budget_rejects_below_floor(client):
-    """ge=10_000 — a 4999-char budget is a validation error, not a silent set."""
-    r = client.post("/api/settings", json={"agent_history_char_budget": 4_999})
+    """ge=0 — the floor used to be 10_000, but 0 now means 'derive it'."""
+    r = client.post("/api/settings", json={"agent_history_char_budget": -1})
     assert r.status_code == 422
+
+
+def test_history_budget_accepts_zero_as_auto(client):
+    """0 is the auto mode, so it must round-trip rather than be rejected."""
+    r = client.post("/api/settings", json={"agent_history_char_budget": 0})
+    assert r.status_code == 200
+    assert r.json()["agent_history_char_budget"] == 0
 
 
 def test_history_budget_rejects_above_ceiling(client):

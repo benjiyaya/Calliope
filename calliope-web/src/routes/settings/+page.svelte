@@ -63,6 +63,11 @@
 		agent_hardening_prompt: 'agent',
 		agent_llm_assignments: 'agent',
 		agent_history_char_budget: 'agent',
+		agent_history_token_share: 'agent',
+		llm_max_output_tokens: 'agent',
+		llm_chars_per_token: 'agent',
+		llm_context_fallback_tokens: 'agent',
+		llm_context_tokens: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
 		agent_workspace_dir: 'storage',
@@ -77,7 +82,12 @@
 		queue_poll_timeout_sec: { min: 0, max: 86400, labelKey: 'settings.pollTimeoutField' },
 		queue_max_retries: { min: 0, max: 10, labelKey: 'settings.maxRetriesField' },
 		agent_max_steps: { min: 1, max: 100, labelKey: 'settings.agentMaxStepsField' },
-		agent_history_char_budget: { min: 10000, max: 2000000, labelKey: 'settings.historyBudgetField' },
+		agent_history_char_budget: { min: 0, max: 2000000, labelKey: 'settings.historyBudgetField' },
+		agent_history_token_share: { min: 0.05, max: 0.95, labelKey: 'settings.historyShareField' },
+		llm_max_output_tokens: { min: 0, max: 200000, labelKey: 'settings.maxOutputField' },
+		llm_chars_per_token: { min: 0.5, max: 8, labelKey: 'settings.charsPerTokenField' },
+		llm_context_fallback_tokens: { min: 1024, max: 10000000, labelKey: 'settings.fallbackCtxField' },
+		llm_context_tokens: { min: 0, max: 10000000, labelKey: 'settings.contextOverrideField' },
 	};
 	const dirtyTabs = $derived(
 		new Set(dirtyKeys.map((k) => FIELD_TAB[k]).filter((t): t is string => Boolean(t))),
@@ -145,6 +155,9 @@
 						base_url: p.base_url.trim(),
 						model: p.model.trim(),
 						thinking: p.thinking ?? 'default',
+						// Sent back so the backend's "absent means keep" rule does not
+						// discard the window the probe cached.
+						context_tokens: p.context_tokens ?? 0,
 					};
 					const key = apiKeyDrafts[p.id];
 					if (key) row.api_key = key;
@@ -225,6 +238,7 @@
 
 	// History budget presets (chars). Large matches the backend default (400k).
 	const HISTORY_BUDGET_PRESETS: { value: number; labelKey: string }[] = [
+		{ value: 0, labelKey: 'settings.historyBudgetAuto' },
 		{ value: 60_000, labelKey: 'settings.historyBudgetSmall' },
 		{ value: 120_000, labelKey: 'settings.historyBudgetMedium' },
 		{ value: 400_000, labelKey: 'settings.historyBudgetLarge' },
@@ -237,6 +251,46 @@
 				: Number(s.agent_history_char_budget ?? 0);
 		return current === value;
 	}
+
+	// What the backend will actually trim to, so the operator sees the effect
+	// of their edit instead of having to save and reopen. The backend computes
+	// the real number (it owns the profile's probed context window); this is the
+	// same arithmetic for the unsaved draft.
+	//
+	// `$settingsQuery.data`, not the template's `{@const s}`: that binding only
+	// exists inside the markup block, not in script scope.
+	const savedCharBudget = $derived(
+		Number($settingsQuery.data?.agent_history_char_budget ?? 0),
+	);
+	const effectiveBudgetChars = $derived.by(() => {
+		const override = Number(
+			draft.agent_history_char_budget !== undefined
+				? draft.agent_history_char_budget
+				: savedCharBudget,
+		);
+		if (Number.isFinite(override) && override > 0) return override;
+		const share = Number(
+			draft.agent_history_token_share !== undefined
+				? draft.agent_history_token_share
+				: ($settingsQuery.data?.agent_history_token_share ?? 0.5),
+		);
+		const perToken = Number(
+			draft.llm_chars_per_token !== undefined
+				? draft.llm_chars_per_token
+				: ($settingsQuery.data?.llm_chars_per_token ?? 1.6),
+		);
+		const ctx = Number($settingsQuery.data?.context_window_tokens ?? 0);
+		if (!ctx) return 0;
+		const clampedShare = Math.min(Math.max(share || 0.5, 0.05), 0.95);
+		const clampedPer = Math.min(Math.max(perToken || 1.6, 0.5), 8);
+		return Math.floor(ctx * clampedShare * clampedPer);
+	});
+	const effectiveBudgetTokens = $derived(
+		Math.round(
+			effectiveBudgetChars /
+				(Number($settingsQuery.data?.llm_chars_per_token ?? 1.6) || 1.6),
+		),
+	);
 
 	// Snap out-of-range numbers back into the valid range when the user leaves
 	// the field, so a typed 200 never reaches the backend.
@@ -274,6 +328,7 @@
 				model: s.llm_model,
 				api_key: s.llm_api_key,
 				thinking: 'default',
+				context_tokens: 0,
 			},
 		];
 	}
@@ -865,7 +920,7 @@
 						class="field-input"
 						class:invalid={validationErrors.agent_history_char_budget}
 						type="number"
-						min="10000"
+						min="0"
 						max="2000000"
 						step="1000"
 						value={String(fieldValue('agent_history_char_budget', s.agent_history_char_budget))}
@@ -888,6 +943,94 @@
 						{/each}
 					</div>
 					<p class="field-hint">{t('settings.historyBudgetHint')}</p>
+					<p class="field-hint">
+						{t('settings.historyBudgetEffective', {
+							chars: effectiveBudgetChars,
+							tokens: effectiveBudgetTokens,
+							ctx: s.context_window_tokens ?? 0,
+						})}
+					</p>
+				</label>
+
+				<div class="callout">
+					<Icon name="info" size={16} />
+					<p>{t('settings.contextLead')}</p>
+				</div>
+
+				<label class="field">
+					<span class="field-label">{t('settings.maxOutputField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_max_output_tokens}
+						type="number"
+						min="0"
+						max="200000"
+						step="256"
+						value={String(fieldValue('llm_max_output_tokens', s.llm_max_output_tokens))}
+						oninput={(e) => (draft.llm_max_output_tokens = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_max_output_tokens')}
+					/>
+					{#if validationErrors.llm_max_output_tokens}
+						<p class="field-error">{validationErrors.llm_max_output_tokens}</p>
+					{/if}
+					<p class="field-hint">{t('settings.maxOutputHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.historyShareField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.agent_history_token_share}
+						type="number"
+						min="0.05"
+						max="0.95"
+						step="0.05"
+						value={String(fieldValue('agent_history_token_share', s.agent_history_token_share))}
+						oninput={(e) => (draft.agent_history_token_share = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'agent_history_token_share')}
+					/>
+					{#if validationErrors.agent_history_token_share}
+						<p class="field-error">{validationErrors.agent_history_token_share}</p>
+					{/if}
+					<p class="field-hint">{t('settings.historyShareHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.charsPerTokenField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_chars_per_token}
+						type="number"
+						min="0.5"
+						max="8"
+						step="0.1"
+						value={String(fieldValue('llm_chars_per_token', s.llm_chars_per_token))}
+						oninput={(e) => (draft.llm_chars_per_token = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_chars_per_token')}
+					/>
+					{#if validationErrors.llm_chars_per_token}
+						<p class="field-error">{validationErrors.llm_chars_per_token}</p>
+					{/if}
+					<p class="field-hint">{t('settings.charsPerTokenHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.fallbackCtxField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_context_fallback_tokens}
+						type="number"
+						min="1024"
+						max="10000000"
+						step="1024"
+						value={String(fieldValue('llm_context_fallback_tokens', s.llm_context_fallback_tokens))}
+						oninput={(e) => (draft.llm_context_fallback_tokens = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_context_fallback_tokens')}
+					/>
+					{#if validationErrors.llm_context_fallback_tokens}
+						<p class="field-error">{validationErrors.llm_context_fallback_tokens}</p>
+					{/if}
+					<p class="field-hint">{t('settings.fallbackCtxHint')}</p>
 				</label>
 			</section>
 			<section class="panel">

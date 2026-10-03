@@ -294,7 +294,7 @@ def test_preview_returns_critic_notes(client, monkeypatch):
             "refreshed": True,
         }
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         assert "sodium" in (kwargs.get("continuity") or "")
         return "COMPILED CANDIDATE"
 
@@ -303,7 +303,7 @@ def test_preview_returns_critic_notes(client, monkeypatch):
         return {"ok": False, "notes": ["lighting contradicts the previous shot"]}
 
     monkeypatch.setattr("calliope.agent.video_agent.ensure_continuity_plan", fake_plan)
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
     result = asyncio.run(preview_clip_prompt(pid, clip_id))
@@ -335,14 +335,14 @@ def test_failing_critic_keeps_the_compiled_prompt(client, monkeypatch):
             "refreshed": False,
         }
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         return "COMPILED CANDIDATE"
 
     async def fake_critic(prompt, plan, clip_id_):
         raise RuntimeError("judge down")
 
     monkeypatch.setattr("calliope.agent.video_agent.ensure_continuity_plan", fake_plan)
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
     result = asyncio.run(preview_clip_prompt(pid, clip_id))
@@ -429,14 +429,14 @@ def test_failing_critic_keeps_a_saved_draft(client, monkeypatch):
             "refreshed": False,
         }
 
-    async def fake_rewrite(scene_, subjects, **kwargs):
+    async def fake_rewrite(self_, scene_, subjects, **kwargs):
         raise AssertionError("fresh draft must skip the compiler")
 
     async def fake_critic(prompt, plan, clip_id_):
         raise RuntimeError("judge down")
 
     monkeypatch.setattr("calliope.agent.video_agent.ensure_continuity_plan", fake_plan)
-    monkeypatch.setattr("calliope.agent.video_agent._h3_rewrite", fake_rewrite)
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
     result = asyncio.run(preview_clip_prompt(pid, clip_id))

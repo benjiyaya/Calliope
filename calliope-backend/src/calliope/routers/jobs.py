@@ -5,13 +5,18 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from calliope.agent.video_agent import enqueue_video_jobs, preview_clip_prompt
+from calliope.agent.video_agent import (
+    enqueue_video_jobs,
+    preview_clip_prompt,
+    rewrite_clip_prompts,
+)
 from calliope.comfyui.client import ComfyUIClient
 from calliope.config import settings
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import kill_running
 from calliope.models.schemas import (
+    BatchPromptRequest,
     GenerateVideosRequest,
     JobCreate,
     PreviewPromptRequest,
@@ -102,6 +107,29 @@ async def preview_prompt(project_id: int, payload: PreviewPromptRequest) -> dict
             workflow_id=payload.workflow_id,
             input_values=payload.input_values,
             force=payload.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/batch-prompt")
+async def batch_prompt(project_id: int, payload: BatchPromptRequest) -> dict[str, Any]:
+    """Compile H3 prompts for many clips, queueing nothing.
+
+    Answers "regenerate this one shot's prompt" (clip_ids=[id]) and "fill in the
+    missing prompts" (no clip_ids, only_missing=True) with the same call. Runs
+    every rewrite before any job row exists, so the LLM keeps the GPU to itself
+    and a later generate-videos spends zero LLM calls on the saved drafts.
+    """
+    try:
+        return await rewrite_clip_prompts(
+            project_id,
+            clip_ids=payload.clip_ids,
+            only_missing=payload.only_missing,
+            workflow_id=payload.workflow_id,
+            input_values=payload.input_values,
+            force=payload.force,
+            save=payload.save,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

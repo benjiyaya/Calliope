@@ -296,6 +296,12 @@ async def test_endpoint(
         "model": model,
         "model_found": (model in ids) if ids else None,
         "available_models": ids,
+        # Context window of THIS model, read from /models (no model load).
+        # The history budget is derived from it, so a caller can persist it
+        # instead of assuming a window the server never advertised.
+        "context_tokens": next(
+            (m.get("ctx") for m in listing["models"] if m.get("id") == model), None
+        ),
         "thinking": normalize_thinking(thinking) or THINKING_DEFAULT,
         "thinking_sent": thinking_extra_body(thinking),
         "chat_ok": False,

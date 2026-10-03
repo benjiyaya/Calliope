@@ -108,12 +108,18 @@ def _is_trivial_goal(goal: str) -> bool:
 
 
 def _history_char_budget() -> int | None:
-    """Character budget for derived LLM history; 0 disables."""
+    """Character ceiling for derived LLM history; None disables trimming.
+
+    Delegates to Settings.history_char_budget() so the ceiling tracks the
+    serving model's reported context window instead of a fixed constant that
+    silently overflowed on Chinese content.
+    """
     try:
-        raw = int(getattr(settings, "agent_history_char_budget", 0) or 0)
-    except (TypeError, ValueError):
+        derived = settings.history_char_budget()
+    except Exception:  # noqa: BLE001 — trimming must never break a turn
+        logger.warning("Could not derive the history char budget; leaving history untrimmed")
         return None
-    return raw if raw > 0 else None
+    return derived if derived > 0 else None
 
 
 def _last_asked_question(session_id: int) -> str:
