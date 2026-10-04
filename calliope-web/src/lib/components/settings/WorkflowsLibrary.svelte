@@ -368,7 +368,7 @@
 										jsonEditError = '';
 									}}
 									placeholder={t('wf.workflowJsonPlaceholder')}
-								/>
+								></textarea>
 							</label>
 
 							{#if jsonEditError}
