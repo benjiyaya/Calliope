@@ -1162,4 +1162,12 @@ export const ko: Dict = {
 	'shot.errBlob': '캡처한 프레임을 읽지 못했습니다',
 	'shot.errRecorder': '녹화를 시작하지 못했습니다',
 	'shot.errNoData': '내보낼 장면 데이터가 없습니다',
+	'wf.workflowJson': '워크플로우 JSON',
+	'wf.workflowJsonPlaceholder': 'ComfyUI API 형식의 워크플로우 JSON 붙여넣기...',
+	'wf.jsonEditableHint': '저장 시 입력/출력이 재분석되어 스키마가 갱신됩니다.',
+	'wf.dangerZone': '위험한 작업',
+	'wf.editJsonWarning': '워크플로우 JSON을 직접 편집하면 워크플로우가 손상될 수 있습니다.',
+	'wf.editJsonWarn1': 'ComfyUI API 형식의 JSON만 붙여넣으세요(시각적 내보내기 아님).',
+	'wf.editJsonWarn2': '저장 시 슬롯이 재분석되어 input_schema/output_schema가 덮어씌워집니다.',
+	'wf.editJsonWarn3': '노드 ID나 슬롯 구조를 크게 변경하면 이 워크플로우를 사용하는 작업이 실패할 수 있습니다. 먼저 JSON을 백업하세요.',
 };

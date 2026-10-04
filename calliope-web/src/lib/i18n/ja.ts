@@ -1162,4 +1162,12 @@ export const ja: Dict = {
 	'shot.errBlob': 'キャプチャしたフレームを読み取れませんでした',
 	'shot.errRecorder': 'レコーダーを開始できませんでした',
 	'shot.errNoData': '書き出すシーンデータがありません',
+	'wf.workflowJson': 'ワークフロー JSON',
+	'wf.workflowJsonPlaceholder': 'ComfyUI API 形式のワークフロー JSON を貼り付け...',
+	'wf.jsonEditableHint': '保存すると、入力/出力が再解析され、スキーマが更新されます。',
+	'wf.dangerZone': '危険な操作',
+	'wf.editJsonWarning': 'ワークフロー JSON を直接編集すると壊れる可能性があります。',
+	'wf.editJsonWarn1': 'ComfyUI API 形式の JSON のみ貼り付けてください（ビジュアルエクスポートではありません）。',
+	'wf.editJsonWarn2': '保存時にスロットが再解析され、input_schema/output_schema が上書きされます。',
+	'wf.editJsonWarn3': 'ノード ID やスロット構造の大きな変更は、このワークフローを使用するジョブを破壊する可能性があります。まず JSON をバックアップしてください。',
 };

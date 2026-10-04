@@ -1162,4 +1162,12 @@ export const zh: Dict = {
 	'shot.errBlob': '无法读取截取的帧',
 	'shot.errRecorder': '无法启动录制器',
 	'shot.errNoData': '没有可导出的场景数据',
+	'wf.workflowJson': '工作流 JSON',
+	'wf.workflowJsonPlaceholder': '粘贴 ComfyUI API 格式的工作流 JSON...',
+	'wf.jsonEditableHint': '保存后会自动重新解析输入/输出槽位并更新 schema。',
+	'wf.dangerZone': '危险操作',
+	'wf.editJsonWarning': '直接编辑工作流 JSON 可能会破坏现有工作流。请谨慎操作：',
+	'wf.editJsonWarn1': '只粘贴 ComfyUI 导出的 API 格式 JSON（不是图形化导出）。',
+	'wf.editJsonWarn2': '修改后会重新分析槽位，原有的 input_schema/output_schema 会被覆盖。',
+	'wf.editJsonWarn3': '如果节点 ID 或槽位结构改动较大，依赖此工作流的任务可能会失败。建议先备份 JSON。',
 };

@@ -33,6 +33,9 @@
 	let editName = $state('');
 	let editDescription = $state('');
 	let editProfile = $state('prose');
+	let editJson = $state('');
+	let jsonEditError = $state('');
+	let jsonEdited = $state(false);
 	let detailsId = $state<number | null>(null);
 
 	async function analyzeRaw(text: string) {
@@ -107,15 +110,28 @@
 		editName = wf.name;
 		editDescription = wf.description ?? '';
 		editProfile = wf.prompt_profile ?? 'prose';
+		editJson = JSON.stringify(wf.workflow_json ?? {}, null, 2);
+		jsonEditError = '';
+		jsonEdited = false;
 	}
 
 	async function saveEdit(id: number) {
 		try {
-			await workflows.update(id, {
+			const payload: any = {
 				name: editName.trim(),
 				description: editDescription.trim(),
 				prompt_profile: editProfile,
-			});
+			};
+			if (jsonEdited && editJson.trim()) {
+				try {
+					const j = JSON.parse(editJson);
+					payload.workflow_json = j;
+				} catch (e) {
+					jsonEditError = e instanceof Error ? e.message : t('wf.invalidJson');
+					return;
+				}
+			}
+			await workflows.update(id, payload);
 			editingId = null;
 			client.invalidateQueries({ queryKey: ['workflows'] });
 			toast.success(t('wf.updated'));
@@ -339,7 +355,37 @@
 									<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
 								</select>
 							</label>
-							<p class="field-hint">{t('wf.jsonLocked')}</p>
+
+							<label class="field">
+								<span class="field-label">{t('wf.workflowJson')}</span>
+								<textarea
+									class="field-textarea mono"
+									rows="14"
+									spellcheck="false"
+									bind:value={editJson}
+									oninput={() => {
+										jsonEdited = true;
+										jsonEditError = '';
+									}}
+									placeholder={t('wf.workflowJsonPlaceholder')}
+								/>
+							</label>
+
+							{#if jsonEditError}
+								<div class="error">{jsonEditError}</div>
+							{/if}
+
+							<div class="warning-block">
+								<strong>⚠️ {t('wf.dangerZone')}</strong>
+								<p>{t('wf.editJsonWarning')}</p>
+								<ul>
+									<li>{t('wf.editJsonWarn1')}</li>
+									<li>{t('wf.editJsonWarn2')}</li>
+									<li>{t('wf.editJsonWarn3')}</li>
+								</ul>
+							</div>
+
+							<p class="field-hint">{t('wf.jsonEditableHint')}</p>
 							<div class="row">
 								<Button size="sm" onclick={() => saveEdit(wf.id)}>{t('common.save')}</Button>
 								<Button variant="ghost" size="sm" onclick={() => (editingId = null)}>{t('common.cancel')}</Button>
@@ -674,6 +720,25 @@
 		margin: 8px 0 0;
 		font-size: 13px;
 		color: var(--text-secondary);
+	}
+	.warning-block {
+		margin-top: 8px;
+		padding: 10px 12px;
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
+		border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 40%, transparent);
+		font-size: 13px;
+		line-height: 1.5;
+	}
+	.warning-block strong {
+		color: var(--danger, #ef4444);
+	}
+	.warning-block ul {
+		margin: 6px 0 0 18px;
+		padding: 0;
+	}
+	.warning-block li {
+		margin: 2px 0;
 	}
 	.row {
 		display: flex;

@@ -1162,6 +1162,14 @@ export const en = {
 	'shot.errBlob': 'Could not read the captured frame',
 	'shot.errRecorder': 'Could not start recorder',
 	'shot.errNoData': 'No scene data to export',
+	'wf.workflowJson': 'Workflow JSON',
+	'wf.workflowJsonPlaceholder': 'Paste ComfyUI API-format workflow JSON...',
+	'wf.jsonEditableHint': 'On save, inputs/outputs will be re-analyzed and schemas refreshed automatically.',
+	'wf.dangerZone': 'Danger Zone',
+	'wf.editJsonWarning': 'Editing workflow JSON directly can break this workflow. Proceed with caution:',
+	'wf.editJsonWarn1': 'Paste only ComfyUI API-format JSON (not the visual export).',
+	'wf.editJsonWarn2': 'Saving will re-analyze slots and overwrite input_schema/output_schema.',
+	'wf.editJsonWarn3': 'Large structural changes (node IDs/slots) may break existing jobs using this workflow. Back up the JSON first.',
 };
 
 export type Dict = typeof en;

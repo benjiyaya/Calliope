@@ -171,6 +171,23 @@ async def update_workflow(workflow_id: int, payload: WorkflowUpdate) -> dict[str
         data = payload.model_dump(exclude_unset=True)
         if "is_enabled" in data and data["is_enabled"] is not None:
             data["is_enabled"] = 1 if data["is_enabled"] else 0
+        wf_json = data.pop("workflow_json", None)
+        if wf_json is not None:
+            try:
+                inputs = parse_dynamic_inputs(wf_json)
+                outputs = parse_dynamic_outputs(wf_json)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid workflow JSON: {exc}") from exc
+            suggested = detect_prompt_profile(wf_json)
+            data["workflow_json"] = json.dumps(wf_json)
+            data["input_schema"] = json.dumps(inputs)
+            data["output_schema"] = json.dumps(outputs)
+            try:
+                data["input_node_map"] = json.dumps(inputs)
+            except Exception:
+                data["input_node_map"] = None
+            if "prompt_profile" not in data:
+                data["prompt_profile"] = suggested
         data = {k: v for k, v in data.items() if v is not None}
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
