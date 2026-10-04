@@ -1,6 +1,7 @@
 """Workspace plugin: session linkage, project bootstrap, project metadata."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from calliope.agent.harness.registry import (
@@ -261,6 +262,45 @@ async def t_get_workspace(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
                 out[key] = value
         if len(wanted) < len(_WS_SECTIONS):
             out["sections_omitted"] = sorted(set(_WS_SECTIONS) - wanted)
+        # Add explicit warnings for large payloads (especially project.idea)
+        warnings: list[dict[str, Any]] = []
+        idea_txt = project.get("idea") or ""
+        if idea_txt and len(idea_txt) > 2000:
+            warnings.append(
+                {
+                    "level": "warning",
+                    "code": "project_idea_large",
+                    "message": (
+                        f"Project.idea is {len(idea_txt)} characters (large). "
+                        "The serialized workspace result will be TRUNCATED (~4000 char limit). "
+                        "Options: (1) request smaller sections via get_workspace(sections=[...]), "
+                        "or (2) paste the FULL idea in the current user message and call "
+                        "generate_story in the SAME turn (generate_story reads it directly "
+                        "from DB)."
+                    ),
+                    "idea_chars_total": len(idea_txt),
+                    "idea_preview_chars": min(len(idea_txt), 400),
+                }
+            )
+        try:
+            payload_chars = len(json.dumps(out, ensure_ascii=False, default=str))
+        except Exception:
+            payload_chars = 0
+        if payload_chars > 3500:
+            warnings.append(
+                {
+                    "level": "warning",
+                    "code": "workspace_payload_large",
+                    "message": (
+                        f"Workspace payload is ~{payload_chars} characters and will be "
+                        "TRUNCATED (limit 4000). Fetch smaller sections instead of full workspace."
+                    ),
+                    "payload_chars_estimate": payload_chars,
+                    "truncate_limit": 4000,
+                }
+            )
+        if warnings:
+            out["warnings"] = warnings
         return out
     finally:
         conn.close()
