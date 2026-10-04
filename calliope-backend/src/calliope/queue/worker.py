@@ -28,10 +28,13 @@ class _CancelledByUser(RuntimeError):
     it with mark_failed (which would bump retry_count and emit job.failed)."""
 
 
-# Exposed (Input:*) slots that carry prompt text or a reference media path —
-# the ones strict mode protects from inheriting a workflow's baked-in default.
+# Exposed (Input:*) slots carrying prompt text or a reference. Strict mode drops
+# the ones the workflow file itself supplies, so only the LLM prompt and
+# user-provided references survive.
 _LEAKY_ROLES = frozenset({"prompt", "negative", "image", "audio", "video", "character", "location"})
 _LEAKY_KINDS = frozenset({"image", "image_url", "audio", "video"})
+_MEDIA_ROLES = frozenset({"image", "audio", "video", "character", "location"})
+_MEDIA_KINDS = frozenset({"image", "image_url", "audio", "video"})
 
 
 def _is_leaky_input(inp: dict[str, Any]) -> bool:
@@ -41,38 +44,94 @@ def _is_leaky_input(inp: dict[str, Any]) -> bool:
     )
 
 
-def _strip_leaky_defaults(
+def _is_media_input(inp: dict[str, Any]) -> bool:
+    return (
+        normalize_input_role(inp.get("role")) in _MEDIA_ROLES
+        or inp.get("kind") in _MEDIA_KINDS
+    )
+
+
+def _links_into(value: Any, removed: set[str]) -> bool:
+    """True when a ComfyUI link ``[node_id, output]`` targets a removed node."""
+    if isinstance(value, list):
+        if (
+            len(value) >= 2
+            and isinstance(value[0], str)
+            and value[0] in removed
+            and isinstance(value[1], int)
+        ):
+            return True
+        return any(_links_into(item, removed) for item in value)
+    if isinstance(value, dict):
+        return any(_links_into(item, removed) for item in value.values())
+    return False
+
+
+def _prune_nodes(nodes: dict[str, Any], root_ids: list[str]) -> None:
+    """Remove nodes and their wiring, cascading to nodes left with no inputs.
+
+    A removed media loader takes its links with it; a pass-through such as
+    GetVideoComponents, left with nothing to consume, is removed too so ComfyUI
+    never sees a dangling reference.
+    """
+    removed = {str(r) for r in root_ids}
+    changed = True
+    while changed:
+        changed = False
+        for nid, node in list(nodes.items()):
+            if str(nid) in removed or not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            if not inputs:
+                continue
+            kept = {k: v for k, v in inputs.items() if not _links_into(v, removed)}
+            if len(kept) == len(inputs):
+                continue
+            node["inputs"] = kept
+            changed = True
+            if not kept:
+                removed.add(str(nid))
+    for nid in removed:
+        nodes.pop(nid, None)
+
+
+def _apply_strict_mode(
     patched: dict[str, Any],
     template: dict[str, Any],
     schema: list[dict[str, Any]],
     provided: dict[str, Any],
 ) -> dict[str, Any]:
-    """Strict mode: exposed prompt/reference slots must not inherit a workflow's
-    baked-in default.
+    """Strict mode: drop the workflow file's own prompt/reference inputs.
 
-    A value in ``provided`` equal to the template's own value came from
-    smart-fill's default seeding, not a real user choice, so it is cleared too.
-    A cleared media node that something consumes is then caught by
-    ``prepare_media_inputs`` with an actionable error — no silent leak, no
-    opaque ComfyUI crash. Slots the runtime resolved (e.g. continue-from-prev)
-    are present in ``provided`` with a new value and survive.
+    Only the LLM prompt and user-provided references are kept — their value
+    differs from the template's. A leaky slot whose value is the file's own
+    baked default (smart-fill re-injects it) or is absent is dropped: a media
+    reference has its node and wiring pruned so the graph runs without it, while
+    a prompt/negative text slot is blanked (pruning it would break its encoder).
     """
+    drop: list[str] = []
     for inp in schema:
         if not _is_leaky_input(inp):
             continue
         nid = str(inp.get("nodeId"))
         node = patched.get(nid)
-        tpl = template.get(nid)
-        if not isinstance(node, dict) or not isinstance(tpl, dict):
+        if not isinstance(node, dict):
             continue
         field = node_widget_field(node)
-        template_value = (tpl.get("inputs") or {}).get(field)
+        tpl = template.get(nid)
+        template_value = (tpl.get("inputs") or {}).get(field) if isinstance(tpl, dict) else None
         value = provided.get(nid)
         blank = value is None or (isinstance(value, str) and not value.strip())
-        if blank or str(value) == str(template_value):
+        if not blank and str(value) != str(template_value):
+            continue  # a genuine user / LLM / context value
+        if _is_media_input(inp):
+            drop.append(nid)
+        else:
             inputs = dict(node.get("inputs") or {})
             inputs[field] = ""
             node["inputs"] = inputs
+    if drop:
+        _prune_nodes(patched, drop)
     return patched
 
 
@@ -223,7 +282,7 @@ class QueueWorker:
                 )
             patched = patch_workflow(workflow["nodes"], input_values)
             if workflow["strict_mode"]:
-                patched = _strip_leaky_defaults(
+                patched = _apply_strict_mode(
                     patched, workflow["nodes"], workflow["schema"], input_values
                 )
             patched = await client.prepare_media_inputs(patched)
