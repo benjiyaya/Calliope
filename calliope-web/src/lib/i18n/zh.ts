@@ -1179,4 +1179,11 @@ export const zh: Dict = {
 	'wf.confirmEditJson': '直接编辑工作流 JSON 存在风险。修改后将重新解析输入/输出槽位并覆盖原有 schema。是否继续？',
 	'wf.confirmSaveJsonTitle': '确认保存工作流 JSON',
 	'wf.confirmSaveJson': '检测到工作流 JSON 已发生变化。保存将覆盖当前的 input_schema/output_schema/input_node_map，且结构变动可能会影响依赖此工作流的任务。是否确认保存？',
+	'wf.strictMode': '严格模式（减少非预期泄漏）',
+	'wf.strictModeHint': '只作用于暴露出来的输入槽；无法移除未暴露为输入的写死提示词/参考物。',
+	'wf.jsonEditNotice': '警告：仅供调试',
+	'wf.jsonEditNoticeLine1': '不建议直接修改工作流——请改用切换工作流。此功能仅用于调试。',
+	'wf.jsonEditNoticeLine2': '编辑后请确认输入/输出仍然正确。',
+	'wf.jsonEditNoticeLine3': '切换工作流时，界面状态可能无法完全刷新。',
+	'wf.jsonEditNoticeLine4': '不要用它做日常工作流调整。',
 };

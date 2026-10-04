@@ -1179,4 +1179,11 @@ export const ja: Dict = {
 	'wf.confirmEditJson': 'ワークフロー JSON の直接編集にはリスクがあります。保存するとスキーマが再解析・上書きされます。続行しますか？',
 	'wf.confirmSaveJsonTitle': 'ワークフロー JSON の保存を確認',
 	'wf.confirmSaveJson': 'ワークフロー JSON が変更されました。保存すると input_schema/output_schema/input_node_map が上書きされ、構造変更によってこのワークフローを使用するジョブが影響を受ける可能性があります。本当に保存しますか？',
+	'wf.strictMode': '厳格モード（意図しない漏れを抑える）',
+	'wf.strictModeHint': '公開された入力スロットにのみ作用します。入力として公開されていないハードコードされたプロンプト/参照は削除できません。',
+	'wf.jsonEditNotice': '警告：デバッグ専用',
+	'wf.jsonEditNoticeLine1': 'ワークフローの直接編集は推奨しません — 代わりにワークフローを切り替えてください。これはデバッグ専用です。',
+	'wf.jsonEditNoticeLine2': '編集後は入力/出力が正しいか確認してください。',
+	'wf.jsonEditNoticeLine3': 'ワークフローを切り替えると、UI の状態が完全に更新されないことがあります。',
+	'wf.jsonEditNoticeLine4': '日常的なワークフロー調整には使わないでください。',
 };

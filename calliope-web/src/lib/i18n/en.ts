@@ -1179,6 +1179,13 @@ export const en = {
 	'wf.confirmEditJson': 'Editing workflow JSON directly is risky. Saving will re-analyze slots and overwrite existing schemas. Continue?',
 	'wf.confirmSaveJsonTitle': 'Confirm Save Workflow JSON',
 	'wf.confirmSaveJson': 'Workflow JSON has changed. Saving will overwrite input_schema/output_schema/input_node_map and structural changes may break jobs using this workflow. Are you sure you want to save?',
+	'wf.strictMode': 'Strict mode (reduce unintended leakage)',
+	'wf.strictModeHint': 'Only affects exposed input slots. Cannot remove hardcoded prompts/references not exposed as inputs.',
+	'wf.jsonEditNotice': 'Warning: debugging only',
+	'wf.jsonEditNoticeLine1': 'Modifying workflows is not recommended — switch workflows instead. This is for debugging only.',
+	'wf.jsonEditNoticeLine2': 'Verify inputs/outputs are still correct after editing.',
+	'wf.jsonEditNoticeLine3': 'When switching workflows, the UI state may not refresh fully.',
+	'wf.jsonEditNoticeLine4': 'Do not use this for routine workflow adjustments.',
 };
 
 export type Dict = typeof en;

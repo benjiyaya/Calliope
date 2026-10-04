@@ -27,12 +27,14 @@
 	let wfKind = $state<'image' | 'video'>('image');
 	let wfProfile = $state('prose');
 	let wfDescription = $state('');
+	let wfStrict = $state(true);
 	let saving = $state(false);
 
 	let editingId = $state<number | null>(null);
 	let editName = $state('');
 	let editDescription = $state('');
 	let editProfile = $state('prose');
+	let editStrict = $state(true);
 	let editJson = $state('');
 	let originalJson = $state('');
 	let jsonEditError = $state('');
@@ -89,6 +91,7 @@
 				workflow_json: pendingJson,
 				description: wfDescription.trim() || undefined,
 				prompt_profile: wfProfile,
+				strict_mode: wfStrict,
 			});
 			jsonText = '';
 			uploadedFileName = null;
@@ -101,6 +104,7 @@
 			wfDescription = '';
 			wfKind = 'image';
 			wfProfile = 'prose';
+			wfStrict = true;
 			client.invalidateQueries({ queryKey: ['workflows'] });
 			toast.success(t('wf.savedToLibrary', { name }));
 		} catch (err) {
@@ -115,6 +119,7 @@
 		editName = wf.name;
 		editDescription = wf.description ?? '';
 		editProfile = wf.prompt_profile ?? 'prose';
+		editStrict = wf.strict_mode ?? true;
 		const j = JSON.stringify(wf.workflow_json ?? {}, null, 2);
 		editJson = j;
 		originalJson = j;
@@ -147,6 +152,7 @@
 				name: editName.trim(),
 				description: editDescription.trim(),
 				prompt_profile: editProfile,
+				strict_mode: editStrict,
 			};
 			if (showJsonEditor && jsonEdited && editJson.trim()) {
 				try {
@@ -361,6 +367,11 @@
 					placeholder={t('wf.descPlaceholder')}
 				></textarea>
 			</label>
+			<label class="check-row">
+				<input type="checkbox" bind:checked={wfStrict} />
+				<span>{t('wf.strictMode')}</span>
+			</label>
+			<p class="field-hint">{t('wf.strictModeHint')}</p>
 			<Button variant="primary" loading={saving} disabled={!wfName.trim()} onclick={saveToLibrary}>
 				{t('wf.saveToLibrary')}
 			</Button>
@@ -409,6 +420,11 @@
 									<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
 								</select>
 							</label>
+							<label class="check-row">
+								<input type="checkbox" bind:checked={editStrict} />
+								<span>{t('wf.strictMode')}</span>
+							</label>
+							<p class="field-hint">{t('wf.strictModeHint')}</p>
 
 							{#if !showJsonEditor}
 								<div class="row">
@@ -823,6 +839,19 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+
+	.check-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		font-size: 13px;
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+
+	.check-row input {
+		margin-top: 2px;
 	}
 </style>
 

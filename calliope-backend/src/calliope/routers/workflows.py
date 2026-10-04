@@ -20,6 +20,7 @@ def _serialize_workflow(row: Any) -> dict[str, Any]:
     data["input_schema"] = json.loads(data["input_schema"]) if data.get("input_schema") else []
     data["output_schema"] = json.loads(data["output_schema"]) if data.get("output_schema") else []
     data["is_enabled"] = bool(data.get("is_enabled"))
+    data["strict_mode"] = bool(data.get("strict_mode", 1))
     return data
 
 
@@ -129,8 +130,9 @@ async def create_workflow(payload: WorkflowCreate) -> dict[str, Any]:
         cur = conn.execute(
             """
             INSERT INTO workflows (name, kind, workflow_json, input_schema,
-                                   output_schema, description, prompt_profile, is_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                                   output_schema, description, prompt_profile,
+                                   is_enabled, strict_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
             """,
             (
                 payload.name,
@@ -140,6 +142,7 @@ async def create_workflow(payload: WorkflowCreate) -> dict[str, Any]:
                 json.dumps(outputs),
                 payload.description,
                 profile,
+                1 if payload.strict_mode else 0,
             ),
         )
         conn.commit()
@@ -171,6 +174,8 @@ async def update_workflow(workflow_id: int, payload: WorkflowUpdate) -> dict[str
         data = payload.model_dump(exclude_unset=True)
         if "is_enabled" in data and data["is_enabled"] is not None:
             data["is_enabled"] = 1 if data["is_enabled"] else 0
+        if "strict_mode" in data and data["strict_mode"] is not None:
+            data["strict_mode"] = 1 if data["strict_mode"] else 0
         wf_json = data.pop("workflow_json", None)
         if wf_json is not None:
             try:

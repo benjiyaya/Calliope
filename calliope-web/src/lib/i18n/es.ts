@@ -1179,4 +1179,11 @@ export const es: Dict = {
 	'wf.confirmEditJson': 'Editar directamente el JSON del flujo de trabajo es arriesgado. Al guardar se volverán a analizar los slots y se sobrescribirán los esquemas existentes. ¿Continuar?',
 	'wf.confirmSaveJsonTitle': 'Confirmar guardado del JSON del flujo de trabajo',
 	'wf.confirmSaveJson': 'El JSON del flujo de trabajo ha cambiado. Al guardar se sobrescribirán input_schema/output_schema/input_node_map y los cambios estructurales pueden romper los trabajos que usan este flujo. ¿Seguro que quieres guardar?',
+	'wf.strictMode': 'Modo estricto (reducir fugas no intencionadas)',
+	'wf.strictModeHint': 'Solo afecta a las ranuras de entrada expuestas. No puede eliminar prompts/referencias codificados que no estén expuestos como entradas.',
+	'wf.jsonEditNotice': 'Advertencia: solo para depuración',
+	'wf.jsonEditNoticeLine1': 'No se recomienda modificar los flujos de trabajo; cambia de flujo en su lugar. Esto es solo para depuración.',
+	'wf.jsonEditNoticeLine2': 'Verifica que las entradas/salidas sigan siendo correctas tras editar.',
+	'wf.jsonEditNoticeLine3': 'Al cambiar de flujo de trabajo, el estado de la interfaz puede no actualizarse del todo.',
+	'wf.jsonEditNoticeLine4': 'No lo uses para ajustes rutinarios de flujos de trabajo.',
 };

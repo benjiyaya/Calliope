@@ -1179,4 +1179,11 @@ export const de: Dict = {
 	'wf.confirmEditJson': 'Das direkte Bearbeiten des Workflow-JSON ist riskant. Beim Speichern werden Slots neu analysiert und vorhandene Schemas überschrieben. Fortfahren?',
 	'wf.confirmSaveJsonTitle': 'Speichern des Workflow-JSON bestätigen',
 	'wf.confirmSaveJson': 'Das Workflow-JSON wurde geändert. Beim Speichern werden input_schema/output_schema/input_node_map überschrieben, und strukturelle Änderungen können Jobs mit diesem Workflow beschädigen. Möchtest du wirklich speichern?',
+	'wf.strictMode': 'Strikter Modus (unbeabsichtigte Übernahme reduzieren)',
+	'wf.strictModeHint': 'Betrifft nur freigegebene Eingabe-Slots. Fest kodierte Prompts/Referenzen, die nicht als Eingaben freigegeben sind, können nicht entfernt werden.',
+	'wf.jsonEditNotice': 'Warnung: nur zum Debuggen',
+	'wf.jsonEditNoticeLine1': 'Das direkte Ändern von Workflows wird nicht empfohlen — wechsle stattdessen den Workflow. Dies dient nur dem Debuggen.',
+	'wf.jsonEditNoticeLine2': 'Prüfe nach dem Bearbeiten, ob Eingaben/Ausgaben noch korrekt sind.',
+	'wf.jsonEditNoticeLine3': 'Beim Wechseln von Workflows wird der UI-Zustand möglicherweise nicht vollständig aktualisiert.',
+	'wf.jsonEditNoticeLine4': 'Nutze dies nicht für routinemäßige Workflow-Anpassungen.',
 };

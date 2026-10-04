@@ -35,6 +35,7 @@ export interface Workflow {
 	description: string | null;
 	prompt_profile: string;
 	is_enabled: boolean;
+	strict_mode: boolean;
 }
 
 export interface Job {

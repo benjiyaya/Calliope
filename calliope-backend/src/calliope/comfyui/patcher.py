@@ -29,6 +29,16 @@ def _resolve_field(field: str, inputs: dict[str, Any]) -> str:
     return field
 
 
+def node_widget_field(node: dict[str, Any]) -> str:
+    """The input key a node's user-facing widget patches onto.
+
+    Used by strict mode to clear an exposed slot's baked-in default: it must
+    resolve the same field ``patch_workflow`` would write.
+    """
+    inputs = node.get("inputs") or {}
+    return _resolve_field(class_to_patch_field(node.get("class_type", "")), inputs)
+
+
 def patch_workflow(
     base: dict[str, Any],
     values_by_node_id: dict[str, Any],

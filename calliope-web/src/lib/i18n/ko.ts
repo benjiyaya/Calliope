@@ -1179,4 +1179,11 @@ export const ko: Dict = {
 	'wf.confirmEditJson': '워크플로우 JSON 직접 편집은 위험합니다. 저장 시 스키마가 재분석·덮어씌워집니다. 계속하시겠습니까?',
 	'wf.confirmSaveJsonTitle': '워크플로우 JSON 저장 확인',
 	'wf.confirmSaveJson': '워크플로우 JSON이 변경되었습니다. 저장 시 input_schema/output_schema/input_node_map이 덮어씌워지며, 구조 변경으로 이 워크플로우를 사용하는 작업에 영향을 줄 수 있습니다. 정말 저장하시겠습니까?',
+	'wf.strictMode': '엄격 모드(의도치 않은 누출 감소)',
+	'wf.strictModeHint': '노출된 입력 슬롯에만 적용됩니다. 입력으로 노출되지 않은 하드코딩된 프롬프트/참조는 제거할 수 없습니다.',
+	'wf.jsonEditNotice': '경고: 디버그 전용',
+	'wf.jsonEditNoticeLine1': '워크플로 직접 수정은 권장하지 않습니다 — 대신 워크플로를 전환하세요. 이 기능은 디버그 전용입니다.',
+	'wf.jsonEditNoticeLine2': '수정 후 입력/출력이 여전히 올바른지 확인하세요.',
+	'wf.jsonEditNoticeLine3': '워크플로를 전환할 때 UI 상태가 완전히 새로고침되지 않을 수 있습니다.',
+	'wf.jsonEditNoticeLine4': '일상적인 워크플로 조정에 사용하지 마세요.',
 };

@@ -12,8 +12,8 @@ from calliope import config
 from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
 from calliope.comfyui.parser import parse_dynamic_inputs
-from calliope.comfyui.patcher import patch_workflow
-from calliope.comfyui.roles import input_has_role
+from calliope.comfyui.patcher import node_widget_field, patch_workflow
+from calliope.comfyui.roles import input_has_role, normalize_input_role
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import run_export
@@ -26,6 +26,54 @@ class _CancelledByUser(RuntimeError):
     """The job row was flipped to 'cancelled' out-of-band (Stop button).
     The row already carries the terminal state; the loop must not overwrite
     it with mark_failed (which would bump retry_count and emit job.failed)."""
+
+
+# Exposed (Input:*) slots that carry prompt text or a reference media path —
+# the ones strict mode protects from inheriting a workflow's baked-in default.
+_LEAKY_ROLES = frozenset({"prompt", "negative", "image", "audio", "video", "character", "location"})
+_LEAKY_KINDS = frozenset({"image", "image_url", "audio", "video"})
+
+
+def _is_leaky_input(inp: dict[str, Any]) -> bool:
+    return (
+        normalize_input_role(inp.get("role")) in _LEAKY_ROLES
+        or inp.get("kind") in _LEAKY_KINDS
+    )
+
+
+def _strip_leaky_defaults(
+    patched: dict[str, Any],
+    template: dict[str, Any],
+    schema: list[dict[str, Any]],
+    provided: dict[str, Any],
+) -> dict[str, Any]:
+    """Strict mode: exposed prompt/reference slots must not inherit a workflow's
+    baked-in default.
+
+    A value in ``provided`` equal to the template's own value came from
+    smart-fill's default seeding, not a real user choice, so it is cleared too.
+    A cleared media node that something consumes is then caught by
+    ``prepare_media_inputs`` with an actionable error — no silent leak, no
+    opaque ComfyUI crash. Slots the runtime resolved (e.g. continue-from-prev)
+    are present in ``provided`` with a new value and survive.
+    """
+    for inp in schema:
+        if not _is_leaky_input(inp):
+            continue
+        nid = str(inp.get("nodeId"))
+        node = patched.get(nid)
+        tpl = template.get(nid)
+        if not isinstance(node, dict) or not isinstance(tpl, dict):
+            continue
+        field = node_widget_field(node)
+        template_value = (tpl.get("inputs") or {}).get(field)
+        value = provided.get(nid)
+        blank = value is None or (isinstance(value, str) and not value.strip())
+        if blank or str(value) == str(template_value):
+            inputs = dict(node.get("inputs") or {})
+            inputs[field] = ""
+            node["inputs"] = inputs
+    return patched
 
 
 class QueueWorker:
@@ -171,9 +219,13 @@ class QueueWorker:
             input_values = payload.get("input_values") or {}
             if payload.get("continue_source") and kind == "video":
                 input_values = await self._resolve_continue_source(
-                    job, payload, workflow, dict(input_values)
+                    job, payload, workflow["nodes"], dict(input_values)
                 )
-            patched = patch_workflow(workflow, input_values)
+            patched = patch_workflow(workflow["nodes"], input_values)
+            if workflow["strict_mode"]:
+                patched = _strip_leaky_defaults(
+                    patched, workflow["nodes"], workflow["schema"], input_values
+                )
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
 
@@ -348,16 +400,24 @@ class QueueWorker:
             conn.close()
 
     def _load_workflow(self, workflow_id: int | None) -> dict[str, Any] | None:
+        """The workflow's node graph plus what strict mode needs (schema + flag)."""
         if not workflow_id:
             return None
         conn = get_db(config.settings.db_path)
         try:
             row = conn.execute(
-                "SELECT workflow_json FROM workflows WHERE id = ?", (workflow_id,)
+                "SELECT workflow_json, input_schema, strict_mode FROM workflows WHERE id = ?",
+                (workflow_id,),
             ).fetchone()
             if not row:
                 return None
-            return json.loads(row["workflow_json"])
+            nodes = json.loads(row["workflow_json"])
+            schema = (
+                json.loads(row["input_schema"])
+                if row["input_schema"]
+                else parse_dynamic_inputs(nodes)
+            )
+            return {"nodes": nodes, "schema": schema, "strict_mode": bool(row["strict_mode"])}
         finally:
             conn.close()
 

@@ -393,6 +393,7 @@ export const workflows = {
 		workflow_json: Record<string, unknown>;
 		description?: string;
 		prompt_profile?: string;
+		strict_mode?: boolean;
 	}) => api<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
 	update: (
 		id: number,
@@ -400,6 +401,7 @@ export const workflows = {
 			name: string;
 			kind: string;
 			is_enabled: boolean;
+			strict_mode: boolean;
 			description: string;
 			prompt_profile: string;
 		}>,

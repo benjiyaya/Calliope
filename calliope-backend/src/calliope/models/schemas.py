@@ -200,6 +200,7 @@ class WorkflowCreate(BaseModel):
     workflow_json: dict[str, Any]
     description: str | None = None
     prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
+    strict_mode: bool = True
 
 
 class WorkflowUpdate(BaseModel):
@@ -208,6 +209,7 @@ class WorkflowUpdate(BaseModel):
     description: str | None = None
     prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
     is_enabled: bool | None = None
+    strict_mode: bool | None = None
     workflow_json: dict[str, Any] | None = None
 
 

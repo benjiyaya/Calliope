@@ -1179,4 +1179,11 @@ export const fr: Dict = {
 	'wf.confirmEditJson': "Modifier directement le JSON du workflow est risqué. L'enregistrement réanalysera les slots et écrasera les schémas existants. Continuer ?",
 	'wf.confirmSaveJsonTitle': "Confirmer l'enregistrement du JSON du workflow",
 	'wf.confirmSaveJson': "Le JSON du workflow a changé. L'enregistrement écrasera input_schema/output_schema/input_node_map et les modifications structurelles peuvent casser les jobs utilisant ce workflow. Voulez-vous vraiment enregistrer ?",
+	'wf.strictMode': 'Mode strict (réduire les fuites involontaires)',
+	'wf.strictModeHint': "N'affecte que les emplacements d'entrée exposés. Impossible de supprimer les prompts/références codés en dur qui ne sont pas exposés comme entrées.",
+	'wf.jsonEditNotice': 'Avertissement : débogage uniquement',
+	'wf.jsonEditNoticeLine1': "Modifier les workflows n'est pas recommandé — changez plutôt de workflow. Ceci est uniquement pour le débogage.",
+	'wf.jsonEditNoticeLine2': "Vérifiez que les entrées/sorties sont toujours correctes après l'édition.",
+	'wf.jsonEditNoticeLine3': "Lors du changement de workflow, l'état de l'interface peut ne pas se rafraîchir complètement.",
+	'wf.jsonEditNoticeLine4': "N'utilisez pas ceci pour des ajustements de workflow habituels.",
 };
