@@ -1170,6 +1170,10 @@ export const en = {
 	'wf.editJsonWarn1': 'Paste only ComfyUI API-format JSON (not the visual export).',
 	'wf.editJsonWarn2': 'Saving will re-analyze slots and overwrite input_schema/output_schema.',
 	'wf.editJsonWarn3': 'Large structural changes (node IDs/slots) may break existing jobs using this workflow. Back up the JSON first.',
+	'wf.editWorkflowJson': 'Edit Workflow JSON',
+	'wf.confirmEditJson': 'Editing workflow JSON directly is risky. Saving will re-analyze slots and overwrite existing schemas. Continue?',
+	'wf.confirmSaveJsonTitle': 'Confirm Save Workflow JSON',
+	'wf.confirmSaveJson': 'Workflow JSON has changed. Saving will overwrite input_schema/output_schema/input_node_map and structural changes may break jobs using this workflow. Are you sure you want to save?',
 };
 
 export type Dict = typeof en;

@@ -1170,4 +1170,8 @@ export const ko: Dict = {
 	'wf.editJsonWarn1': 'ComfyUI API 형식의 JSON만 붙여넣으세요(시각적 내보내기 아님).',
 	'wf.editJsonWarn2': '저장 시 슬롯이 재분석되어 input_schema/output_schema가 덮어씌워집니다.',
 	'wf.editJsonWarn3': '노드 ID나 슬롯 구조를 크게 변경하면 이 워크플로우를 사용하는 작업이 실패할 수 있습니다. 먼저 JSON을 백업하세요.',
+	'wf.editWorkflowJson': '워크플로우 JSON 편집',
+	'wf.confirmEditJson': '워크플로우 JSON 직접 편집은 위험합니다. 저장 시 스키마가 재분석·덮어씌워집니다. 계속하시겠습니까?',
+	'wf.confirmSaveJsonTitle': '워크플로우 JSON 저장 확인',
+	'wf.confirmSaveJson': '워크플로우 JSON이 변경되었습니다. 저장 시 input_schema/output_schema/input_node_map이 덮어씌워지며, 구조 변경으로 이 워크플로우를 사용하는 작업에 영향을 줄 수 있습니다. 정말 저장하시겠습니까?',
 };

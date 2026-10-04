@@ -1170,4 +1170,8 @@ export const ja: Dict = {
 	'wf.editJsonWarn1': 'ComfyUI API 形式の JSON のみ貼り付けてください（ビジュアルエクスポートではありません）。',
 	'wf.editJsonWarn2': '保存時にスロットが再解析され、input_schema/output_schema が上書きされます。',
 	'wf.editJsonWarn3': 'ノード ID やスロット構造の大きな変更は、このワークフローを使用するジョブを破壊する可能性があります。まず JSON をバックアップしてください。',
+	'wf.editWorkflowJson': 'ワークフロー JSON を編集',
+	'wf.confirmEditJson': 'ワークフロー JSON の直接編集にはリスクがあります。保存するとスキーマが再解析・上書きされます。続行しますか？',
+	'wf.confirmSaveJsonTitle': 'ワークフロー JSON の保存を確認',
+	'wf.confirmSaveJson': 'ワークフロー JSON が変更されました。保存すると input_schema/output_schema/input_node_map が上書きされ、構造変更によってこのワークフローを使用するジョブが影響を受ける可能性があります。本当に保存しますか？',
 };

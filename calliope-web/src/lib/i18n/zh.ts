@@ -1170,4 +1170,8 @@ export const zh: Dict = {
 	'wf.editJsonWarn1': '只粘贴 ComfyUI 导出的 API 格式 JSON（不是图形化导出）。',
 	'wf.editJsonWarn2': '修改后会重新分析槽位，原有的 input_schema/output_schema 会被覆盖。',
 	'wf.editJsonWarn3': '如果节点 ID 或槽位结构改动较大，依赖此工作流的任务可能会失败。建议先备份 JSON。',
+	'wf.editWorkflowJson': '编辑工作流 JSON',
+	'wf.confirmEditJson': '直接编辑工作流 JSON 存在风险。修改后将重新解析输入/输出槽位并覆盖原有 schema。是否继续？',
+	'wf.confirmSaveJsonTitle': '确认保存工作流 JSON',
+	'wf.confirmSaveJson': '检测到工作流 JSON 已发生变化。保存将覆盖当前的 input_schema/output_schema/input_node_map，且结构变动可能会影响依赖此工作流的任务。是否确认保存？',
 };
