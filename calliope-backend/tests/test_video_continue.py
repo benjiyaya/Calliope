@@ -509,3 +509,64 @@ def test_prepare_media_inputs_uploads_existing_video(client, tmp_path):
         client_mod.ComfyUIClient.upload_video = orig
     assert uploaded == [str(clip)]
     assert out["20"]["inputs"]["video"].endswith("prev.mp4")
+
+
+def test_prepare_media_inputs_rejects_empty_wired_video(client):
+    """A blank LoadVideo that feeds GetVideoComponents is the crash shape: it
+    must fail before queueing with a node-naming error instead of ComfyUI's
+    av.error.PermissionError on the input directory."""
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    wf = {
+        "156": {
+            "class_type": "LoadVideo",
+            "inputs": {"file": "", "video-preview": ""},
+            "_meta": {"title": "(Input:video) Ref Video 1"},
+        },
+        "152": {
+            "class_type": "GetVideoComponents",
+            "inputs": {"video": ["156", 0]},
+            "_meta": {"title": "Get Video Components"},
+        },
+    }
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(c.prepare_media_inputs(wf))
+    msg = str(excinfo.value)
+    assert "node 156" in msg
+    assert "empty" in msg
+    assert "Ref Video 1" in msg
+
+
+def test_prepare_media_inputs_rejects_empty_wired_image(client):
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    wf = {
+        "149": {
+            "class_type": "LoadImage",
+            "inputs": {"image": ""},
+            "_meta": {"title": "(Input:image) Ref Image 1"},
+        },
+        "145": {
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "inputs": {"ref_images.ref_image_0": ["149", 0]},
+            "_meta": {"title": "MiniMax H3"},
+        },
+    }
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(c.prepare_media_inputs(wf))
+    msg = str(excinfo.value)
+    assert "node 149" in msg
+    assert "Ref Image 1" in msg
+
+
+def test_prepare_media_inputs_allows_unreferenced_blank_media(client):
+    """A blank media node nothing consumes is pruned by ComfyUI — no guard."""
+    c = ComfyUIClient("http://127.0.0.1:8188")
+    wf = {
+        "156": {
+            "class_type": "LoadVideo",
+            "inputs": {"file": "", "video-preview": ""},
+            "_meta": {"title": "(Input:video) Ref Video 1"},
+        },
+    }
+    out = asyncio.run(c.prepare_media_inputs(wf))
+    assert out["156"]["inputs"]["file"] == ""
+
