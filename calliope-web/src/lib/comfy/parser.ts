@@ -14,7 +14,31 @@ const IMAGE_URL = new Set(['Load Image From Url (mtb)']);
 const AUDIO = new Set(['LoadAudio', 'VHS_LoadAudio']);
 const VIDEO = new Set(['LoadVideo', 'VHS_LoadVideo', 'VHS_LoadVideoPath']);
 const VIDEO_OUT = new Set(['VHS_VideoCombine', 'SaveVideo', 'VideoOutput', 'AnimateDiffCombine']);
-const IMAGE_OUT = new Set(['SaveImage', 'PreviewImage', 'SaveImageWebsocket', 'ETN_SendImageWebSocket']);
+const IMAGE_OUT = new Set([
+	'SaveImage',
+	'SaveImageAdvanced',
+	'PreviewImage',
+	'SaveImageWebsocket',
+	'ETN_SendImageWebSocket',
+]);
+// Mirrors PROMPT_CLASSES in calliope-backend/src/calliope/comfyui/registry.py.
+// The substring fallback below matches "image"/"video" in the class name first,
+// which mis-renders these as media pickers instead of prompt fields.
+const PROMPT_CLASS = new Set([
+	'MiniMaxH3ImageToVideo',
+	'MiniMaxH3ReferenceToVideo',
+	'TextEncodeQwenImage21',
+	'TextEncodeQwenImage',
+	'TextGenerate',
+]);
+// Mirrors NEUTRAL_CLASSES in the backend registry.
+const NEUTRAL_CLASS = new Set([
+	'CCTechClipProjLoader',
+	'UnetLoaderGGUF',
+	'QwenImage21Cache',
+	'ForceUnloadBeforeDecode',
+	'GetVideoComponents',
+]);
 
 /** Matches (Input), (Input:prompt), (Output:image), … */
 const TITLE_TAG_RE = /\((Input|Output)(?::([a-zA-Z0-9_-]+))?\)/i;
@@ -78,6 +102,8 @@ function classToInputKind(classType: string): ComfyDynamicInput['kind'] {
 	if (VIDEO.has(classType)) return 'video';
 	if (NUMBER.has(classType)) return 'number';
 	if (TEXT_AREA.has(classType)) return 'textarea';
+	if (PROMPT_CLASS.has(classType)) return 'textarea';
+	if (NEUTRAL_CLASS.has(classType)) return 'text';
 	const lower = classType.toLowerCase();
 	if (lower.includes('video')) return 'video';
 	if (lower.includes('audio')) return 'audio';

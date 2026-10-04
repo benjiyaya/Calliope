@@ -10,7 +10,15 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import StatusChip from '$lib/components/ui/StatusChip.svelte';
-	import { settings, type LlmProfile, type Settings } from '$lib/api';
+	import {
+		settings,
+		type LlmModelInfo,
+		type LlmModelsResponse,
+		type LlmProfile,
+		type LlmTestResponse,
+		type Settings,
+		type ThinkingMode,
+	} from '$lib/api';
 	import { toast } from '$lib/toast';
 	import { t } from '$lib/i18n.svelte';
 
@@ -55,6 +63,11 @@
 		agent_hardening_prompt: 'agent',
 		agent_llm_assignments: 'agent',
 		agent_history_char_budget: 'agent',
+		agent_history_token_share: 'agent',
+		llm_max_output_tokens: 'agent',
+		llm_chars_per_token: 'agent',
+		llm_context_fallback_tokens: 'agent',
+		llm_context_tokens: 'agent',
 		data_dir: 'storage',
 		assets_dir: 'storage',
 		agent_workspace_dir: 'storage',
@@ -69,7 +82,12 @@
 		queue_poll_timeout_sec: { min: 0, max: 86400, labelKey: 'settings.pollTimeoutField' },
 		queue_max_retries: { min: 0, max: 10, labelKey: 'settings.maxRetriesField' },
 		agent_max_steps: { min: 1, max: 100, labelKey: 'settings.agentMaxStepsField' },
-		agent_history_char_budget: { min: 10000, max: 2000000, labelKey: 'settings.historyBudgetField' },
+		agent_history_char_budget: { min: 0, max: 2000000, labelKey: 'settings.historyBudgetField' },
+		agent_history_token_share: { min: 0.05, max: 0.95, labelKey: 'settings.historyShareField' },
+		llm_max_output_tokens: { min: 0, max: 200000, labelKey: 'settings.maxOutputField' },
+		llm_chars_per_token: { min: 0.5, max: 8, labelKey: 'settings.charsPerTokenField' },
+		llm_context_fallback_tokens: { min: 1024, max: 10000000, labelKey: 'settings.fallbackCtxField' },
+		llm_context_tokens: { min: 0, max: 10000000, labelKey: 'settings.contextOverrideField' },
 	};
 	const dirtyTabs = $derived(
 		new Set(dirtyKeys.map((k) => FIELD_TAB[k]).filter((t): t is string => Boolean(t))),
@@ -136,6 +154,10 @@
 						name: p.name.trim(),
 						base_url: p.base_url.trim(),
 						model: p.model.trim(),
+						thinking: p.thinking ?? 'default',
+						// Sent back so the backend's "absent means keep" rule does not
+						// discard the window the probe cached.
+						context_tokens: p.context_tokens ?? 0,
 					};
 					const key = apiKeyDrafts[p.id];
 					if (key) row.api_key = key;
@@ -216,6 +238,7 @@
 
 	// History budget presets (chars). Large matches the backend default (400k).
 	const HISTORY_BUDGET_PRESETS: { value: number; labelKey: string }[] = [
+		{ value: 0, labelKey: 'settings.historyBudgetAuto' },
 		{ value: 60_000, labelKey: 'settings.historyBudgetSmall' },
 		{ value: 120_000, labelKey: 'settings.historyBudgetMedium' },
 		{ value: 400_000, labelKey: 'settings.historyBudgetLarge' },
@@ -228,6 +251,46 @@
 				: Number(s.agent_history_char_budget ?? 0);
 		return current === value;
 	}
+
+	// What the backend will actually trim to, so the operator sees the effect
+	// of their edit instead of having to save and reopen. The backend computes
+	// the real number (it owns the profile's probed context window); this is the
+	// same arithmetic for the unsaved draft.
+	//
+	// `$settingsQuery.data`, not the template's `{@const s}`: that binding only
+	// exists inside the markup block, not in script scope.
+	const savedCharBudget = $derived(
+		Number($settingsQuery.data?.agent_history_char_budget ?? 0),
+	);
+	const effectiveBudgetChars = $derived.by(() => {
+		const override = Number(
+			draft.agent_history_char_budget !== undefined
+				? draft.agent_history_char_budget
+				: savedCharBudget,
+		);
+		if (Number.isFinite(override) && override > 0) return override;
+		const share = Number(
+			draft.agent_history_token_share !== undefined
+				? draft.agent_history_token_share
+				: ($settingsQuery.data?.agent_history_token_share ?? 0.5),
+		);
+		const perToken = Number(
+			draft.llm_chars_per_token !== undefined
+				? draft.llm_chars_per_token
+				: ($settingsQuery.data?.llm_chars_per_token ?? 1.6),
+		);
+		const ctx = Number($settingsQuery.data?.context_window_tokens ?? 0);
+		if (!ctx) return 0;
+		const clampedShare = Math.min(Math.max(share || 0.5, 0.05), 0.95);
+		const clampedPer = Math.min(Math.max(perToken || 1.6, 0.5), 8);
+		return Math.floor(ctx * clampedShare * clampedPer);
+	});
+	const effectiveBudgetTokens = $derived(
+		Math.round(
+			effectiveBudgetChars /
+				(Number($settingsQuery.data?.llm_chars_per_token ?? 1.6) || 1.6),
+		),
+	);
 
 	// Snap out-of-range numbers back into the valid range when the user leaves
 	// the field, so a typed 200 never reaches the backend.
@@ -254,7 +317,9 @@
 	}
 
 	function llmProfilesFromSettings(s: Settings): LlmProfile[] {
-		if (s.llm_profiles?.length) return s.llm_profiles.map((p) => ({ ...p }));
+		if (s.llm_profiles?.length) {
+			return s.llm_profiles.map((p) => ({ ...p, thinking: p.thinking ?? 'default' }));
+		}
 		return [
 			{
 				id: s.llm_active_id || 'legacy',
@@ -262,6 +327,8 @@
 				base_url: s.llm_base_url,
 				model: s.llm_model,
 				api_key: s.llm_api_key,
+				thinking: 'default',
+				context_tokens: 0,
 			},
 		];
 	}
@@ -334,6 +401,7 @@
 				base_url: 'http://127.0.0.1:11434/v1',
 				model: '',
 				api_key: false,
+				thinking: 'default',
 			},
 		];
 	}
@@ -349,6 +417,134 @@
 		const nextKeys = { ...apiKeyDrafts };
 		delete nextKeys[id];
 		apiKeyDrafts = nextKeys;
+		const nextModels = { ...modelLists };
+		delete nextModels[id];
+		modelLists = nextModels;
+		const nextProbes = { ...probeResults };
+		delete nextProbes[id];
+		probeResults = nextProbes;
+	}
+
+	// ---- Endpoint introspection -------------------------------------------------
+	// Per-profile, keyed by profile id, and deliberately NOT part of `draft`: a
+	// probe result is read-only server state, and folding it into the dirty map
+	// would make the leave-guard nag about unsaved changes the user never made.
+	let modelLists = $state<Record<string, LlmModelsResponse>>({});
+	let probing = $state<Record<string, boolean>>({});
+	let probeResults = $state<Record<string, LlmTestResponse | null>>({});
+
+	const THINKING_MODES: ThinkingMode[] = ['default', 'off', 'low', 'medium', 'high', 'xhigh'];
+
+	type ModelOption = { id: string; label: string; info: LlmModelInfo | null };
+
+	function modelOptions(p: LlmProfile): ModelOption[] {
+		const listed: ModelOption[] = (modelLists[p.id]?.models ?? []).map((m) => {
+			const bits: string[] = [];
+			if (m.vision) bits.push(t('settings.probeVision'));
+			if (m.ctx) bits.push(`${(m.ctx / 1024) | 0}K`);
+			if (m.reasoning_disabled) bits.push('reasoning_disabled');
+			else if (m.reasoning_effort) bits.push(`reasoning_effort:${m.reasoning_effort}`);
+			if (m.loaded === 'loaded') bits.push(t('settings.probeLoaded'));
+			return { id: m.id, label: bits.length ? `${m.id}  ·  ${bits.join(' · ')}` : m.id, info: m };
+		});
+		// Keep the typed value selectable even when the server does not list it —
+		// remote gateways and proxies routinely rewrite the model name.
+		if (p.model && !listed.some((o) => o.id === p.model)) {
+			listed.unshift({ id: p.model, label: `${p.model}  ·  ${t('settings.probeUnlisted')}`, info: null });
+		}
+		return listed;
+	}
+
+	/** Server banner for a profile: build id, router capacity, resolved URL. */
+	function serverLine(p: LlmProfile): string | null {
+		const entry = modelLists[p.id];
+		if (!entry?.ok || !entry.server) return null;
+		const parts: string[] = [];
+		if (entry.server.build_info) parts.push(entry.server.build_info);
+		if (entry.server.max_instances) {
+			parts.push(`${t('settings.probeMaxInstances')}: ${entry.server.max_instances}`);
+		}
+		if (entry.models_url) parts.push(entry.models_url);
+		return parts.length ? parts.join(' · ') : null;
+	}
+
+	function profileApiKey(id: string): string | undefined {
+		const draft = apiKeyDrafts[id];
+		return draft && draft.trim() ? draft : undefined;
+	}
+
+	async function loadModels(s: Settings, p: LlmProfile) {
+		ensureLlmDraft(s);
+		try {
+			modelLists = {
+				...modelLists,
+				[p.id]: await settings.llmModels({
+					profile_id: p.id,
+					base_url: p.base_url.trim(),
+					api_key: profileApiKey(p.id),
+				}),
+			};
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			modelLists = {
+				...modelLists,
+				[p.id]: { ok: false, models: [], models_url: null, server: null, error: msg },
+			};
+		}
+	}
+
+	async function runProbe(s: Settings, p: LlmProfile) {
+		ensureLlmDraft(s);
+		if (!p.model.trim()) {
+			toast.error(t('settings.requiredModel'));
+			return;
+		}
+		probing = { ...probing, [p.id]: true };
+		probeResults = { ...probeResults, [p.id]: null };
+		try {
+			// A cold llama.cpp endpoint loads the model before its first token —
+			// a 27B can take well over a minute, so the backend needs the headroom.
+			const result = await settings.llmTest({
+				profile_id: p.id,
+				base_url: p.base_url.trim(),
+				model: p.model.trim(),
+				api_key: profileApiKey(p.id),
+				thinking: p.thinking ?? 'default',
+				timeout: 240,
+			});
+			probeResults = { ...probeResults, [p.id]: result };
+			modelLists = { ...modelLists, [p.id]: result };
+			if (result.ok) toast.success(t('settings.probeOk'));
+			else toast.error(t('settings.probeFailed'));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			probeResults = {
+				...probeResults,
+				[p.id]: {
+					ok: false,
+					reachable: false,
+					models: [],
+					models_url: null,
+					server: null,
+					error: msg,
+					model: p.model.trim(),
+					model_found: null,
+					available_models: [],
+					thinking: p.thinking ?? 'default',
+					thinking_sent: {},
+					chat_ok: false,
+					latency_ms: null,
+					first_token_ms: null,
+					content: null,
+					reasoning_chars: 0,
+					reasoning_preview: null,
+					usage: null,
+				},
+			};
+			toast.error(msg);
+		} finally {
+			probing = { ...probing, [p.id]: false };
+		}
 	}
 </script>
 
@@ -440,17 +636,111 @@
 									</label>
 									<label class="field">
 										<span class="field-label">{t('settings.model')}</span>
-										<input
-											class="field-input"
-											class:invalid={validationErrors[`llm_model_${profile.id}`]}
-											value={profile.model}
-											oninput={(e) => patchProfile(s, profile.id, { model: e.currentTarget.value })}
-											placeholder="llama3.2"
-										/>
+										{#if modelOptions(profile).length > 0}
+											<select
+												class="field-input"
+												class:invalid={validationErrors[`llm_model_${profile.id}`]}
+												value={profile.model}
+												onchange={(e) =>
+													patchProfile(s, profile.id, { model: e.currentTarget.value })}
+											>
+												{#each modelOptions(profile) as opt (opt.id)}
+													<option value={opt.id}>{opt.label}</option>
+												{/each}
+											</select>
+										{:else}
+											<input
+												class="field-input"
+												class:invalid={validationErrors[`llm_model_${profile.id}`]}
+												value={profile.model}
+												oninput={(e) => patchProfile(s, profile.id, { model: e.currentTarget.value })}
+												placeholder="llama3.2"
+											/>
+										{/if}
 										{#if validationErrors[`llm_model_${profile.id}`]}
 											<p class="field-error">{validationErrors[`llm_model_${profile.id}`]}</p>
 										{/if}
+										<div class="probe-actions">
+											<Button variant="secondary" size="sm" onclick={() => loadModels(s, profile)}>
+												<Icon name="refresh" size={14} />
+												{t('settings.probeListModels')}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												disabled={probing[profile.id] || !profile.model.trim()}
+												onclick={() => runProbe(s, profile)}
+											>
+												<Icon name="activity" size={14} />
+												{probing[profile.id] ? t('settings.probeRunning') : t('settings.probeTest')}
+											</Button>
+										</div>
+										{#if modelLists[profile.id] && !modelLists[profile.id].ok}
+											<p class="field-error">{modelLists[profile.id].error}</p>
+										{:else if serverLine(profile)}
+											<p class="field-hint">{serverLine(profile)}</p>
+										{/if}
 									</label>
+									<label class="field">
+										<span class="field-label">{t('settings.thinking')}</span>
+										<select
+											class="field-input"
+											value={profile.thinking ?? 'default'}
+											onchange={(e) =>
+												patchProfile(s, profile.id, {
+													thinking: e.currentTarget.value as ThinkingMode,
+												})}
+										>
+											<!-- Raw wire values, never translated: these tokens ARE the
+											     payload (`chat_template_kwargs.reasoning_effort`) that the
+											     probe echoes back, and a model only accepts what its own
+											     chat template lists. A translated label hides both the
+											     value the operator picked and the mismatch that rejects it. -->
+											{#each THINKING_MODES as mode (mode)}
+												<option value={mode}>{mode}</option>
+											{/each}
+										</select>
+										<p class="field-hint">{t('settings.thinkingHint')}</p>
+									</label>
+									{#if probeResults[profile.id]}
+										{@const probe = probeResults[profile.id]}
+										<div class="probe-result" class:ok={probe?.ok} class:bad={probe && !probe.ok}>
+											{#if probe?.ok}
+												<p class="probe-line">
+													✓ {t('settings.probeOk')}
+													{#if probe.first_token_ms !== null}
+														· {t('settings.probeTtft')}: {probe.first_token_ms} ms
+													{/if}
+													{#if probe.latency_ms !== null}
+														· {t('settings.probeTotal')}: {probe.latency_ms} ms
+													{/if}
+												</p>
+												<!-- The exact payload the server received, so the option above can
+											     be checked against what went on the wire. `default` sends
+											     `{}` — nothing, so the model's own template decides. -->
+												<p class="probe-line muted">
+													thinking: {probe.thinking} · thinking_sent: {JSON.stringify(
+														probe.thinking_sent ?? {},
+													)}
+												</p>
+												{#if probe.reasoning_chars > 0}
+													<p class="probe-line">
+														{t('settings.probeReasoning')}: {probe.reasoning_chars}
+														{#if probe.reasoning_preview}
+															— {probe.reasoning_preview.slice(0, 120)}
+														{/if}
+													</p>
+												{:else}
+													<p class="probe-line muted">{t('settings.probeNoReasoning')}</p>
+												{/if}
+												{#if probe.content}
+													<p class="probe-line muted">“{probe.content.slice(0, 160)}”</p>
+												{/if}
+											{:else}
+												<p class="probe-line">✕ {probe?.error ?? t('settings.probeFailed')}</p>
+											{/if}
+										</div>
+									{/if}
 									<label class="field">
 										<span class="field-label">{t('settings.apiKey')}</span>
 										<input
@@ -643,7 +933,7 @@
 						class="field-input"
 						class:invalid={validationErrors.agent_history_char_budget}
 						type="number"
-						min="10000"
+						min="0"
 						max="2000000"
 						step="1000"
 						value={String(fieldValue('agent_history_char_budget', s.agent_history_char_budget))}
@@ -666,6 +956,94 @@
 						{/each}
 					</div>
 					<p class="field-hint">{t('settings.historyBudgetHint')}</p>
+					<p class="field-hint">
+						{t('settings.historyBudgetEffective', {
+							chars: effectiveBudgetChars,
+							tokens: effectiveBudgetTokens,
+							ctx: s.context_window_tokens ?? 0,
+						})}
+					</p>
+				</label>
+
+				<div class="callout">
+					<Icon name="info" size={16} />
+					<p>{t('settings.contextLead')}</p>
+				</div>
+
+				<label class="field">
+					<span class="field-label">{t('settings.maxOutputField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_max_output_tokens}
+						type="number"
+						min="0"
+						max="200000"
+						step="256"
+						value={String(fieldValue('llm_max_output_tokens', s.llm_max_output_tokens))}
+						oninput={(e) => (draft.llm_max_output_tokens = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_max_output_tokens')}
+					/>
+					{#if validationErrors.llm_max_output_tokens}
+						<p class="field-error">{validationErrors.llm_max_output_tokens}</p>
+					{/if}
+					<p class="field-hint">{t('settings.maxOutputHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.historyShareField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.agent_history_token_share}
+						type="number"
+						min="0.05"
+						max="0.95"
+						step="0.05"
+						value={String(fieldValue('agent_history_token_share', s.agent_history_token_share))}
+						oninput={(e) => (draft.agent_history_token_share = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'agent_history_token_share')}
+					/>
+					{#if validationErrors.agent_history_token_share}
+						<p class="field-error">{validationErrors.agent_history_token_share}</p>
+					{/if}
+					<p class="field-hint">{t('settings.historyShareHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.charsPerTokenField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_chars_per_token}
+						type="number"
+						min="0.5"
+						max="8"
+						step="0.1"
+						value={String(fieldValue('llm_chars_per_token', s.llm_chars_per_token))}
+						oninput={(e) => (draft.llm_chars_per_token = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_chars_per_token')}
+					/>
+					{#if validationErrors.llm_chars_per_token}
+						<p class="field-error">{validationErrors.llm_chars_per_token}</p>
+					{/if}
+					<p class="field-hint">{t('settings.charsPerTokenHint')}</p>
+				</label>
+
+				<label class="field">
+					<span class="field-label">{t('settings.fallbackCtxField')}</span>
+					<input
+						class="field-input"
+						class:invalid={validationErrors.llm_context_fallback_tokens}
+						type="number"
+						min="1024"
+						max="10000000"
+						step="1024"
+						value={String(fieldValue('llm_context_fallback_tokens', s.llm_context_fallback_tokens))}
+						oninput={(e) => (draft.llm_context_fallback_tokens = e.currentTarget.value)}
+						onblur={(e) => clampOnBlur(e, 'llm_context_fallback_tokens')}
+					/>
+					{#if validationErrors.llm_context_fallback_tokens}
+						<p class="field-error">{validationErrors.llm_context_fallback_tokens}</p>
+					{/if}
+					<p class="field-hint">{t('settings.fallbackCtxHint')}</p>
 				</label>
 			</section>
 			<section class="panel">
@@ -942,6 +1320,36 @@
 	.llm-card.active {
 		border-color: rgba(139, 92, 246, 0.45);
 		background: rgba(139, 92, 246, 0.08);
+	}
+	.probe-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 8px;
+	}
+	.probe-result {
+		margin: 10px 0 2px;
+		padding: 10px 12px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-left-width: 3px;
+		border-radius: var(--radius-sm, 6px);
+		background: rgba(0, 0, 0, 0.22);
+		font-size: 12px;
+		line-height: 1.6;
+	}
+	.probe-result.ok {
+		border-left-color: var(--success, #22c55e);
+	}
+	.probe-result.bad {
+		border-left-color: var(--error);
+	}
+	.probe-line {
+		margin: 0;
+		color: var(--text-primary);
+		word-break: break-word;
+	}
+	.probe-line.muted {
+		color: var(--text-muted);
 	}
 	.llm-card-head {
 		display: flex;

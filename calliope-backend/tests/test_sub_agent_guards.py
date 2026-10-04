@@ -524,3 +524,101 @@ def test_valid_planner_roles_not_clamped():
         e for e in session_log.read_events(sid) if e.type == session_log.PLAN_CREATED
     )
     assert "clamped_roles" not in plan_event.data
+
+
+def test_synthesis_states_the_truth_when_the_project_is_still_empty():
+    """The swarm must not report work that never happened (2026-10-03).
+
+    A story sub-agent that stopped after one tool call reported "Done.", and the
+    synthesis LLM expanded that into "beats, characters, environments, and misc.
+    items were produced" on a project with zero rows. The counts come from the
+    DB, so the correction is applied even though the summary text claims
+    otherwise.
+    """
+    import json as _json
+
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness import log as session_log
+
+    sid = _mk_session()
+    session_log.append_event(
+        sid, session_log.USER_MESSAGE, {"content": "Draft a storyline"}
+    )
+
+    class _PlannerClient:
+        """Overclaims exactly like the live failure."""
+
+        async def chat(self, *a, **kw):
+            text = " ".join(str(m.get("content") or "") for m in (a[0] if a else []))
+            if "mode" in text:
+                return _json.dumps(
+                    {"mode": "swarm", "note": "", "tasks": [{"role": "story", "goal": "a"}]}
+                )
+            return (
+                "Storyline draft completed: beats, characters, environments, "
+                "and misc. items were produced. Failures: none reported."
+            )
+
+        async def close(self):
+            return None
+
+    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
+        return "Done."
+
+    orig_client = orch.LLMClient
+    orig_run_sub = orch._run_sub_agent
+    orig_counts = orch._content_counts
+    orch.LLMClient = lambda: _PlannerClient()
+    orch._run_sub_agent = fake_run_sub
+    orch._content_counts = lambda pid: {
+        t: 0 for t in orch._CONTENT_TABLES
+    }
+
+    class _NoWorkspace:
+        def get(self, name):
+            return {"ok": True}
+
+        async def execute(self, ctx, name, args):
+            return {"ok": True}
+
+    orig_ws = orch.get_registry
+    orch.get_registry = lambda: _NoWorkspace()
+    try:
+        ctx = ToolContext(session_id=sid, project_id=1)
+        final = asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
+    finally:
+        orch.LLMClient = orig_client
+        orch._run_sub_agent = orig_run_sub
+        orch._content_counts = orig_counts
+        orch.get_registry = orig_ws
+
+    assert "No content was created" in final
+    assert "still empty" in final
+
+
+def test_content_counts_failure_is_not_reported_as_an_empty_project():
+    """Unreadable counts mean "unknown", never "nothing was created".
+
+    Collapsing the two would make a DB hiccup announce a false negative on a
+    project that is actually full.
+    """
+    import calliope.agent.harness.orchestrator as orch
+    from calliope.agent.harness.registry import ToolContext
+
+    orig = orch._content_counts
+    orch._content_counts = lambda pid: None
+    try:
+        # The guard must key off None, so the correction block never fires.
+        assert orch._content_counts(1) is None
+    finally:
+        orch._content_counts = orig
+    assert orch._content_counts(1) is not None
+
+
+def test_content_counts_close_the_connection_they_open():
+    """A leaked handle pins the DB file — on Windows that breaks teardown."""
+    import calliope.agent.harness.orchestrator as orch
+
+    counts = orch._content_counts(1)
+    assert counts is not None
+    assert set(counts) == set(orch._CONTENT_TABLES)

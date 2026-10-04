@@ -410,8 +410,15 @@ def test_settings_rejects_ephemeral_workspace():
     import calliope.config as config_module
 
     s = config_module.settings
-    with tempfile.TemporaryDirectory() as tmp:
-        s.agent_workspace_dir = Path(tmp)
-        s.save_config_file()
-        assert s.agent_workspace_dir is None
-        assert s.workspace_dir == s.data_dir / "workspace"
+    prev = s.agent_workspace_dir
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            s.agent_workspace_dir = Path(tmp)
+            s.save_config_file()
+            assert s.agent_workspace_dir is None
+            assert s.workspace_dir == s.data_dir / "workspace"
+    finally:
+        # This test drives the REAL save path (conftest redirects CONFIG_FILE to a
+        # scratch file, so no operator data is at risk), but it must still not
+        # leave the shared singleton holding a reset workspace for later tests.
+        s.agent_workspace_dir = prev

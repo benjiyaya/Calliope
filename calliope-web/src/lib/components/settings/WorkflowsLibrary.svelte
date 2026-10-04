@@ -27,12 +27,22 @@
 	let wfKind = $state<'image' | 'video'>('image');
 	let wfProfile = $state('prose');
 	let wfDescription = $state('');
+	let wfStrict = $state(true);
 	let saving = $state(false);
 
 	let editingId = $state<number | null>(null);
 	let editName = $state('');
 	let editDescription = $state('');
 	let editProfile = $state('prose');
+	let editStrict = $state(true);
+	let editJson = $state('');
+	let originalJson = $state('');
+	let jsonEditError = $state('');
+	let jsonEdited = $state(false);
+	let showJsonEditor = $state(false);
+	let confirmEditJsonOpen = $state(false);
+	let confirmSaveJsonOpen = $state(false);
+	let pendingSaveId = $state<number | null>(null);
 	let detailsId = $state<number | null>(null);
 
 	async function analyzeRaw(text: string) {
@@ -81,6 +91,7 @@
 				workflow_json: pendingJson,
 				description: wfDescription.trim() || undefined,
 				prompt_profile: wfProfile,
+				strict_mode: wfStrict,
 			});
 			jsonText = '';
 			uploadedFileName = null;
@@ -93,6 +104,7 @@
 			wfDescription = '';
 			wfKind = 'image';
 			wfProfile = 'prose';
+			wfStrict = true;
 			client.invalidateQueries({ queryKey: ['workflows'] });
 			toast.success(t('wf.savedToLibrary', { name }));
 		} catch (err) {
@@ -107,20 +119,84 @@
 		editName = wf.name;
 		editDescription = wf.description ?? '';
 		editProfile = wf.prompt_profile ?? 'prose';
+		editStrict = wf.strict_mode ?? true;
+		const j = JSON.stringify(wf.workflow_json ?? {}, null, 2);
+		editJson = j;
+		originalJson = j;
+		jsonEditError = '';
+		jsonEdited = false;
+		showJsonEditor = false;
 	}
 
-	async function saveEdit(id: number) {
+	function openEditJsonConfirm() {
+		confirmEditJsonOpen = true;
+	}
+
+	function confirmEditJson() {
+		confirmEditJsonOpen = false;
+		showJsonEditor = true;
+	}
+
+	function cancelEdit() {
+		editingId = null;
+		showJsonEditor = false;
+		jsonEdited = false;
+		jsonEditError = '';
+		confirmSaveJsonOpen = false;
+		pendingSaveId = null;
+	}
+
+	async function doSaveEdit(id: number) {
 		try {
-			await workflows.update(id, {
+			const payload: any = {
 				name: editName.trim(),
 				description: editDescription.trim(),
 				prompt_profile: editProfile,
-			});
+				strict_mode: editStrict,
+			};
+			if (showJsonEditor && jsonEdited && editJson.trim()) {
+				try {
+					const j = JSON.parse(editJson);
+					payload.workflow_json = j;
+				} catch (e) {
+					jsonEditError = e instanceof Error ? e.message : t('wf.invalidJson');
+					confirmSaveJsonOpen = false;
+					pendingSaveId = null;
+					return;
+				}
+			}
+			await workflows.update(id, payload);
 			editingId = null;
+			showJsonEditor = false;
+			jsonEdited = false;
+			confirmSaveJsonOpen = false;
+			pendingSaveId = null;
 			client.invalidateQueries({ queryKey: ['workflows'] });
 			toast.success(t('wf.updated'));
 		} catch (err) {
+			confirmSaveJsonOpen = false;
+			pendingSaveId = null;
 			toast.error(err instanceof Error ? err.message : t('wf.updateFailed'));
+		}
+	}
+
+	function saveEdit(id: number) {
+		if (showJsonEditor && jsonEdited) {
+			const trimmed = editJson.trim();
+			if (trimmed && trimmed !== originalJson.trim()) {
+				pendingSaveId = id;
+				confirmSaveJsonOpen = true;
+				return;
+			}
+		}
+		void doSaveEdit(id);
+	}
+
+	function confirmSaveJson() {
+		if (pendingSaveId != null) {
+			void doSaveEdit(pendingSaveId);
+		} else {
+			confirmSaveJsonOpen = false;
 		}
 	}
 
@@ -291,6 +367,11 @@
 					placeholder={t('wf.descPlaceholder')}
 				></textarea>
 			</label>
+			<label class="check-row">
+				<input type="checkbox" bind:checked={wfStrict} />
+				<span>{t('wf.strictMode')}</span>
+			</label>
+			<p class="field-hint">{t('wf.strictModeHint')}</p>
 			<Button variant="primary" loading={saving} disabled={!wfName.trim()} onclick={saveToLibrary}>
 				{t('wf.saveToLibrary')}
 			</Button>
@@ -339,10 +420,53 @@
 									<option value="minimax_h3_ref">{t('wf.profileH3')}</option>
 								</select>
 							</label>
-							<p class="field-hint">{t('wf.jsonLocked')}</p>
+							<label class="check-row">
+								<input type="checkbox" bind:checked={editStrict} />
+								<span>{t('wf.strictMode')}</span>
+							</label>
+							<p class="field-hint">{t('wf.strictModeHint')}</p>
+
+							{#if !showJsonEditor}
+								<div class="row">
+									<Button variant="secondary" size="sm" onclick={openEditJsonConfirm}>
+										{t('wf.editWorkflowJson')}
+									</Button>
+								</div>
+							{:else}
+								<label class="field">
+									<span class="field-label">{t('wf.workflowJson')}</span>
+									<textarea
+										class="field-textarea mono"
+										rows="14"
+										spellcheck="false"
+										bind:value={editJson}
+										oninput={() => {
+											jsonEdited = true;
+											jsonEditError = '';
+										}}
+										placeholder={t('wf.workflowJsonPlaceholder')}
+									></textarea>
+								</label>
+
+								{#if jsonEditError}
+									<div class="error">{jsonEditError}</div>
+								{/if}
+
+								<div class="warning-block">
+									<strong>⚠️ {t('wf.dangerZone')}</strong>
+									<p>{t('wf.editJsonWarning')}</p>
+									<ul>
+										<li>{t('wf.editJsonWarn1')}</li>
+										<li>{t('wf.editJsonWarn2')}</li>
+										<li>{t('wf.editJsonWarn3')}</li>
+									</ul>
+								</div>
+
+								<p class="field-hint">{t('wf.jsonEditableHint')}</p>
+							{/if}
 							<div class="row">
 								<Button size="sm" onclick={() => saveEdit(wf.id)}>{t('common.save')}</Button>
-								<Button variant="ghost" size="sm" onclick={() => (editingId = null)}>{t('common.cancel')}</Button>
+								<Button variant="ghost" size="sm" onclick={cancelEdit}>{t('common.cancel')}</Button>
 							</div>
 						{:else}
 							<div class="card-top">
@@ -675,6 +799,25 @@
 		font-size: 13px;
 		color: var(--text-secondary);
 	}
+	.warning-block {
+		margin-top: 8px;
+		padding: 10px 12px;
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
+		border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 40%, transparent);
+		font-size: 13px;
+		line-height: 1.5;
+	}
+	.warning-block strong {
+		color: var(--danger, #ef4444);
+	}
+	.warning-block ul {
+		margin: 6px 0 0 18px;
+		padding: 0;
+	}
+	.warning-block li {
+		margin: 2px 0;
+	}
 	.row {
 		display: flex;
 		flex-wrap: wrap;
@@ -697,4 +840,35 @@
 		flex-direction: column;
 		gap: 8px;
 	}
+
+	.check-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		font-size: 13px;
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+
+	.check-row input {
+		margin-top: 2px;
+	}
 </style>
+
+<ConfirmDialog
+	bind:open={confirmEditJsonOpen}
+	title={t('wf.editWorkflowJson')}
+	message={t('wf.confirmEditJson')}
+	confirmLabel={t('common.continue')}
+	cancelLabel={t('common.cancel')}
+	onconfirm={confirmEditJson}
+/>
+
+<ConfirmDialog
+	bind:open={confirmSaveJsonOpen}
+	title={t('wf.confirmSaveJsonTitle')}
+	message={t('wf.confirmSaveJson')}
+	confirmLabel={t('common.save')}
+	cancelLabel={t('common.cancel')}
+	onconfirm={confirmSaveJson}
+/>

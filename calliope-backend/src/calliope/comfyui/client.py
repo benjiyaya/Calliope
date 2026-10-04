@@ -135,59 +135,99 @@ class ComfyUIClient:
                 "picker or attach it in chat, then retry."
             )
 
+    @staticmethod
+    def _references_node(workflow: dict[str, Any], node_id: str) -> bool:
+        """True when any other node consumes this node's output.
+
+        In ComfyUI API format a link is ``[node_id, output_index]``; a node whose
+        output nothing consumes is pruned by ComfyUI and never executed, so a bad
+        value there is harmless.
+        """
+        target = str(node_id)
+
+        def links_to(value: Any) -> bool:
+            if isinstance(value, list):
+                if (
+                    len(value) >= 2
+                    and isinstance(value[0], str)
+                    and value[0] == target
+                    and isinstance(value[1], int)
+                ):
+                    return True
+                return any(links_to(item) for item in value)
+            if isinstance(value, dict):
+                return any(links_to(item) for item in value.values())
+            return False
+
+        return any(
+            links_to(node.get("inputs"))
+            for nid, node in workflow.items()
+            if str(nid) != target and isinstance(node, dict)
+        )
+
+    @staticmethod
+    def _reject_empty_media(
+        node_id: str, class_type: str, field: str, node: dict[str, Any]
+    ) -> None:
+        """Fail a job BEFORE queueing when a wired-in media input has no value.
+
+        ComfyUI's LoadVideo/LoadImage/LoadAudio resolve an empty name to the
+        ``input`` directory (or a missing file) and die deep inside the node with
+        an opaque av/Errno error. Catching it here keeps the failure actionable
+        and stays workflow-agnostic: any workflow whose media node is consumed
+        but left blank is reported by node and title.
+        """
+        title = (node.get("_meta") or {}).get("title") or class_type
+        raise RuntimeError(
+            f"node {node_id} ({class_type} \"{title}\"): '{field}' is empty but this "
+            "workflow consumes it. Provide a reference file, mark the clip as "
+            "continue-from-previous, or pick a workflow without this input."
+        )
+
     async def prepare_media_inputs(self, workflow: dict[str, Any]) -> dict[str, Any]:
-        """Upload local file paths referenced in LoadImage / LoadAudio / LoadVideo nodes."""
+        """Upload local file paths referenced in LoadImage / LoadAudio / LoadVideo nodes.
+
+        Also rejects a wired-in media node whose value is blank (#67 follow-up: an
+        empty LoadVideo resolved to the input directory and crashed
+        GetVideoComponents with ``av.error.PermissionError``). Unreferenced blank
+        nodes are left alone — ComfyUI prunes them.
+        """
         for node_id, node in workflow.items():
             if not isinstance(node, dict):
                 continue
             class_type = node.get("class_type", "")
             inputs = node.get("inputs") or {}
             if class_type in IMAGE_CLASSES:
-                image = inputs.get("image")
-                if isinstance(image, str) and self._looks_like_local_path(image):
-                    path = Path(image)
-                    if path.exists():
-                        if path.is_dir():
-                            self._reject_bad_media_path(image, str(node_id), class_type, "image")
-                        inputs["image"] = await self.upload_image(path)
-                        node["inputs"] = inputs
-                    else:
-                        self._reject_bad_media_path(image, str(node_id), class_type, "image")
+                field = "image"
             elif class_type in AUDIO_CLASSES:
                 # VHS_LoadAudio names its widget "audio:" (with colon); stock
-                # LoadAudio uses "audio". Probe both so the file is uploaded
-                # whichever variant the workflow uses.
-                audio_key = next(
-                    (k for k in ("audio", "audio:") if isinstance(inputs.get(k), str)),
-                    None,
-                )
-                if audio_key:
-                    audio = inputs[audio_key]
-                    if isinstance(audio, str) and self._looks_like_local_path(audio):
-                        path = Path(audio)
-                        if path.exists():
-                            if path.is_dir():
-                                self._reject_bad_media_path(
-                                    audio, str(node_id), class_type, audio_key
-                                )
-                            inputs[audio_key] = await self.upload_audio(path)
-                            node["inputs"] = inputs
-                        else:
-                            self._reject_bad_media_path(
-                                audio, str(node_id), class_type, audio_key
-                            )
+                # LoadAudio uses "audio". Probe both so the file reaches the
+                # right widget whichever variant the workflow uses.
+                field = next((k for k in ("audio", "audio:") if k in inputs), "audio")
             elif class_type in VIDEO_CLASSES:
                 field = "file" if class_type in VIDEO_FILE_CLASSES else "video"
-                media = inputs.get(field)
-                if isinstance(media, str) and self._looks_like_local_path(media):
-                    path = Path(media)
-                    if path.exists():
-                        if path.is_dir():
-                            self._reject_bad_media_path(media, str(node_id), class_type, field)
-                        inputs[field] = await self.upload_video(path)
-                        node["inputs"] = inputs
-                    else:
-                        self._reject_bad_media_path(media, str(node_id), class_type, field)
+            else:
+                continue
+
+            media = inputs.get(field)
+            if not isinstance(media, str):
+                continue
+            if not media.strip():
+                if self._references_node(workflow, str(node_id)):
+                    self._reject_empty_media(str(node_id), class_type, field, node)
+                continue
+            if not self._looks_like_local_path(media):
+                # Bare/relative names are legitimate Comfy-side references.
+                continue
+            path = Path(media)
+            self._reject_bad_media_path(media, str(node_id), class_type, field)
+            if class_type in AUDIO_CLASSES:
+                inputs[field] = await self.upload_audio(path)
+            elif class_type in VIDEO_CLASSES:
+                inputs[field] = await self.upload_video(path)
+            else:
+                inputs[field] = await self.upload_image(path)
+            node["inputs"] = inputs
         return workflow
 
     @staticmethod

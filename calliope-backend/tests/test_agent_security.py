@@ -2053,3 +2053,32 @@ def test_story_role_has_beat_editors():
     assert {"add_beat", "update_beat"} <= names
     # delete_beat is destructive but not approval-gated; it should resolve too
     assert "delete_beat" in names
+
+
+def test_story_role_can_backfill_the_cast():
+    """A story task naming characters/locations/items must be able to create them.
+
+    generate_story seeds the cast only when the model's brief included it. When
+    it did not, the agent had no tool at all and could only report an empty
+    cast — which is exactly what happened on project 3 (observed 2026-10-03,
+    beats=50 but characters/locations/items=0 and a story agent with no recourse).
+    """
+    from calliope.agent.harness.orchestrator import ROLE_TOOLS, _scoped_payload
+
+    expected = {
+        "add_character",
+        "update_character",
+        "delete_character",
+        "add_location",
+        "update_location",
+        "delete_location",
+        "add_item",
+        "update_item",
+        "delete_item",
+    }
+    assert expected <= set(ROLE_TOOLS["story"])
+    # Still reachable from assets — the standard edit pipeline must not regress.
+    assert expected <= set(ROLE_TOOLS["assets"])
+    ctx = ToolContext(session_id=9_999_005, project_id=99)
+    names = {t["function"]["name"] for t in _scoped_payload(ctx, ROLE_TOOLS["story"])}
+    assert expected <= names, sorted(expected - names)

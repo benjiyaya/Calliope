@@ -12,6 +12,7 @@
 	import { normalizeInputRole } from '$lib/comfy/parser';
 	import { compactInputValues } from '$lib/comfy/promptInput';
 	import Button from '$lib/components/ui/Button.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
@@ -77,6 +78,8 @@
 	let failed = $state(false);
 	/** Continuity critic notes. Generate stays available when these are set. */
 	let criticNotes = $state<string[]>([]);
+	/** Empty non-draft resolve: ask before abandoning or forcing a rewrite. */
+	let confirmEmptyOpen = $state(false);
 
 	const preview = createMutation({
 		mutationFn: async (vars?: { force?: boolean }) => {
@@ -89,13 +92,19 @@
 				force: Boolean(vars?.force),
 			});
 		},
-		onSuccess: (data) => {
+		onSuccess: (data, vars) => {
 			text = data.prompt;
 			basedOn = data.based_on;
 			fromDraft = data.from_draft;
 			criticNotes = (data.critic?.notes ?? []).map((note) => note.trim()).filter(Boolean);
 			failed = false;
 			stale = false;
+			// Empty resolve that is not a saved draft would dead-end on an empty
+			// editor. Ask whether to abandon or force a fresh rewrite. Skipped on
+			// a forced retry so a still-empty result can't loop the dialog.
+			if (!data.prompt.trim() && !data.from_draft && !vars?.force) {
+				confirmEmptyOpen = true;
+			}
 		},
 		onError: (err) => {
 			failed = true;
@@ -122,7 +131,7 @@
 		const key = `${clip?.id ?? -(scene?.id ?? 0)}|${mediaSlotKey()}`;
 		if (attemptedFor === key) return;
 		attemptedFor = key;
-		$preview.mutate();
+		$preview.mutate({});
 	});
 
 	/** Fallback body when resolve fails: the clip's beat or the scene prose. */
@@ -145,6 +154,11 @@
 		}
 		const meta = clip.video_settings?.prompt_draft_meta?.based_on;
 		stale = fromDraft && meta != null && meta !== basedOn;
+	});
+
+	// A closed preview must not leave its empty-prompt confirm floating.
+	$effect(() => {
+		if (!open) confirmEmptyOpen = false;
 	});
 
 	async function saveDraft() {
@@ -181,6 +195,19 @@
 	function regenerate() {
 		failed = false;
 		$preview.mutate({ force: true });
+	}
+
+	/** Empty non-draft resolve: user chose to force a fresh rewrite. */
+	function confirmEmptyRecompile() {
+		confirmEmptyOpen = false;
+		failed = false;
+		$preview.mutate({ force: true });
+	}
+
+	/** Empty non-draft resolve: user chose to abandon — close, no action. */
+	function dismissEmptyPreview() {
+		confirmEmptyOpen = false;
+		open = false;
 	}
 
 	function confirmGenerate() {
@@ -275,6 +302,16 @@
 		</Button>
 	{/snippet}
 </Modal>
+
+<ConfirmDialog
+	bind:open={confirmEmptyOpen}
+	title={t('promptPreview.emptyConfirmTitle')}
+	message={t('promptPreview.emptyConfirmMessage')}
+	confirmLabel={t('promptPreview.emptyConfirmYes')}
+	cancelLabel={t('promptPreview.emptyConfirmNo')}
+	onconfirm={confirmEmptyRecompile}
+	oncancel={dismissEmptyPreview}
+/>
 
 <style>
 	.muted {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sys
 import tempfile
 import uuid
@@ -20,9 +22,67 @@ if getattr(sys, "frozen", False):
     BACKEND_ROOT = Path(sys.executable).resolve().parent
 else:
     BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = BACKEND_ROOT / "calliope_config.json"
+
+# Overridable so the test session can never write the operator's real config.
+# CONFIG_FILE is a module constant, deliberately independent of `data_dir`, so
+# pointing data_dir at a temp dir does NOT redirect it: any test that calls
+# save_config_file() persists the whole live singleton — including profiles and
+# paths another test replaced — straight into calliope_config.json. That is how
+# a probed `context_tokens: 131072` silently became 0 after a test run
+# (observed 2026-10-03). conftest sets this before importing calliope.
+_CONFIG_OVERRIDE = os.environ.get("CALLIOPE_CONFIG_FILE", "").strip()
+CONFIG_FILE = Path(_CONFIG_OVERRIDE) if _CONFIG_OVERRIDE else BACKEND_ROOT / "calliope_config.json"
+
+logger = logging.getLogger("calliope.config")
 DEFAULT_DATA_DIR = BACKEND_ROOT / "data"
 DEFAULT_ASSETS_DIR = DEFAULT_DATA_DIR / "assets"
+
+
+# Thinking modes an LLM profile can request per call. Lives here rather than in
+# agent/llm.py because config validates it on every profile save and agent/llm
+# imports config — putting the vocabulary at the bottom of the stack keeps the
+# dependency one-directional.
+#
+#   default -> send nothing, leave the server's own default in place
+#   off     -> chat_template_kwargs.enable_thinking = false
+#   level   -> chat_template_kwargs.reasoning_effort = <level>
+#
+# This matters more than it looks: a llama.cpp server started with
+# `--reasoning-effort xhigh` makes every prompt-formatting rewrite burn 10k+
+# reasoning tokens to emit one sentence.
+#
+# Which *level strings* a given model accepts is decided by its own chat
+# template and is not discoverable from /models — Qwen3-family templates take
+# low|medium|xhigh and silently map `high` to `xhigh`. An unsupported value
+# fails loudly at request time instead of being guessed at here.
+THINKING_DEFAULT = "default"
+THINKING_OFF = "off"
+THINKING_LEVELS = ("low", "medium", "high", "xhigh")
+THINKING_CHOICES = (THINKING_DEFAULT, THINKING_OFF, *THINKING_LEVELS)
+
+
+def normalize_thinking(value: Any) -> str | None:
+    """Coerce a stored/typed thinking mode to a canonical value or None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if not v or v == THINKING_DEFAULT:
+        return None
+    return v if v in (THINKING_OFF, *THINKING_LEVELS) else None
+
+
+def _coerce_context_tokens(value: Any) -> int:
+    """A probed context window as a usable positive int; 0 = never probed.
+
+    Stored values arrive as str/int/None from the config file and from the
+    settings form, and a nonsense value must degrade to "unknown" (0) rather
+    than to a window that would then be trusted by context_window_tokens().
+    """
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
 
 
 def _strip_path_str(value: str | Path | None) -> str | None:
@@ -119,6 +179,9 @@ class Settings(BaseSettings):
     # profile so LLMClient and env overrides keep working.
     llm_profiles: list[dict[str, Any]] = Field(default_factory=list)
     llm_active_id: str | None = None
+    # Legacy/global context override for servers that do not report /models
+    # metadata. Per-profile `context_tokens` wins; 0 = probe, then fallback.
+    llm_context_tokens: int = 0
     # role (AGENT_LLM_ROLES) -> LLM profile id; None/absent = use Active LLM
     agent_llm_assignments: dict[str, str | None] = Field(default_factory=dict)
 
@@ -136,10 +199,39 @@ class Settings(BaseSettings):
     queue_max_retries: int = 2
     agent_max_steps: int = 24
     agent_hardening_prompt: str = DEFAULT_AGENT_HARDENING_PROMPT
-    # Character budget (~4 chars/token) for the derived LLM history — the
-    # 40-turn cap alone can still overflow a context window with heavy
-    # multi-step turns. Oldest whole turns drop first; 0 = disabled.
-    agent_history_char_budget: int = 400_000
+
+    # ── Context-window budget ────────────────────────────────────────────────
+    # The chat history used to be trimmed by raw character count against a
+    # hardcoded "~4 chars/token" assumption. That holds for English but is ~2.7x
+    # optimistic for Chinese, which is most of what Calliope sends (workspace
+    # digests, scene text, agent replies) — a 400k-char history was really
+    # ~250k tokens against a 131k window. The budget is now derived from the
+    # model's reported context, minus room for the system prompt, the tool
+    # schemas and the reply.
+    #
+    # `agent_history_char_budget` survives as a manual override: 0 = derive it
+    # from the active profile's `context_tokens` (filled by the model probe
+    # from the server's /models `--ctx-size`), falling back to
+    # `llm_context_fallback_tokens` when the server reports nothing.
+    agent_history_char_budget: int = 0
+    # Fraction of the window the trimmed history may occupy. The remainder pays
+    # for the per-step system prompt + tool schemas, which the char trim never
+    # sees because prompts.assemble() rebuilds them outside the history list.
+    agent_history_token_share: float = 0.5
+    # Window assumed before any probe has run. 8192 was too small to be safe:
+    # a tool-using agent turn carries the system prompt plus every tool schema
+    # (the story role alone is ~5k tokens), so an 8k assumption both starved the
+    # reply ceiling and looked like a broken agent. 32k is the smallest window
+    # modern local models are served with in practice, and an over-estimate is
+    # harmless — the server truncates/reports, it does not silently misbehave.
+    llm_context_fallback_tokens: int = 32768
+    # Characters per token. 1.6 is deliberately conservative for mixed CJK/ASCII;
+    # too high overflows the window, too low truncates history needlessly.
+    llm_chars_per_token: float = 1.6
+    # Sent as `max_tokens` on every real LLM call. Unset means the server
+    # default, which on llama.cpp is unlimited — the reply can then eat the
+    # whole remaining window.
+    llm_max_output_tokens: int = 4096
     # Extra OpenAI-compatible request fields merged into the MiniMax H3 prompt
     # rewrite call only (the `minimax_h3_ref` profile). The rewrite is a
     # formatting task: on a thinking model it can burn 10k+ reasoning tokens per
@@ -184,6 +276,7 @@ class Settings(BaseSettings):
                     "base_url": self.llm_base_url,
                     "model": self.llm_model,
                     "api_key": self.llm_api_key,
+                    "thinking": None,
                 }
             ]
             self.llm_active_id = pid
@@ -207,6 +300,17 @@ class Settings(BaseSettings):
                         "base_url": base_url or self.llm_base_url,
                         "model": model or "llama3.2",
                         "api_key": key,
+                        # None = leave the server's own default alone. A server
+                        # started with --reasoning-effort xhigh would otherwise
+                        # burn 10k+ reasoning tokens on every formatting rewrite.
+                        "thinking": normalize_thinking(item.get("thinking")),
+                        # Must survive normalization: this rebuilds the dict from
+                        # a fixed whitelist, so a field missing here is silently
+                        # dropped on EVERY load — the probed window was written,
+                        # saved, and then erased before it could ever be used.
+                        "context_tokens": _coerce_context_tokens(
+                            item.get("context_tokens")
+                        ),
                     }
                 )
             if not normalized:
@@ -234,6 +338,65 @@ class Settings(BaseSettings):
         if profile.get("model"):
             self.llm_model = str(profile["model"])
         self.llm_api_key = profile.get("api_key") if isinstance(profile.get("api_key"), str) else None
+
+    def active_llm_profile(self) -> dict[str, Any]:
+        """The active profile dict, or {} when none is configured.
+
+        Read-only on purpose — unlike resolve_llm_for_role this never runs the
+        ensure/migrate pass, so callers on hot paths (e.g. LLMClient.__init__)
+        can read the current thinking setting without mutating config state.
+        """
+        profiles = self.llm_profiles if isinstance(self.llm_profiles, list) else []
+        active = next((p for p in profiles if isinstance(p, dict) and p.get("id") == self.llm_active_id), None)
+        if active is not None:
+            return active
+        first = next((p for p in profiles if isinstance(p, dict)), None)
+        return first if first is not None else {}
+
+    def context_window_tokens(self) -> int:
+        """Context size of the model that will actually serve the request.
+
+        Prefers the active profile's `context_tokens` (written by the model
+        probe from the server's /models `--ctx-size`), then the legacy
+        `llm_context_tokens`, and finally `llm_context_fallback_tokens` — a
+        server that reports nothing must not be assumed to have a 128k window.
+        """
+        for value in (self.active_llm_profile().get("context_tokens"), self.llm_context_tokens):
+            try:
+                n = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                return n
+        return max(1024, int(self.llm_context_fallback_tokens or 32768))
+
+    def history_char_budget(self) -> int:
+        """Character ceiling for the derived chat history.
+
+        A non-zero `agent_history_char_budget` is an operator override and is
+        returned as-is. Otherwise the ceiling is derived from the model's
+        window: `context * share` tokens, converted at `chars_per_token`. The
+        share leaves room for what the trim cannot see — the per-step system
+        prompt and the full tool schema set, both rebuilt outside the history
+        list by prompts.assemble().
+        """
+        try:
+            override = int(self.agent_history_char_budget or 0)
+        except (TypeError, ValueError):
+            override = 0
+        if override > 0:
+            return override
+        try:
+            share = float(self.agent_history_token_share)
+        except (TypeError, ValueError):
+            share = 0.5
+        share = min(max(share, 0.05), 0.95)
+        try:
+            chars_per_token = float(self.llm_chars_per_token)
+        except (TypeError, ValueError):
+            chars_per_token = 1.6
+        chars_per_token = min(max(chars_per_token, 0.5), 8.0)
+        return int(self.context_window_tokens() * share * chars_per_token)
 
     def resolve_llm_for_role(self, role: str) -> dict[str, Any]:
         """Profile dict for an agent role: assignment → active fallback.
@@ -278,6 +441,19 @@ class Settings(BaseSettings):
                     "base_url": base_url or self.llm_base_url,
                     "model": model or "llama3.2",
                     "api_key": api_key,
+                    # Absent from the payload means "keep whatever was saved" —
+                    # an older client that never sends the field must not wipe
+                    # a thinking setting.
+                    "thinking": normalize_thinking(
+                        raw["thinking"] if "thinking" in raw else old.get("thinking")
+                    ),
+                    # Same "absent means keep" rule as thinking: the probe fills
+                    # this in, so a save from an older client must not discard it.
+                    "context_tokens": int(
+                        raw["context_tokens"]
+                        if str(raw.get("context_tokens") or "").strip()
+                        else old.get("context_tokens") or 0
+                    ),
                 }
             )
         if not new_list:
@@ -318,6 +494,8 @@ class Settings(BaseSettings):
                 "base_url": p["base_url"],
                 "model": p["model"],
                 "api_key": bool(p.get("api_key")),
+                "thinking": p.get("thinking"),
+                "context_tokens": int(p.get("context_tokens") or 0),
             }
             for p in self.llm_profiles
         ]
@@ -337,6 +515,10 @@ class Settings(BaseSettings):
             "llm_api_key": bool(self.llm_api_key),
             "llm_profiles": profiles,
             "llm_active_id": self.llm_active_id,
+            "llm_context_tokens": int(self.llm_context_tokens or 0),
+            "llm_context_fallback_tokens": int(self.llm_context_fallback_tokens),
+            "llm_chars_per_token": float(self.llm_chars_per_token),
+            "llm_max_output_tokens": int(self.llm_max_output_tokens),
             "agent_llm_assignments": dict(self.agent_llm_assignments or {}),
             "comfyui_base_url": self.comfyui_base_url,
             "queue_concurrency": self.queue_concurrency,
@@ -345,7 +527,10 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
-            "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_history_char_budget": int(self.agent_history_char_budget or 0),
+            "agent_history_token_share": float(self.agent_history_token_share),
+            "agent_history_char_budget_effective": self.history_char_budget(),
+            "context_window_tokens": self.context_window_tokens(),
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),
@@ -376,8 +561,16 @@ class Settings(BaseSettings):
         path_keys = {"data_dir", "assets_dir", "agent_workspace_dir"}
         # Ignore legacy comfyui_input_dir / comfyui_output_dir if present in old configs.
         skip_keys = {"comfyui_input_dir", "comfyui_output_dir"}
+        # Checked against the declared FIELDS, not hasattr: a stored key that
+        # happens to share a method's name (context_window_tokens) passes
+        # hasattr and then raises inside pydantic, which takes the whole backend
+        # down on startup. An unrecognised key is a stale file, not a crash.
+        known = set(type(self).model_fields)
         for key, value in data.items():
             if key in skip_keys:
+                continue
+            if key not in known:
+                logger.warning("Ignoring unknown key %r in %s", key, CONFIG_FILE.name)
                 continue
             if key in path_keys:
                 value = normalize_path(value)
@@ -385,7 +578,7 @@ class Settings(BaseSettings):
                 value = bool(value)
             if key == "agent_shell_enabled":
                 value = bool(value)
-            if hasattr(self, key) and key not in {"data_dir", "assets_dir", "agent_workspace_dir"}:
+            if key not in {"data_dir", "assets_dir", "agent_workspace_dir"}:
                 setattr(self, key, value)
 
         data_dir = normalize_path(data.get("data_dir")) or DEFAULT_DATA_DIR
@@ -440,7 +633,21 @@ class Settings(BaseSettings):
             "queue_max_retries": self.queue_max_retries,
             "agent_max_steps": self.agent_max_steps,
             "agent_hardening_prompt": self.agent_hardening_prompt,
-            "agent_history_char_budget": self.agent_history_char_budget,
+            "agent_history_char_budget": int(self.agent_history_char_budget or 0),
+            "agent_history_token_share": float(self.agent_history_token_share),
+            # Context-window knobs. Editable in Settings and exposed by
+            # to_public_dict(), but missing here — so every restart reverted
+            # them to the defaults and a saved value was indistinguishable from
+            # a lost one.
+            "llm_context_tokens": int(self.llm_context_tokens or 0),
+            "llm_context_fallback_tokens": int(self.llm_context_fallback_tokens),
+            "llm_chars_per_token": float(self.llm_chars_per_token),
+            "llm_max_output_tokens": int(self.llm_max_output_tokens),
+            # Derived values are deliberately NOT persisted: they are computed
+            # from the profile's probed context window, which changes on its own.
+            # Writing them here would also put keys that collide with Settings
+            # methods (context_window_tokens) into the file that load_config_file
+            # setattrs blindly.
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "dry_run": bool(self.dry_run),

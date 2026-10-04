@@ -75,12 +75,80 @@ export interface StoryData {
 	items: Item[];
 }
 
+/**
+ * Per-call thinking mode. `default` sends nothing and leaves the server's own
+ * default alone — note llama.cpp templates commonly default to `xhigh`, which
+ * makes even a one-sentence formatting rewrite burn thousands of reasoning
+ * tokens. Which *level strings* a model accepts is decided by its own chat
+ * template, not by us: Qwen3.x templates take low|medium|xhigh and raise on
+ * anything else.
+ */
+export type ThinkingMode = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface LlmProfile {
 	id: string;
 	name: string;
 	base_url: string;
 	model: string;
 	api_key: boolean;
+	thinking: ThinkingMode;
+	/**
+	 * Context window of the served model, cached from the probe's /models
+	 * metadata. 0 = never probed, or the server reports none — the backend then
+	 * uses its own fallback rather than assuming a generous window.
+	 */
+	context_tokens: number;
+}
+
+/** One row from GET {base_url}/models, normalized across server flavours. */
+export interface LlmModelInfo {
+	id: string;
+	/** Accepts image_url content parts (llama.cpp reports this per model). */
+	vision: boolean;
+	modalities: string[];
+	/** --ctx-size, when the server reports it. */
+	ctx: number | null;
+	/** Server-side default effort, e.g. `xhigh`. Null = unknown or disabled. */
+	reasoning_effort: string | null;
+	reasoning_disabled: boolean;
+	/** Speculative decoding backend, e.g. `draft-mtp`. */
+	speculative: string | null;
+	/** llama.cpp load state: `unloaded` | `loading` | `loaded`. */
+	loaded: string | null;
+}
+
+export interface LlmServerInfo {
+	role?: string;
+	build_info?: string;
+	max_instances?: number;
+	models_autoload?: boolean;
+	model_alias?: string;
+}
+
+export interface LlmModelsResponse {
+	ok: boolean;
+	models: LlmModelInfo[];
+	models_url: string | null;
+	server: LlmServerInfo | null;
+	error: string | null;
+}
+
+export interface LlmTestResponse extends LlmModelsResponse {
+	/** The model list was fetched at all — false means the endpoint is down. */
+	reachable: boolean;
+	model: string;
+	/** null = the server does not implement model listing. */
+	model_found: boolean | null;
+	available_models: string[];
+	thinking: ThinkingMode;
+	thinking_sent: Record<string, unknown>;
+	chat_ok: boolean;
+	latency_ms: number | null;
+	first_token_ms: number | null;
+	content: string | null;
+	reasoning_chars: number;
+	reasoning_preview: string | null;
+	usage: Record<string, unknown> | null;
 }
 
 export interface Settings {
@@ -103,6 +171,16 @@ export interface Settings {
 	agent_max_steps: number;
 	agent_hardening_prompt: string;
 	agent_history_char_budget: number;
+	/** Fraction of the context window the trimmed history may occupy. */
+	agent_history_token_share: number;
+	/** Server-computed char ceiling actually in force (override or derived). */
+	agent_history_char_budget_effective: number;
+	/** Context window of the serving model, from the probe or the fallback. */
+	context_window_tokens: number;
+	llm_context_tokens: number;
+	llm_context_fallback_tokens: number;
+	llm_chars_per_token: number;
+	llm_max_output_tokens: number;
 	agent_llm_assignments: Record<string, string | null>;
 	agent_shell_enabled: boolean;
 	dry_run: boolean;
@@ -267,6 +345,33 @@ export const settings = {
 	get: () => api<Settings>('/api/settings'),
 	update: (payload: Record<string, unknown>) =>
 		api<Settings>('/api/settings', { method: 'POST', body: JSON.stringify(payload) }),
+	/**
+	 * List the models an endpoint serves. `api_key` is only sent when the form
+	 * holds an unsaved draft; otherwise the backend falls back to the key saved
+	 * on `profile_id`. Pure metadata — llama.cpp answers without loading a model.
+	 */
+	llmModels: (payload: { profile_id?: string; base_url: string; api_key?: string }) =>
+		api<LlmModelsResponse>('/api/settings/llm/models', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	/**
+	 * Connectivity check: lists models, then sends one short completion with the
+	 * profile's thinking setting applied. Loads the model on a cold endpoint, so
+	 * pass a generous `timeout`.
+	 */
+	llmTest: (payload: {
+		profile_id?: string;
+		base_url: string;
+		model: string;
+		api_key?: string;
+		thinking?: ThinkingMode;
+		timeout?: number;
+	}) =>
+		api<LlmTestResponse>('/api/settings/llm/test', {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
 };
 
 export const workflows = {
@@ -288,6 +393,7 @@ export const workflows = {
 		workflow_json: Record<string, unknown>;
 		description?: string;
 		prompt_profile?: string;
+		strict_mode?: boolean;
 	}) => api<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
 	update: (
 		id: number,
@@ -295,6 +401,7 @@ export const workflows = {
 			name: string;
 			kind: string;
 			is_enabled: boolean;
+			strict_mode: boolean;
 			description: string;
 			prompt_profile: string;
 		}>,
@@ -342,6 +449,43 @@ export const jobsApi = {
 			based_on: string;
 			critic?: { ok: boolean; notes: string[] };
 		}>(`/api/jobs/projects/${projectId}/preview-prompt`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	/**
+	 * Compile H3 prompts without queueing a render. One call covers both
+	 * "recompile this shot" (clip_ids: [id]) and "fill the gaps"
+	 * (only_missing: true). Prompts are saved, so the Generate that follows
+	 * spends no LLM call at all.
+	 */
+	batchPrompt: (
+		projectId: number,
+		payload: {
+			clip_ids?: number[];
+			workflow_id?: number;
+			input_values?: Record<string, unknown>;
+			force?: boolean;
+			only_missing?: boolean;
+			save?: boolean;
+		},
+	) =>
+		api<{
+			results: {
+				clip_id: number;
+				label: string;
+				ok: boolean;
+				prompt?: string;
+				profile?: string;
+				from_draft?: boolean;
+				saved?: boolean;
+				error?: string;
+			}[];
+			skipped: number;
+			total: number;
+			endpoint_dead: boolean;
+			compiled: number;
+			failed: number;
+		}>(`/api/jobs/projects/${projectId}/batch-prompt`, {
 			method: 'POST',
 			body: JSON.stringify(payload),
 		}),

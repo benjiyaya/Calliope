@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     description TEXT,
     prompt_profile TEXT NOT NULL DEFAULT 'prose',
     is_enabled INTEGER NOT NULL DEFAULT 1,
+    strict_mode INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -318,6 +319,13 @@ async def migrate_db(db_path: Path) -> None:
     if "prompt_profile" not in cols:
         conn.execute(
             "ALTER TABLE workflows ADD COLUMN prompt_profile TEXT NOT NULL DEFAULT 'prose'"
+        )
+    if "strict_mode" not in cols:
+        # Strict mode is ON by default (and backfilled ON for existing rows):
+        # exposed (Input:*) prompt/reference slots must not inherit the
+        # workflow's baked-in default, so a stray test reference can't leak.
+        conn.execute(
+            "ALTER TABLE workflows ADD COLUMN strict_mode INTEGER NOT NULL DEFAULT 1"
         )
     scene_cols = {r[1] for r in conn.execute("PRAGMA table_info(scenes)").fetchall()}
     if "location_id" not in scene_cols:

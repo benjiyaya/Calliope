@@ -200,6 +200,7 @@ class WorkflowCreate(BaseModel):
     workflow_json: dict[str, Any]
     description: str | None = None
     prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
+    strict_mode: bool = True
 
 
 class WorkflowUpdate(BaseModel):
@@ -208,6 +209,8 @@ class WorkflowUpdate(BaseModel):
     description: str | None = None
     prompt_profile: Literal["prose", "minimax_h3_ref"] | None = None
     is_enabled: bool | None = None
+    strict_mode: bool | None = None
+    workflow_json: dict[str, Any] | None = None
 
 
 class WorkflowAnalyze(BaseModel):
@@ -264,3 +267,18 @@ class PreviewPromptRequest(BaseModel):
     input_values: dict[str, Any] | None = None
     # Skip a fresh saved draft and rewrite from the current references.
     force: bool = False
+
+
+class BatchPromptRequest(BaseModel):
+    """Compile many clips' H3 prompts up front. Queues no render.
+
+    Leave ``clip_ids`` empty for the whole project (in playback order) — that is
+    the "fill in the gaps" case. Pass one id to recompile a single shot.
+    """
+
+    clip_ids: list[int] | None = None
+    workflow_id: int | None = None
+    input_values: dict[str, Any] | None = None
+    only_missing: bool = False
+    save: bool = True
+    force: bool = True

@@ -12,8 +12,8 @@ from calliope import config
 from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
 from calliope.comfyui.parser import parse_dynamic_inputs
-from calliope.comfyui.patcher import patch_workflow
-from calliope.comfyui.roles import input_has_role
+from calliope.comfyui.patcher import node_widget_field, patch_workflow
+from calliope.comfyui.roles import input_has_role, normalize_input_role
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import run_export
@@ -26,6 +26,113 @@ class _CancelledByUser(RuntimeError):
     """The job row was flipped to 'cancelled' out-of-band (Stop button).
     The row already carries the terminal state; the loop must not overwrite
     it with mark_failed (which would bump retry_count and emit job.failed)."""
+
+
+# Exposed (Input:*) slots carrying prompt text or a reference. Strict mode drops
+# the ones the workflow file itself supplies, so only the LLM prompt and
+# user-provided references survive.
+_LEAKY_ROLES = frozenset({"prompt", "negative", "image", "audio", "video", "character", "location"})
+_LEAKY_KINDS = frozenset({"image", "image_url", "audio", "video"})
+_MEDIA_ROLES = frozenset({"image", "audio", "video", "character", "location"})
+_MEDIA_KINDS = frozenset({"image", "image_url", "audio", "video"})
+
+
+def _is_leaky_input(inp: dict[str, Any]) -> bool:
+    return (
+        normalize_input_role(inp.get("role")) in _LEAKY_ROLES
+        or inp.get("kind") in _LEAKY_KINDS
+    )
+
+
+def _is_media_input(inp: dict[str, Any]) -> bool:
+    return (
+        normalize_input_role(inp.get("role")) in _MEDIA_ROLES
+        or inp.get("kind") in _MEDIA_KINDS
+    )
+
+
+def _links_into(value: Any, removed: set[str]) -> bool:
+    """True when a ComfyUI link ``[node_id, output]`` targets a removed node."""
+    if isinstance(value, list):
+        if (
+            len(value) >= 2
+            and isinstance(value[0], str)
+            and value[0] in removed
+            and isinstance(value[1], int)
+        ):
+            return True
+        return any(_links_into(item, removed) for item in value)
+    if isinstance(value, dict):
+        return any(_links_into(item, removed) for item in value.values())
+    return False
+
+
+def _prune_nodes(nodes: dict[str, Any], root_ids: list[str]) -> None:
+    """Remove nodes and their wiring, cascading to nodes left with no inputs.
+
+    A removed media loader takes its links with it; a pass-through such as
+    GetVideoComponents, left with nothing to consume, is removed too so ComfyUI
+    never sees a dangling reference.
+    """
+    removed = {str(r) for r in root_ids}
+    changed = True
+    while changed:
+        changed = False
+        for nid, node in list(nodes.items()):
+            if str(nid) in removed or not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            if not inputs:
+                continue
+            kept = {k: v for k, v in inputs.items() if not _links_into(v, removed)}
+            if len(kept) == len(inputs):
+                continue
+            node["inputs"] = kept
+            changed = True
+            if not kept:
+                removed.add(str(nid))
+    for nid in removed:
+        nodes.pop(nid, None)
+
+
+def _apply_strict_mode(
+    patched: dict[str, Any],
+    template: dict[str, Any],
+    schema: list[dict[str, Any]],
+    provided: dict[str, Any],
+) -> dict[str, Any]:
+    """Strict mode: drop the workflow file's own prompt/reference inputs.
+
+    Only the LLM prompt and user-provided references are kept — their value
+    differs from the template's. A leaky slot whose value is the file's own
+    baked default (smart-fill re-injects it) or is absent is dropped: a media
+    reference has its node and wiring pruned so the graph runs without it, while
+    a prompt/negative text slot is blanked (pruning it would break its encoder).
+    """
+    drop: list[str] = []
+    for inp in schema:
+        if not _is_leaky_input(inp):
+            continue
+        nid = str(inp.get("nodeId"))
+        node = patched.get(nid)
+        if not isinstance(node, dict):
+            continue
+        field = node_widget_field(node)
+        tpl = template.get(nid)
+        template_value = (tpl.get("inputs") or {}).get(field) if isinstance(tpl, dict) else None
+        value = provided.get(nid)
+        blank = value is None or (isinstance(value, str) and not value.strip())
+        if not blank and str(value) != str(template_value):
+            continue  # a genuine user / LLM / context value
+        if _is_media_input(inp):
+            drop.append(nid)
+        else:
+            inputs = dict(node.get("inputs") or {})
+            inputs[field] = ""
+            node["inputs"] = inputs
+    if drop:
+        _prune_nodes(patched, drop)
+    return patched
 
 
 class QueueWorker:
@@ -171,9 +278,13 @@ class QueueWorker:
             input_values = payload.get("input_values") or {}
             if payload.get("continue_source") and kind == "video":
                 input_values = await self._resolve_continue_source(
-                    job, payload, workflow, dict(input_values)
+                    job, payload, workflow["nodes"], dict(input_values)
                 )
-            patched = patch_workflow(workflow, input_values)
+            patched = patch_workflow(workflow["nodes"], input_values)
+            if workflow["strict_mode"]:
+                patched = _apply_strict_mode(
+                    patched, workflow["nodes"], workflow["schema"], input_values
+                )
             patched = await client.prepare_media_inputs(patched)
             prompt_id = await client.queue_prompt(patched)
 
@@ -348,16 +459,24 @@ class QueueWorker:
             conn.close()
 
     def _load_workflow(self, workflow_id: int | None) -> dict[str, Any] | None:
+        """The workflow's node graph plus what strict mode needs (schema + flag)."""
         if not workflow_id:
             return None
         conn = get_db(config.settings.db_path)
         try:
             row = conn.execute(
-                "SELECT workflow_json FROM workflows WHERE id = ?", (workflow_id,)
+                "SELECT workflow_json, input_schema, strict_mode FROM workflows WHERE id = ?",
+                (workflow_id,),
             ).fetchone()
             if not row:
                 return None
-            return json.loads(row["workflow_json"])
+            nodes = json.loads(row["workflow_json"])
+            schema = (
+                json.loads(row["input_schema"])
+                if row["input_schema"]
+                else parse_dynamic_inputs(nodes)
+            )
+            return {"nodes": nodes, "schema": schema, "strict_mode": bool(row["strict_mode"])}
         finally:
             conn.close()
 

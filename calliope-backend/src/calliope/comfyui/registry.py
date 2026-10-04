@@ -5,7 +5,9 @@ from typing import Literal
 
 ComfyInputKind = Literal["text", "textarea", "number", "image", "image_url", "audio", "video"]
 ComfyOutputKind = Literal["image", "video", "other"]
-PatchField = Literal["image", "url", "audio", "video", "file", "text", "value", "int", "float"]
+PatchField = Literal[
+    "image", "url", "audio", "video", "file", "text", "value", "int", "float", "prompt"
+]
 
 TEXT_AREA_CLASSES = frozenset(
     {
@@ -30,7 +32,37 @@ VIDEO_OUTPUT_CLASSES = frozenset(
     {"VHS_VideoCombine", "SaveVideo", "VideoOutput", "AnimateDiffCombine"}
 )
 IMAGE_OUTPUT_CLASSES = frozenset(
-    {"SaveImage", "PreviewImage", "SaveImageWebsocket", "ETN_SendImageWebSocket"}
+    {
+        "SaveImage",
+        "SaveImageAdvanced",
+        "PreviewImage",
+        "SaveImageWebsocket",
+        "ETN_SendImageWebSocket",
+    }
+)
+# Generator / encoder nodes whose user-facing text widget is named `prompt`.
+# They need listing explicitly: the substring fallback below matches "image" or
+# "video" in the class name first, which made `TextEncodeQwenImage21` resolve to
+# an image input and patch a prompt straight into a real image link.
+PROMPT_CLASSES = frozenset(
+    {
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+        "TextEncodeQwenImage21",
+        "TextEncodeQwenImage",
+        "TextGenerate",
+    }
+)
+# Loader / utility nodes with no media widget Calliope should ever target.
+# Listed so the "load" / "image" / "video" substrings stop calling them media.
+NEUTRAL_CLASSES = frozenset(
+    {
+        "CCTechClipProjLoader",
+        "UnetLoaderGGUF",
+        "QwenImage21Cache",
+        "ForceUnloadBeforeDecode",
+        "GetVideoComponents",
+    }
 )
 
 
@@ -47,6 +79,10 @@ def class_to_input_kind(class_type: str) -> ComfyInputKind:
         return "number"
     if class_type in TEXT_AREA_CLASSES:
         return "textarea"
+    if class_type in PROMPT_CLASSES:
+        return "textarea"
+    if class_type in NEUTRAL_CLASSES:
+        return "text"
     lower = class_type.lower()
     if "video" in lower:
         return "video"
@@ -76,6 +112,8 @@ def class_to_patch_field(class_type: str) -> PatchField:
         return "text"
     if class_type.startswith("Primitive"):
         return "value"
+    if class_type in PROMPT_CLASSES:
+        return "prompt"
     kind = class_to_input_kind(class_type)
     if kind == "image":
         return "image"

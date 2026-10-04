@@ -27,7 +27,12 @@ from calliope.agent.prompts import (
 )
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.roles import input_has_role
-from calliope.comfyui.smart_fill import ref_image_slots, ref_video_slots, smart_fill_inputs
+from calliope.comfyui.smart_fill import (
+    ref_audio_slots,
+    ref_image_slots,
+    ref_video_slots,
+    smart_fill_inputs,
+)
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
@@ -160,13 +165,33 @@ def resolve_h3_references(
     return subjects, image_paths, videos
 
 
-def _reference_signature(image_paths: list[str], video_paths: list[str]) -> str:
+def resolve_ref_audios(inputs: list[dict[str, Any]], values: dict[str, Any]) -> list[str]:
+    """Paths the user put in ``(Input:audio)`` slots, in node-id order.
+
+    Unlike images and videos, audio has no story roster to fall back on: a slot
+    is either filled with a file the user chose or it stays empty.
+    """
+    paths: list[str] = []
+    for slot in ref_audio_slots(inputs):
+        path = _form_media_path(values, slot["nodeId"])
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _reference_signature(
+    image_paths: list[str],
+    video_paths: list[str],
+    audio_paths: list[str] | None = None,
+) -> str:
     """Fingerprint of the files a draft was written against. Empty when none."""
     parts: list[str] = []
     if image_paths:
         parts.append("img=" + ",".join(image_paths))
     if video_paths:
         parts.append("vid=" + ",".join(video_paths))
+    if audio_paths:
+        parts.append("aud=" + ",".join(audio_paths))
     return "|".join(parts)
 
 
@@ -212,6 +237,58 @@ async def _reference_media_parts(
     return parts
 
 
+class _H3Compiler:
+    """Per-batch H3 prompt compiler with a dead-endpoint circuit breaker.
+
+    A dead LLM makes every clip fall back to the deterministic template after
+    its own timeout — two minutes × N clips of dead air before anything renders.
+    One failure is enough evidence that the endpoint is gone, so the breaker
+    latches and every later clip goes straight to the template.
+
+    One instance per batch. Sharing it across batches would suppress recovery
+    after the endpoint comes back.
+    """
+
+    def __init__(self, *, timeout: float = 120.0) -> None:
+        self.timeout = timeout
+        self.dead = False
+
+    async def rewrite(
+        self,
+        scene: dict[str, Any],
+        subjects: list[dict[str, Any]],
+        *,
+        videos: list[dict[str, Any]] | None = None,
+        continuity: str | None = None,
+    ) -> str:
+        videos = videos or []
+        if self.dead:
+            return minimax_h3_ref_fallback(scene, subjects, videos)
+        client = LLMClient.for_role("video", timeout=self.timeout)
+        try:
+            return await client.chat(
+                build_minimax_h3_ref_messages(
+                    scene,
+                    subjects,
+                    videos=videos,
+                    media_parts=(await _reference_media_parts(subjects, videos)) or None,
+                    continuity=continuity,
+                ),
+                temperature=0.4,
+                extra_body=settings.h3_rewrite_extra_body or None,
+            )
+        except Exception as exc:
+            self.dead = True
+            logger.warning(
+                "MiniMax H3 prompt rewrite failed (%s); using fallback template "
+                "for the rest of this batch too",
+                exc,
+            )
+            return minimax_h3_ref_fallback(scene, subjects, videos)
+        finally:
+            await client.close()
+
+
 async def _h3_rewrite(
     scene: dict[str, Any],
     subjects: list[dict[str, Any]],
@@ -226,27 +303,12 @@ async def _h3_rewrite(
     kicks in — the preview path passes a short value so the UI fails fast.
     Reference images and video frames are attached when the files are readable
     under assets_dir; a text-only endpoint still receives the file roster.
+
+    Single-shot. Batch callers hold one _H3Compiler so a dead endpoint costs one
+    timeout for the batch rather than one per clip.
     """
-    videos = videos or []
-    media_parts = await _reference_media_parts(subjects, videos)
-    client = LLMClient.for_role("video", timeout=timeout)
-    try:
-        return await client.chat(
-            build_minimax_h3_ref_messages(
-                scene,
-                subjects,
-                videos=videos,
-                media_parts=media_parts or None,
-                continuity=continuity,
-            ),
-            temperature=0.4,
-            extra_body=settings.h3_rewrite_extra_body or None,
-        )
-    except Exception as exc:
-        logger.warning("MiniMax H3 prompt rewrite failed (%s); using fallback template", exc)
-        return minimax_h3_ref_fallback(scene, subjects, videos)
-    finally:
-        await client.close()
+    compiler = _H3Compiler(timeout=timeout)
+    return await compiler.rewrite(scene, subjects, videos=videos, continuity=continuity)
 
 
 def _video_input(inputs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -261,17 +323,21 @@ def _previous_clip(
     conn: sqlite3.Connection,
     project_id: int,
     global_position: tuple[int, int],
-) -> tuple[str | None, bool]:
+) -> tuple[str | None, bool, int | None]:
     """Nearest earlier clip (global playback order) + whether any earlier clip exists.
 
     ``global_position`` is the current clip's ``(scene.order_index, clip.order_index)``.
-    Returns ``(path, has_earlier)``; path is None when the file does not exist on
-    disk (not yet generated) or there is no earlier clip.
+    Returns ``(path, has_earlier, clip_id)``; path is None when the file does not
+    exist on disk (not yet generated) or there is no earlier clip. ``clip_id`` is
+    returned alongside the path so the caller can tell an already-finished earlier
+    clip from one this batch is about to re-render — the latter must be resolved
+    at RUN time (its new file does not exist yet), not bound to the stale path.
     """
     scene_pos, clip_pos = global_position
     row = conn.execute(
         """
-        SELECT COALESCE(c.clip_path, s.video_path) AS clip_path FROM clips c
+        SELECT c.id AS id, COALESCE(c.clip_path, s.video_path) AS clip_path
+        FROM clips c
         JOIN scenes s ON s.id = c.scene_id
         WHERE c.project_id = ?
           AND (s.order_index < ? OR (s.order_index = ? AND c.order_index < ?))
@@ -291,8 +357,8 @@ def _previous_clip(
     ).fetchone() is not None
     path = row["clip_path"] if row else None
     if path and Path(path).exists():
-        return path, has_earlier
-    return None, has_earlier
+        return path, has_earlier, int(row["id"])
+    return None, has_earlier, (int(row["id"]) if row else None)
 
 
 def _fetch_clips(
@@ -458,11 +524,17 @@ async def preview_clip_prompt(
     workflow_id: int | None = None,
     input_values: dict[str, Any] | None = None,
     force: bool = False,
+    compiler: _H3Compiler | None = None,
+    with_critic: bool = True,
 ) -> dict[str, Any]:
     """Resolve the exact prompt a Generate would send — without enqueueing.
 
     Returns {"prompt", "profile", "from_draft", "based_on"} and, for an H3
     workflow, "critic": {"ok", "notes"}. The critic never blocks Generate.
+
+    ``compiler`` shares one _H3Compiler across a batch so a dead endpoint costs
+    a single timeout. ``with_critic=False`` skips the continuity judge — it is a
+    human-review aid and doubles the LLM calls, so batch compilation drops it.
     """
     conn = get_db(settings.db_path)
     try:
@@ -514,7 +586,10 @@ async def preview_clip_prompt(
     subjects, _image_paths, videos = resolve_h3_references(
         inputs, form_values, characters, loc_row, loc_image
     )
-    ref_sig = _reference_signature(_image_paths, [v["path"] for v in videos])
+    ref_audios = resolve_ref_audios(inputs, form_values)
+    ref_sig = _reference_signature(
+        _image_paths, [v["path"] for v in videos], ref_audios
+    )
     hash_clip = {**clip, "character_ids": [c["id"] for c in characters]}
 
     if profile == "minimax_h3_ref":
@@ -538,25 +613,150 @@ async def preview_clip_prompt(
                 {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
             )
             # Preview is interactive — fail fast to the deterministic template
-            # instead of making the user wait out a dead endpoint.
-            prompt = await _h3_rewrite(
-                scene, subjects, videos=videos, continuity=lock, timeout=30.0
-            )
-        critic = await _critique_or_unavailable(prompt, plan, clip_id)
-        # A dead or unreadable judge leaves this prompt in place and reports
-        # the note. The rewrite already falls back to the template when that
-        # call itself fails.
+            # instead of making the user wait out a dead endpoint. A batch shares
+            # one compiler, whose breaker keeps the first timeout from repeating.
+            writer = compiler or _H3Compiler(timeout=30.0)
+            prompt = await writer.rewrite(scene, subjects, videos=videos, continuity=lock)
+        if with_critic:
+            verdict = await _critique_or_unavailable(prompt, plan, clip_id)
+            # A dead or unreadable judge leaves this prompt in place and reports
+            # the note. The rewrite already falls back to the template when that
+            # call itself fails.
+            critic_out: dict[str, Any] = {
+                "ok": bool(verdict.get("ok")),
+                "notes": list(verdict.get("notes") or []),
+            }
+        else:
+            critic_out = {"ok": True, "notes": []}
         return {
             "prompt": prompt,
             "profile": profile,
             "from_draft": from_draft,
             "based_on": based_on,
-            "critic": {"ok": bool(critic.get("ok")), "notes": list(critic.get("notes") or [])},
+            "critic": critic_out,
         }
 
     based_on = _clip_prompt_hash(hash_clip, references=ref_sig)
     prompt = scene_video_prompt(scene, characters)
     return {"prompt": prompt, "profile": profile, "from_draft": False, "based_on": based_on}
+
+
+def _save_prompt_draft(clip_id: int, prompt: str, based_on: str) -> None:
+    """Persist a compiled prompt as the clip's draft so Generate spends no LLM.
+
+    Writes through video_settings_json rather than the generic clips patch so
+    the compiled text and the fingerprint it was compiled against land in the
+    same statement — a draft without its `based_on` reads as stale forever.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT video_settings_json FROM clips WHERE id = ?", (clip_id,)
+        ).fetchone()
+        if not row:
+            return
+        try:
+            data = json.loads(row["video_settings_json"] or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data["prompt_draft"] = prompt
+        data["prompt_draft_meta"] = {"based_on": based_on}
+        conn.execute(
+            "UPDATE clips SET video_settings_json = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), clip_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def rewrite_clip_prompts(
+    project_id: int,
+    *,
+    clip_ids: list[int] | None = None,
+    only_missing: bool = False,
+    workflow_id: int | None = None,
+    input_values: dict[str, Any] | None = None,
+    force: bool = True,
+    save: bool = True,
+) -> dict[str, Any]:
+    """Compile H3 prompts for many clips up front, queueing no render.
+
+    The point is VRAM, not throughput. `enqueue_video_jobs` now uses the same
+    shape — every prompt first, then the job rows — so the LLM owns the GPU for
+    the whole compile and ComfyUI only starts once the last prompt exists.
+
+    ``clip_ids`` restricts the work to specific clips (recompile one shot);
+    ``only_missing`` skips clips that already carry a draft. Results are saved
+    with their fingerprint, so the Generate that follows costs zero LLM calls.
+
+    Sequential on purpose: parallel rewrites would hold N prompts in flight
+    against one llama.cpp router and simply queue inside it.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        clips = _fetch_clips(conn, project_id, clip_ids=clip_ids)
+    finally:
+        conn.close()
+
+    compiler = _H3Compiler(timeout=120.0)
+    results: list[dict[str, Any]] = []
+    skipped = 0
+    total = len(clips)
+    for index, clip in enumerate(clips, start=1):
+        label = _clip_label(clip)
+        if only_missing and _stored_prompt_draft(clip):
+            skipped += 1
+            continue
+        await event_bus.publish(
+            "agent.thinking",
+            {
+                "message": f"H3 prompt compile · {label} ({index}/{total})",
+                "project_id": project_id,
+            },
+        )
+        try:
+            item = await preview_clip_prompt(
+                project_id,
+                int(clip["id"]),
+                workflow_id=workflow_id,
+                input_values=input_values,
+                force=force,
+                compiler=compiler,
+                with_critic=False,
+            )
+        except ValueError as exc:
+            results.append(
+                {"clip_id": int(clip["id"]), "label": label, "ok": False, "error": str(exc)}
+            )
+            continue
+        persisted = save and item["profile"] == "minimax_h3_ref"
+        if persisted:
+            _save_prompt_draft(int(clip["id"]), item["prompt"], item["based_on"])
+        results.append(
+            {
+                "clip_id": int(clip["id"]),
+                "label": label,
+                "ok": True,
+                "prompt": item["prompt"],
+                "profile": item["profile"],
+                "from_draft": item["from_draft"],
+                "saved": persisted,
+            }
+        )
+
+    return {
+        "results": results,
+        "skipped": skipped,
+        "total": total,
+        # True means every remaining clip came from the deterministic template,
+        # not the LLM — the caller should say so rather than look successful.
+        "endpoint_dead": compiler.dead,
+        "compiled": sum(1 for r in results if r.get("ok") and not r.get("from_draft")),
+        "failed": sum(1 for r in results if not r.get("ok")),
+    }
 
 
 def _scene_fields_from_clip(
@@ -614,35 +814,27 @@ async def enqueue_video_jobs(
     conn = get_db(settings.db_path)
     jobs: list[dict[str, Any]] = []
     continuity_plan: dict[str, Any] | None = None
+    compiler = _H3Compiler()
     try:
         clips = _fetch_clips(conn, project_id, scene_ids=scene_ids, clip_ids=clip_ids)
+        batch_ids = {int(c["id"]) for c in clips}
+
+        # ── PASS 1 · prompts only ────────────────────────────────────────────
+        # Every H3 rewrite is an LLM round-trip, and writing a job row hands that
+        # clip to the queue worker (queue/worker.py, 2 s poll) at once. Doing both
+        # in one loop meant ComfyUI was already holding the H3 weights in VRAM
+        # while the next rewrite asked llama.cpp for the LLM — on a single GPU
+        # with --models-max 1 that is a guaranteed stall or OOM. Compiling the
+        # whole batch before any row exists keeps the worker idle, so the LLM
+        # has the card to itself.
+        #
+        # This pass writes NOTHING: a batch that dies mid-compile leaves the
+        # previous renders intact (the destructive writes live in pass 2).
+        pending: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
 
         for clip in clips:
             scene_id = clip["scene_id"]
-            # Supersede leftover pending jobs so a re-Generate always starts fresh
-            conn.execute(
-                """
-                UPDATE jobs SET status = 'failed', error = 'superseded by new generate',
-                completed_at = CURRENT_TIMESTAMP
-                WHERE clip_id = ? AND kind = 'video' AND status = 'pending'
-                """,
-                (clip["id"],),
-            )
-            # Clear prior render so UI shows generating instead of the old video.
-            # Also NULL the scene's legacy mirror — COALESCE reads fall back to
-            # it, so a stale path there would resurrect the old render.
-            conn.execute(
-                "UPDATE clips SET clip_path = NULL WHERE id = ?",
-                (clip["id"],),
-            )
-            conn.execute(
-                "UPDATE scenes SET video_path = NULL WHERE id = ?",
-                (scene_id,),
-            )
-            # Commit BEFORE enqueue: queue_manager.enqueue writes on its own
-            # connection, and holding this transaction open across that call
-            # self-deadlocks (sqlite3.OperationalError: database is locked).
-            conn.commit()
 
             wf_id = workflow_id or clip.get("workflow_id")
             workflow = _get_workflow(wf_id)
@@ -712,7 +904,10 @@ async def enqueue_video_jobs(
                 subjects, ref_paths, videos = resolve_h3_references(
                     inputs, extra_values, characters, loc_row, loc_image
                 )
-                ref_sig = _reference_signature(ref_paths, [v["path"] for v in videos])
+                ref_audios = resolve_ref_audios(inputs, extra_values)
+                ref_sig = _reference_signature(
+                    ref_paths, [v["path"] for v in videos], ref_audios
+                )
                 ledger = str((continuity_plan or {}).get("based_on") or "")
                 lock = continuity_lock_text(continuity_plan, int(clip["id"]))
                 # Prompt precedence: explicit request → saved (fresh) draft → LLM.
@@ -739,7 +934,7 @@ async def enqueue_video_jobs(
                             "project_id": project_id,
                         },
                     )
-                    prompt = await _h3_rewrite(
+                    prompt = await compiler.rewrite(
                         scene, subjects, videos=videos, continuity=lock
                     )
                 values = smart_fill_inputs(
@@ -747,6 +942,7 @@ async def enqueue_video_jobs(
                     prompt=prompt,
                     ref_images=ref_paths,
                     ref_videos=[v["path"] for v in videos],
+                    ref_audios=ref_audios,
                     duration=duration,
                     extra=extra_values,
                 )
@@ -778,21 +974,35 @@ async def enqueue_video_jobs(
             if clip.get("chain_from_prev"):
                 video_input = _video_input(inputs)
                 if not video_input:
-                    raise ValueError(
-                        f"Clip {clip.get('scene_order_index')}.{clip.get('order_index')} is marked "
-                        f"continue-from-previous but workflow "
-                        f"'{(workflow or {}).get('name') or workflow_id}' has no "
-                        "video input — pick a workflow with a (Input:video) node."
+                    # Skip, don't abort: one clip pointed at a workflow without
+                    # (Input:video) must not cost the batch its other renders.
+                    skipped.append(
+                        {
+                            "clip_id": int(clip["id"]),
+                            "label": _clip_label(clip),
+                            "error": (
+                                f"Clip {clip.get('scene_order_index')}.{clip.get('order_index')} "
+                                f"is marked continue-from-previous but workflow "
+                                f"'{(workflow or {}).get('name') or workflow_id}' has no "
+                                "video input — pick a workflow with a (Input:video) node."
+                            ),
+                        }
                     )
+                    continue
                 video_node_id = str(video_input["nodeId"])
                 if not values.get(video_node_id):
                     # Explicit clip from the form / input_values_override wins.
-                    prev_clip, has_earlier = _previous_clip(
+                    prev_clip, has_earlier, prev_id = _previous_clip(
                         conn,
                         project_id,
                         (clip.get("scene_order_index") or 0, clip.get("order_index") or 0),
                     )
-                    if prev_clip:
+                    # An earlier clip IN THIS BATCH still holds its previous
+                    # render, because pass 1 no longer NULLs clip_path up front.
+                    # Binding to that file would chain the new clip to a stale
+                    # video — the earlier clip is about to be re-rendered, so
+                    # defer to the worker instead (same reason as below).
+                    if prev_clip and prev_id is not None and prev_id not in batch_ids:
                         # Local path: the worker's prepare_media_inputs uploads it
                         # to ComfyUI before queuing (same shape as char/loc refs).
                         values[video_node_id] = prev_clip
@@ -806,25 +1016,68 @@ async def enqueue_video_jobs(
                             "clip_order_index": clip.get("order_index"),
                         }
                     else:
+                        # Distinct from the missing-video-node case above: this is
+                        # a project-level mistake (nothing earlier to chain
+                        # from), so the whole batch is meaningless — raise rather
+                        # than return an empty queue with only a log line.
                         raise ValueError(
                             f"Clip {clip.get('scene_order_index')}.{clip.get('order_index')} is marked "
                             "continue-from-previous but no previous clip exists yet — generate an "
                             "earlier clip first or upload a video in the Video stage."
                         )
-            job = queue_manager.enqueue(
-                project_id=project_id,
-                kind="video",
-                workflow_id=workflow["id"] if workflow else None,
-                scene_id=scene_id,
-                clip_id=clip["id"],
-                payload=payload,
+            pending.append(
+                {
+                    "clip": clip,
+                    "scene_id": scene_id,
+                    "workflow": workflow,
+                    "payload": payload,
+                }
+            )
+
+        # ── PASS 2 · enqueue ────────────────────────────────────────────────
+        # Every prompt is compiled, so the first row below can only be seen by
+        # the worker once the LLM is done with the GPU.
+        for item in pending:
+            clip = item["clip"]
+            scene_id = item["scene_id"]
+            workflow = item["workflow"]
+            # Supersede leftover pending jobs so a re-Generate always starts fresh
+            conn.execute(
+                """
+                UPDATE jobs SET status = 'failed', error = 'superseded by new generate',
+                completed_at = CURRENT_TIMESTAMP
+                WHERE clip_id = ? AND kind = 'video' AND status = 'pending'
+                """,
+                (clip["id"],),
+            )
+            # Clear prior render so UI shows generating instead of the old video.
+            # Also NULL the scene's legacy mirror — COALESCE reads fall back to
+            # it, so a stale path there would resurrect the old render.
+            conn.execute(
+                "UPDATE clips SET clip_path = NULL WHERE id = ?",
+                (clip["id"],),
+            )
+            conn.execute(
+                "UPDATE scenes SET video_path = NULL WHERE id = ?",
+                (scene_id,),
             )
             if workflow and not clip.get("workflow_id"):
                 conn.execute(
                     "UPDATE clips SET workflow_id = ? WHERE id = ?",
                     (workflow["id"], clip["id"]),
                 )
-            # Never hold a write lock across awaits (event publish below).
+            # Commit BEFORE enqueue: queue_manager.enqueue writes on its own
+            # connection, and holding this transaction open across that call
+            # self-deadlocks (sqlite3.OperationalError: database is locked).
+            conn.commit()
+            job = queue_manager.enqueue(
+                project_id=project_id,
+                kind="video",
+                workflow_id=workflow["id"] if workflow else None,
+                scene_id=scene_id,
+                clip_id=clip["id"],
+                payload=item["payload"],
+            )
             conn.commit()
             jobs.append(job)
             await event_bus.publish(
@@ -837,6 +1090,17 @@ async def enqueue_video_jobs(
                 },
             )
         conn.commit()
+        if skipped:
+            # Silent partial batches are the worst outcome: the operator sees
+            # "Generate" succeed and only later notices a clip never rendered.
+            for item in skipped:
+                logger.warning("Video job skipped · %s · %s", item["label"], item["error"])
+            logger.warning(
+                "Video batch enqueued %d of %d clips; %d skipped (see warnings above)",
+                len(jobs),
+                len(jobs) + len(skipped),
+                len(skipped),
+            )
     finally:
         conn.close()
     return jobs

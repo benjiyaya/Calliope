@@ -444,6 +444,13 @@ const generateOne = createMutation({
 	// clip at enqueue or run time on the backend.
 	let batching = $state(false);
 	let batchNote = $state('');
+	let compiling = $state(false);
+	let compileNote = $state('');
+
+	/** Every clip in the project, in playback order — the batch compile targets. */
+	const allClipIds = $derived(
+		scenes.flatMap((s) => (s.clips?.length ? s.clips.map((c) => c.id) : [])),
+	);
 
 	const scenesNeedingClip = $derived(
 		scenes.filter((s) => !['done', 'partial', 'pending', 'running'].includes(sceneStatus(s))),
@@ -535,6 +542,45 @@ const generateOne = createMutation({
 		}
 		await client.invalidateQueries({ queryKey: ['jobs'] });
 		await client.invalidateQueries({ queryKey: ['scenes'] });
+	}
+
+	/**
+	 * Compile the H3 prompts for every clip that lacks one, before any render is
+	 * queued. On a single GPU the LLM and the video model cannot both hold VRAM,
+	 * so compiling first is what keeps llama.cpp from being asked for a model
+	 * while H3 is loaded. Saved drafts make the following Generate spend zero
+	 * LLM calls.
+	 */
+	async function compileMissingPrompts() {
+		if (compiling || batching || allClipIds.length === 0) return;
+		compiling = true;
+		compileNote = '';
+		try {
+			const data = await jobsApi.batchPrompt(projectId, {
+				clip_ids: allClipIds,
+				only_missing: true,
+				save: true,
+			});
+			const summary = t('queue.compiledPrompts', {
+				compiled: data.compiled,
+				skipped: data.skipped,
+			});
+			if (data.endpoint_dead) {
+				toast.error(t('queue.compileEndpointDead', { summary: summary }));
+			} else if (data.failed > 0) {
+				toast.error(t('queue.compileSomeFailed', { summary: summary, failed: data.failed }));
+			} else if (data.compiled === 0) {
+				toast.success(t('queue.compileNothingMissing', { skipped: data.skipped }));
+			} else {
+				toast.success(summary);
+			}
+			await client.invalidateQueries({ queryKey: ['scenes'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : String(err));
+		} finally {
+			compiling = false;
+			compileNote = '';
+		}
 	}
 
 	/** Resolve the workflow for a CLIP (issue #66): explicit in-session pick →
@@ -834,6 +880,16 @@ const generateOne = createMutation({
 				onclick={generateAll}
 			>
 				<Icon name="film" size={14} /> {batchLabel}
+			</Button>
+			<Button
+				variant="secondary"
+				disabled={compiling || batching || allClipIds.length === 0}
+				loading={compiling}
+				title={t('queue.compilePromptsTitle')}
+				onclick={compileMissingPrompts}
+			>
+				<Icon name="sparkle" size={14} />
+				{compiling ? compileNote || t('queue.compilingPrompts') : t('queue.compilePrompts')}
 			</Button>
 		{/if}
 		<Button variant="secondary" onclick={togglePause}>

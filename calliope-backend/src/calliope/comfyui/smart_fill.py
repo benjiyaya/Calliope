@@ -1,9 +1,29 @@
 """Smart-fill ComfyUI dynamic inputs from project/scene context via role tags."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from calliope.comfyui.roles import input_has_role, normalize_input_role
+
+_DIGITS = re.compile(r"(\d+)")
+
+
+def _node_id_sort_key(node_id: Any) -> tuple[tuple[int, Any], ...]:
+    """Natural-order sort key for node ids, which are not always integers.
+
+    ComfyUI flattens subgraph nodes into composite ids such as ``"459:451"``,
+    so ``int(node_id)`` raises ``ValueError``. Digit runs compare numerically and
+    everything else compares as text, tagged so the tuple never mixes
+    incomparable types. Pure-integer ids keep their numeric order, which is the
+    documented ref-slot contract.
+    """
+    key: list[tuple[int, Any]] = []
+    for part in _DIGITS.split(str(node_id)):
+        if not part:
+            continue
+        key.append((0, int(part)) if part.isdigit() else (1, part))
+    return tuple(key)
 
 
 def _find_by_role(inputs: list[dict[str, Any]], *roles: str) -> dict[str, Any] | None:
@@ -14,14 +34,14 @@ def _find_by_role(inputs: list[dict[str, Any]], *roles: str) -> dict[str, Any] |
 
 
 def _find_all_by_role(inputs: list[dict[str, Any]], *roles: str) -> list[dict[str, Any]]:
-    """All inputs matching any of the roles, sorted by numeric node id.
+    """All inputs matching any of the roles, sorted by node id.
 
     Node-id order is the documented ref-slot order: for multi-reference
     workflows (e.g. MiniMax H3 ref2video), ``(Input:image)`` slots are filled
     in this order and it defines ``<Subject N>`` numbering in the prompt.
     """
     matches = [inp for inp in inputs if input_has_role(inp, *roles)]
-    return sorted(matches, key=lambda i: int(i["nodeId"]))
+    return sorted(matches, key=lambda i: _node_id_sort_key(i["nodeId"]))
 
 
 def ref_image_slots(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
