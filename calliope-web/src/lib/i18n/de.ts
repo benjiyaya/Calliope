@@ -801,6 +801,10 @@ export const de: Dict = {
 	'promptPreview.defaultWorkflow': 'Standard',
 	'promptPreview.sceneMeta': 'Szene #{index} · {heading}',
 	'promptPreview.shotMeta': 'Shot {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': 'Prompt ist leer',
+	'promptPreview.emptyConfirmMessage': 'Für diese Aufnahme konnte kein Prompt aufgelöst werden, und es handelt sich nicht um einen Entwurf. Jetzt eine neue Generierung erzwingen?',
+	'promptPreview.emptyConfirmYes': 'Ja, jetzt generieren',
+	'promptPreview.emptyConfirmNo': 'Nein, Vorschau schließen',
 
 	// --- Workflows (wf) ---
 	'wf.title': 'Workflows',

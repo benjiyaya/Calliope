@@ -801,6 +801,10 @@ export const zh: Dict = {
 	'promptPreview.defaultWorkflow': '默认',
 	'promptPreview.sceneMeta': '场景 #{index} · {heading}',
 	'promptPreview.shotMeta': '镜头 {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': '提示词为空',
+	'promptPreview.emptyConfirmMessage': '该镜头未能解析出提示词，且它并非草稿。是否现在强制重新编译？',
+	'promptPreview.emptyConfirmYes': '是，现在生成',
+	'promptPreview.emptyConfirmNo': '否，关闭预览',
 
 	// --- Workflows (wf) ---
 	'wf.title': '工作流',

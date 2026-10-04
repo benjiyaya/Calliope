@@ -801,6 +801,10 @@ export const en = {
 	'promptPreview.defaultWorkflow': 'default',
 	'promptPreview.sceneMeta': 'Scene #{index} · {heading}',
 	'promptPreview.shotMeta': 'Shot {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': 'Prompt is empty',
+	'promptPreview.emptyConfirmMessage': 'No prompt could be resolved for this shot, and it is not a saved draft. Force a fresh rewrite now?',
+	'promptPreview.emptyConfirmYes': 'Yes, generate now',
+	'promptPreview.emptyConfirmNo': 'No, close preview',
 
 	// --- Workflows (wf) ---
 	'wf.title': 'Workflows',

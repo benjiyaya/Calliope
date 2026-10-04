@@ -801,6 +801,10 @@ export const ja: Dict = {
 	'promptPreview.defaultWorkflow': '既定',
 	'promptPreview.sceneMeta': 'シーン #{index} · {heading}',
 	'promptPreview.shotMeta': 'ショット {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': 'プロンプトが空です',
+	'promptPreview.emptyConfirmMessage': 'このショットのプロンプトを解決できませんでした。下書きでもありません。今すぐ強制的に再コンパイルしますか？',
+	'promptPreview.emptyConfirmYes': 'はい、今すぐ生成',
+	'promptPreview.emptyConfirmNo': 'いいえ、プレビューを閉じる',
 
 	// --- Workflows (wf) ---
 	'wf.title': 'ワークフロー',

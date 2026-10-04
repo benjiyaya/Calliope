@@ -801,6 +801,10 @@ export const fr: Dict = {
 	'promptPreview.defaultWorkflow': 'par défaut',
 	'promptPreview.sceneMeta': 'Scène n° {index} · {heading}',
 	'promptPreview.shotMeta': 'Plan {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': 'Le prompt est vide',
+	'promptPreview.emptyConfirmMessage': "Aucun prompt n'a pu être résolu pour ce plan, et ce n'est pas un brouillon. Forcer une nouvelle génération maintenant ?",
+	'promptPreview.emptyConfirmYes': 'Oui, générer maintenant',
+	'promptPreview.emptyConfirmNo': 'Non, fermer l’aperçu',
 
 	// --- Workflows (wf) ---
 	'wf.title': 'Workflows',

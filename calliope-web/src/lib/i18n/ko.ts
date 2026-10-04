@@ -801,6 +801,10 @@ export const ko: Dict = {
 	'promptPreview.defaultWorkflow': '기본',
 	'promptPreview.sceneMeta': '장면 #{index} · {heading}',
 	'promptPreview.shotMeta': '샷 {label} · {heading}',
+	'promptPreview.emptyConfirmTitle': '프롬프트가 비어 있음',
+	'promptPreview.emptyConfirmMessage': '이 샷의 프롬프트를 확인하지 못했으며 초안도 아닙니다. 지금 강제로 다시 컴파일할까요?',
+	'promptPreview.emptyConfirmYes': '예, 지금 생성',
+	'promptPreview.emptyConfirmNo': '아니요, 미리보기 닫기',
 
 	// --- Workflows (wf) ---
 	'wf.title': '워크플로',
