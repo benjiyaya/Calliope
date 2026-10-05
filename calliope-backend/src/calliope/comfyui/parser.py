@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from calliope.comfyui.patcher import bool_widget_key
 from calliope.comfyui.registry import (
-    ComfyOutputKind,
-    IMAGE_CLASSES,
     AUDIO_CLASSES,
+    IMAGE_CLASSES,
     VIDEO_CLASSES,
+    ComfyOutputKind,
     class_to_input_kind,
     class_to_output_kind,
 )
@@ -18,19 +19,24 @@ from calliope.comfyui.roles import (
 )
 
 
-def extract_default_value(node: dict[str, Any]) -> str | int | float | None:
+def extract_default_value(node: dict[str, Any]) -> str | int | float | bool | None:
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
     if class_type in IMAGE_CLASSES or class_type in AUDIO_CLASSES or class_type in VIDEO_CLASSES:
         return None
+    # bool is a subclass of int — check it first or True/False fall through
+    # as numbers and the form stringifies them.
+    widget = bool_widget_key(inputs)
+    if widget is not None:
+        return inputs[widget]
     if isinstance(inputs.get("text"), str):
         return inputs["text"]
     value = inputs.get("value")
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, str) or (isinstance(value, (int, float)) and not isinstance(value, bool)):
         return value
-    if isinstance(inputs.get("int"), (int, float)):
+    if isinstance(inputs.get("int"), (int, float)) and not isinstance(inputs.get("int"), bool):
         return inputs["int"]
-    if isinstance(inputs.get("float"), (int, float)):
+    if isinstance(inputs.get("float"), (int, float)) and not isinstance(inputs.get("float"), bool):
         return inputs["float"]
     return None
 
@@ -44,12 +50,15 @@ def parse_dynamic_inputs(workflow: dict[str, Any]) -> list[dict[str, Any]]:
         kind, role, label = parse_title_tag(title)
         if kind != "input":
             continue
+        input_kind = class_to_input_kind(node.get("class_type", ""))
+        if bool_widget_key(node.get("inputs") or {}) is not None:
+            input_kind = "boolean"
         results.append(
             {
                 "nodeId": str(node_id),
                 "label": label or node.get("class_type", node_id),
                 "role": normalize_input_role(role),
-                "kind": class_to_input_kind(node.get("class_type", "")),
+                "kind": input_kind,
                 "defaultValue": extract_default_value(node),
                 "required": True,
             }

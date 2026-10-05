@@ -23,7 +23,6 @@
 	import { t } from '$lib/i18n.svelte';
 	import PillSelect from './omni/PillSelect.svelte';
 	import PillStepper from './omni/PillStepper.svelte';
-	import PillPopover from './omni/PillPopover.svelte';
 	import MediaTile from './omni/MediaTile.svelte';
 
 	interface WorkflowOption {
@@ -34,7 +33,7 @@
 
 	interface Props {
 		inputs: ComfyDynamicInput[];
-		values: Record<string, string | number>;
+		values: Record<string, string | number | boolean>;
 		/** Current workflow (for model pill label). */
 		workflow?: WorkflowOption | null;
 		/** Available workflows (for model pill dropdown). */
@@ -44,7 +43,7 @@
 		allowUpload?: boolean;
 		showErrors?: boolean;
 		onValidityChange?: (missing: string[]) => void;
-		onChange?: (values: Record<string, string | number>) => void;
+		onChange?: (values: Record<string, string | number | boolean>) => void;
 		/** Enter or Ctrl+Enter in prompt → trigger Generate. */
 		onSubmit?: () => void;
 		/** Pending state for the Generate button (shows spinner-ish label). */
@@ -102,7 +101,7 @@
 		}
 	});
 
-	function setValue(nodeId: string, value: string | number) {
+	function setValue(nodeId: string, value: string | number | boolean) {
 		values = { ...values, [nodeId]: value };
 		onChange?.(values);
 	}
@@ -188,8 +187,13 @@
 
 	// ── Validity tracking ─────────────────────────────────────────────────
 
-	function isBlank(val: string | number | undefined): boolean {
+	function isBlank(val: string | number | boolean | undefined): boolean {
+		if (typeof val === 'boolean') return false;
 		return val === undefined || (typeof val === 'string' && !val.trim());
+	}
+
+	function boolChecked(value: string | number | boolean | undefined): boolean {
+		return value === true || value === 'true' || value === 1 || value === '1';
 	}
 
 	const missingLabels = $derived(
@@ -199,10 +203,6 @@
 	$effect(() => {
 		onValidityChange?.(missingLabels);
 	});
-
-	// ── Advanced popover fields ───────────────────────────────────────────
-
-	const hasAdvanced = $derived(classified.advanced.length > 0);
 </script>
 
 <div class="omni-shell">
@@ -231,7 +231,7 @@
 			<textarea
 				class="prompt-area"
 				placeholder={t('omni.promptPlaceholder')}
-				rows="3"
+				rows="12"
 				value={values[promptNode.nodeId] ?? ''}
 				oninput={(e) => setValue(promptNode.nodeId, e.currentTarget.value)}
 				onkeydown={onPromptKeydown}
@@ -332,34 +332,39 @@
 			/>
 		{/each}
 
-		<!-- Advanced (unknown roles, extra params) -->
-		{#if hasAdvanced}
-			<PillPopover label={t('omni.advanced')} badge={classified.advanced.length} icon="settings">
-				{#each classified.advanced as ctrl (ctrl.input.nodeId)}
-					{@const nodeId = ctrl.input.nodeId}
-					<label class="adv-field">
-						<span class="adv-label">{ctrl.input.label}</span>
-						{#if ctrl.input.kind === 'number'}
-							<input
-								class="adv-input"
-								type="number"
-								value={values[nodeId] ?? ctrl.input.defaultValue ?? ''}
-								oninput={(e) => setValue(nodeId, Number(e.currentTarget.value) || 0)}
-							/>
-						{:else}
-							<input
-								class="adv-input"
-								type="text"
-								value={values[nodeId] ?? ctrl.input.defaultValue ?? ''}
-								oninput={(e) => setValue(nodeId, e.currentTarget.value)}
-							/>
-						{/if}
-					</label>
-				{/each}
-			</PillPopover>
-		{/if}
+		<!-- Advanced workflow options — rendered inline in the options row,
+		     at the same level as the workflow selector, not hidden in a popover -->
+		{#each classified.advanced as ctrl (ctrl.input.nodeId)}
+			{@const nodeId = ctrl.input.nodeId}
+			<label class="adv-inline" title={ctrl.input.label}>
+				<span class="adv-inline-label">{ctrl.input.label}</span>
+				{#if ctrl.input.kind === 'boolean'}
+					<input
+						class="adv-inline-check"
+						type="checkbox"
+						checked={boolChecked(values[nodeId] ?? ctrl.input.defaultValue)}
+						onchange={(e) => setValue(nodeId, e.currentTarget.checked)}
+					/>
+				{:else}
+					<input
+						class="adv-inline-input"
+						type={ctrl.input.kind === 'number' ? 'number' : 'text'}
+						value={values[nodeId] ?? ctrl.input.defaultValue ?? ''}
+						oninput={(e) =>
+							setValue(
+								nodeId,
+								ctrl.input.kind === 'number'
+									? Number(e.currentTarget.value) || 0
+									: e.currentTarget.value,
+							)}
+					/>
+				{/if}
+			</label>
+		{/each}
+	</div>
 
-		<!-- Generate -->
+	<!-- ── Generate row ───────────────────────────────────────────────── -->
+	<div class="generate-row">
 		<button
 			type="button"
 			class="generate-btn"
@@ -395,6 +400,8 @@
 		gap: 0;
 		padding: 16px;
 		min-height: 120px;
+		/* Never let a constrained ancestor squeeze the prompt box away. */
+		flex-shrink: 0;
 	}
 
 	.media-tray {
@@ -414,7 +421,9 @@
 		font-size: 15px;
 		line-height: 1.6;
 		resize: vertical;
-		min-height: 60px;
+		/* Generous default — video prompts run long. Drag the handle for more. */
+		min-height: 280px;
+		height: 280px;
 		outline: none;
 		padding: 0;
 	}
@@ -485,13 +494,34 @@
 		border-top: 1px solid var(--border);
 		background: var(--bg-primary);
 		flex-wrap: wrap;
+		flex-shrink: 0;
+	}
+
+	/* Let pills shrink + ellipsis so workflow / duration / advanced share the
+	   same row even in the narrow inspector dock. */
+	.omni-controls :global(.pill-wrap) {
+		min-width: 0;
+		flex: 0 1 auto;
+	}
+
+	/* Generate owns its own full-width row under the option pills.
+	   NO flex-basis here — as a column-flex child, `100%` would resolve
+	   against the shell's HEIGHT and starve the prompt box. */
+	.generate-row {
+		display: flex;
+		justify-content: center;
+		padding: 4px 0 12px;
+		background: var(--bg-primary);
+		flex-shrink: 0;
 	}
 
 	.generate-btn {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
 		gap: 6px;
-		height: 36px;
+		width: 90%;
+		height: 38px;
 		padding: 0 20px;
 		border-radius: 9999px;
 		background: var(--success, #22c55e);
@@ -501,7 +531,6 @@
 		font-weight: 700;
 		font-family: var(--font-body);
 		cursor: pointer;
-		margin-left: auto;
 		transition: filter 0.15s, transform 0.1s;
 	}
 
@@ -526,34 +555,63 @@
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 35%, transparent);
 	}
 
-	/* ── Advanced popover fields ───────────────────────────── */
-	.adv-field {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
+	/* ── Advanced options, inline in the options row ───────── */
+	.adv-inline {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		height: var(--pill-height, 36px);
+		padding: 0 12px;
+		border-radius: var(--pill-radius, 9999px);
+		background: var(--pill-bg, var(--bg-elevated));
+		border: 1px solid var(--pill-border, var(--border));
+		transition:
+			border-color 0.15s,
+			background 0.15s;
 	}
 
-	.adv-label {
+	.adv-inline:focus-within {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-glow);
+	}
+
+	.adv-inline-label {
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--text-secondary);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 110px;
 	}
 
-	.adv-input {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 8px 10px;
+	.adv-inline-check {
+		width: 16px;
+		height: 16px;
+		margin: 0;
+		accent-color: var(--accent);
+	}
+
+	.adv-inline-input {
+		width: 64px;
+		min-width: 0;
+		background: transparent;
+		border: none;
+		outline: none;
 		color: var(--text-primary);
 		font-size: 13px;
 		font-family: var(--font-mono);
-		width: 100%;
-		box-sizing: border-box;
+		text-align: right;
 	}
 
-	.adv-input:focus-visible {
-		outline: none;
-		border-color: var(--accent);
-		box-shadow: 0 0 0 3px var(--accent-glow);
+	.adv-inline-input::-webkit-outer-spin-button,
+	.adv-inline-input::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+
+	.adv-inline-input[type='number'] {
+		-moz-appearance: textfield;
+		appearance: textfield;
 	}
 </style>

@@ -9,7 +9,7 @@ from typing import Any
 from pathlib import Path as _fs_path
 
 from calliope import config
-from calliope.comfyui.client import ComfyUIClient
+from calliope.comfyui.client import ComfyUIClient, select_output_files
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.patcher import node_widget_field, patch_workflow
@@ -295,7 +295,9 @@ class QueueWorker:
                 messages = status.get("messages") or []
                 raise RuntimeError(f"ComfyUI error: {messages}")
 
-            outputs_meta = client.extract_outputs(history)
+            outputs_meta = select_output_files(
+                client.extract_outputs(history), workflow["nodes"], kind
+            )
             dest_dir = config.settings.assets_dir / str(project_id) / kind
             dest_dir.mkdir(parents=True, exist_ok=True)
             paths: list[str] = []

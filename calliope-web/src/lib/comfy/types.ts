@@ -1,4 +1,12 @@
-export type ComfyInputKind = 'text' | 'textarea' | 'number' | 'image' | 'image_url' | 'audio' | 'video';
+export type ComfyInputKind =
+	| 'text'
+	| 'textarea'
+	| 'number'
+	| 'boolean'
+	| 'image'
+	| 'image_url'
+	| 'audio'
+	| 'video';
 export type ComfyOutputKind = 'image' | 'video' | 'other';
 
 export interface ComfyDynamicInput {
@@ -7,7 +15,7 @@ export interface ComfyDynamicInput {
 	/** Role from title tag, e.g. (Input:prompt) → "prompt". Null for plain (Input). */
 	role?: string | null;
 	kind: ComfyInputKind;
-	defaultValue?: string | number;
+	defaultValue?: string | number | boolean;
 	required: boolean;
 }
 
@@ -57,7 +65,7 @@ export interface Job {
 }
 
 export interface SceneVideoSettings {
-	input_values?: Record<string, string | number>;
+	input_values?: Record<string, string | number | boolean>;
 	form_workflow_id?: number;
 	prompt_draft?: string;
 	prompt_draft_meta?: { based_on?: string; saved_at?: string };
