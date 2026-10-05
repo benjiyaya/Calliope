@@ -374,6 +374,12 @@ def register_builtin_sections(service: SystemPromptService) -> None:
     service.register("mode", 20, _mode_section)
     service.register("build_scene", 25, _build_scene_section)
     service.register("workspace", 30, _workspace_digest_section)
+    # Scratch workspace (order 32): the session's file-draft folder + the
+    # draft → show → commit workflow. Imported lazily from the files plugin so
+    # composing prompts alone never composes the registry.
+    from calliope.agent.harness.plugins.files import _files_section
+
+    service.register("files", 32, _files_section)
     # Memory recall (order 35): usage-ranked preferences from harness.plugins.memory.
     # Imported lazily so composing prompts alone never composes the registry.
     from calliope.agent.harness.plugins.memory import _memory_section

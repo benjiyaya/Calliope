@@ -46,3 +46,6 @@ prototype/
 
 # --- Reference clones (vendored for porting only) ---
 reference/
+
+# --- Local agent workspace (ZCode) ---
+.zcode/

@@ -73,6 +73,7 @@
 		agent_workspace_dir: 'storage',
 		db_name: 'storage',
 		agent_shell_enabled: 'agent',
+		h3_rewrite_vision: 'queue',
 	};
 	// Mirrors backend Field(ge=..., le=...) limits — validated client-side so
 	// save never trips a raw 422.
@@ -234,6 +235,11 @@
 	function shellChecked(s: Settings): boolean {
 		if (draft.agent_shell_enabled !== undefined) return Boolean(draft.agent_shell_enabled);
 		return s.agent_shell_enabled === true;
+	}
+
+	function h3VisionChecked(s: Settings): boolean {
+		if (draft.h3_rewrite_vision !== undefined) return Boolean(draft.h3_rewrite_vision);
+		return s.h3_rewrite_vision === true;
 	}
 
 	// History budget presets (chars). Large matches the backend default (400k).
@@ -877,6 +883,15 @@
 						{/if}
 						<p class="field-hint">{t('settings.agentMaxStepsHint')}</p>
 					</label>
+					<label class="check">
+						<input
+							type="checkbox"
+							checked={h3VisionChecked(s)}
+							onchange={(e) => (draft.h3_rewrite_vision = e.currentTarget.checked)}
+						/>
+						{t('settings.h3VisionLabel')}
+					</label>
+					<p class="field-hint">{t('settings.h3VisionHint')}</p>
 				</section>
 			{:else if tab === 'agent'}
 				<section class="panel">

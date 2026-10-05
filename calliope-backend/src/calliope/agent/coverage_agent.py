@@ -82,8 +82,6 @@ Dialogue lines (verbatim, numbered):
    the first time a character appears in a clip.
 4. duration_sec per clip: 3–{clip_cap}; the SUM should be approximately the scene budget.
 5. shot_size is one of: wide, medium, closeUp, insert, overShoulder.
-6. Set chain_from_prev=true ONLY when this clip should literally continue the previous
-   clip's rendered frames (same camera take / motion carry). Usually false — a cut is fine.
 
 Respond ONLY with JSON:
 {{
@@ -93,8 +91,7 @@ Respond ONLY with JSON:
       "description": "Wide establishing shot…",
       "dialog_lines_covered": [],
       "shot_size": "wide",
-      "duration_sec": 6,
-      "chain_from_prev": false
+      "duration_sec": 6
     }}
   ]
 }}
@@ -155,7 +152,6 @@ def _normalize_clips(
                 "dialog_lines_covered": covered,
                 "shot_size": shot_size,
                 "duration_sec": min(duration or clip_cap, clip_cap),
-                "chain_from_prev": bool(c.get("chain_from_prev")),
             }
         )
     # Renumber 1..N in the order given (models restart indexes per chunk).
@@ -191,7 +187,7 @@ async def expand_scene_coverage(
 
     Expands ALL of the project's scenes when scene_ids is None. Each expanded
     scene's old clips are deleted inside the same transaction that inserts the
-    new ones (its chain_from_prev migrates onto clip #1). Returns a summary.
+    new ones. Returns a summary.
     """
     cap = clip_cap or DEFAULT_CLIP_DURATION_SEC
     conn = get_db(settings.db_path)
@@ -267,17 +263,15 @@ async def expand_scene_coverage(
                 raw_clips, n_dialog_lines=len(dialog_lines), scene_budget=budget, clip_cap=cap
             )
 
-            # Replace-the-scene's-clips transaction. The scene-level chain flag
-            # migrates onto clip #1; the default clip (backfill) had copied it.
-            scene_chain = bool(scene.get("chain_from_prev"))
+            # Replace-the-scene's-clips transaction.
             conn.execute("DELETE FROM clips WHERE scene_id = ?", (scene["id"],))
             for c in clips:
                 conn.execute(
                     """
                     INSERT INTO clips (scene_id, project_id, order_index, description,
                                        shot_size, dialog_lines_covered, duration_sec,
-                                       workflow_id, chain_from_prev)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       workflow_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         scene["id"],
@@ -288,13 +282,12 @@ async def expand_scene_coverage(
                         json.dumps(c["dialog_lines_covered"]) if c["dialog_lines_covered"] else None,
                         c["duration_sec"],
                         scene.get("workflow_id"),
-                        1 if (c["order_index"] == 1 and scene_chain) or c["chain_from_prev"] else 0,
                     ),
                 )
             # The scene is now represented by its clips; clear its legacy
             # 1:1 render mirror so stale single-clip paths don't resurface.
             conn.execute(
-                "UPDATE scenes SET video_path = NULL, chain_from_prev = 0 WHERE id = ?",
+                "UPDATE scenes SET video_path = NULL WHERE id = ?",
                 (scene["id"],),
             )
             conn.commit()

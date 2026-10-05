@@ -183,6 +183,8 @@ export interface Settings {
 	llm_max_output_tokens: number;
 	agent_llm_assignments: Record<string, string | null>;
 	agent_shell_enabled: boolean;
+	/** Attach reference images/frames to the H3 prompt rewrite (slow on local vision models). */
+	h3_rewrite_vision: boolean;
 	dry_run: boolean;
 }
 

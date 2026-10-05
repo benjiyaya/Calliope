@@ -80,6 +80,7 @@
     "delete_canvas_node",
     "delete_character",
     "delete_clip",
+    "delete_file",
     "delete_item",
     "delete_keyframe",
     "delete_location",
@@ -97,6 +98,7 @@
     "get_workspace",
     "link_project",
     "list_clips",
+    "list_files",
     "list_jobs",
     "list_memories",
     "list_poses",
@@ -107,6 +109,7 @@
     "list_workflows",
     "move_keyframe_time",
     "post_artifact_to_canvas",
+    "read_file",
     "read_skill",
     "record_build_scene_gate",
     "refresh_continuity_plan",
@@ -136,7 +139,8 @@
     "update_location",
     "update_project",
     "update_scene",
-    "wait_for_jobs"
+    "wait_for_jobs",
+    "write_file"
   ],
   "sse_events": [
     "agent.message",
@@ -171,6 +175,7 @@
     "guard_shell_denied_command",
     "guard_shell_denied_path",
     "guard_shell_disabled",
-    "guard_shell_outside_workspace"
+    "guard_shell_outside_workspace",
+    "guard_workspace_path"
   ]
 }

@@ -771,7 +771,9 @@
 						streamingReasoning += `${name ? `${name}: ` : ''}`;
 						thinkingAgent = name;
 					}
-					streamingReasoning += String(ev.data?.content ?? '');
+					// Sub-agents stream their reasoning now — keep only the tail
+					// so a whole swarm's thinking can't grow without bound.
+					streamingReasoning = (streamingReasoning + String(ev.data?.content ?? '')).slice(-24000);
 				}
 			} else if (ev.type === 'agent.tool') {
 				if (ev.data?.session_id !== activeId) return;
@@ -1188,7 +1190,7 @@ title={running
 							title={t('canvas.collapseChat')}
 							aria-label={t('canvas.collapseChat')}
 						>
-							<Icon name="chevron-right" size={14} />
+							<Icon name="chevron-right" size={16} />
 						</button>
 					</header>
 					<AgentChat
@@ -1226,7 +1228,8 @@ title={running
 					title={t('canvas.expandChat')}
 					aria-label={t('canvas.expandChat')}
 				>
-					<Icon name="chevron-left" size={14} />
+					<Icon name="sparkle" size={14} />
+					<span>{t('canvas.agentButton')}</span>
 				</button>
 			{/if}
 		</div>
@@ -1254,6 +1257,10 @@ title={running
 		flex: 1;
 		display: flex;
 		min-height: 0;
+		/* Anchor for the collapsed-chat button — without it the button's
+		   absolute positioning resolves against the viewport and lands on
+		   top of the AppHeader's language dropdown. */
+		position: relative;
 	}
 	.flow-panel {
 		flex: 1;
@@ -1453,27 +1460,41 @@ title={running
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
+		gap: 6px;
 		border: 1px solid var(--border);
-		background: var(--bg-surface);
+		background: var(--bg-elevated);
 		color: var(--text-secondary);
-		border-radius: var(--radius-sm);
+		border-radius: 999px;
 		cursor: pointer;
+		font-family: inherit;
+		flex-shrink: 0;
 	}
 	.chat-toggle {
-		width: 26px;
-		height: 26px;
+		width: 30px;
+		height: 30px;
 	}
 	.chat-toggle:hover,
 	.chat-expand:hover {
 		color: var(--text-primary);
 		border-color: var(--accent);
 	}
+	.chat-toggle:focus-visible,
+	.chat-expand:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
 	.chat-expand {
-		width: 34px;
-		height: 34px;
 		position: absolute;
 		right: 14px;
 		top: 14px;
 		z-index: 5;
+		padding: 8px 14px;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-primary);
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+	}
+	.chat-expand:hover {
+		color: var(--accent);
 	}
 </style>

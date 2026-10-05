@@ -405,17 +405,16 @@ def ensure_default_clip(conn: sqlite3.Connection, scene_id: int, project_id: int
     """Every scene keeps >= 1 clip: inserts default clip #1 when none exist.
 
     The default inherits the scene's production fields (duration, workflow,
-    settings, chain) so an un-expanded project behaves exactly like the old
-    1:1 model. Called by every scene-creation path (router CRUD, script
+    settings) so an un-expanded project behaves exactly like the old 1:1
+    model. Called by every scene-creation path (router CRUD, script
     generation, coverage expansion replacement).
     """
     conn.execute(
         """
         INSERT INTO clips (scene_id, project_id, order_index, description,
-                           duration_sec, workflow_id, clip_path, video_settings_json,
-                           chain_from_prev)
+                           duration_sec, workflow_id, clip_path, video_settings_json)
         SELECT ?, ?, 1, NULL, duration_sec, workflow_id, video_path,
-               video_settings_json, chain_from_prev
+               video_settings_json
         FROM scenes s
         WHERE s.id = ? AND s.project_id = ?
           AND NOT EXISTS (SELECT 1 FROM clips WHERE scene_id = ?)

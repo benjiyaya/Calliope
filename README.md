@@ -72,6 +72,11 @@ In **Settings → Agent**:
 
 - **Model per agent** — assign any saved LLM to each role: **Main agent, Planner, Story agent, Script agent, Assets agent, Video agent**. Blank means the **Active LLM** from Settings → LLM applies, so a single-endpoint setup needs no configuration here. A common setup is a strong cloud model for the main agent and planner, and a fast local model for the sub-agents. The Video agent's assignment also drives the MiniMax H3 prompt rewrite.
 - **System-prompt rules (hardening)** — operator rules appended to every agent system prompt. Leave blank to disable.
+- **Agent shell (`run_command`)** — off by default. When enabled, the agent may run simple commands (ffprobe, scripts you approve) inside the sandbox described below; anything non-read-only asks you first via a confirmation card.
+
+### Agent workspace
+
+**Settings → System Paths → Agent workspace** (default `DATA_DIR/workspace`) is a scratch folder on disk the AI agent may work in. Every chat session gets its own subfolder (`workspace/sessions/<session id>`), shared between the main agent and its sub-agents. The agent uses four file tools — `list_files`, `read_file`, `write_file`, `delete_file` — to draft scripts, beat lists, shot plans, and video prompts as text files while it works, show you the drafts, and then commit the approved content into the project (scenes, clips, beats) with its normal editing tools. The files are the working medium; the database stays the store. Paths cannot escape the session folder, sensitive files (config, database, keys) are denied by name, and the optional shell, when enabled, is sandboxed to the same workspace.
 
 ## Using the app
 
@@ -145,44 +150,34 @@ Unknown roles still show up in the dynamic form; they just get no special auto-f
 
 #### Prompt profiles
 
-Each workflow has a **Prompt format** setting (default *Plain prose*). When set to *MiniMax H3 reference (6-section)*, Calliope rewrites each scene prompt at generation time into MiniMax H3's full-reference format (`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`, with `<Subject N>` labels and `<d>[Language] …</d>` dialogue). It is auto-suggested on import when the workflow contains a `MiniMaxH3*` node.
+Each workflow has a **Prompt format** setting (default *Plain prose*). When set to *MiniMax H3 reference (6-section)*, Calliope compiles each scene prompt into MiniMax H3's full-reference format (`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`, with `<Subject N>` labels and `<d>[Language] …</d>` dialogue). The compile is **instant and deterministic** — no LLM wait; the optional LLM rewrite runs only when you press **Regenerate** in the prompt preview. It is auto-suggested on import when the workflow contains a `MiniMaxH3*` node.
 
 For multi-reference workflows, generic `(Input:image)` inputs are filled in **node-id order** — characters in scene order, then the location — and that order defines the `<Subject N>` numbering in the prompt. Keep your ref node ids in the order you want subjects numbered. A `(Input:duration)` node receives the scene's duration in seconds.
 
 **Using the H3 profile from the scene form (Generate clip):** the form's auto-fill vs. override rule is simple — anything you type or pick wins over the automatic value.
 
-- **Text Prompt — leave it empty.** An empty field gets the LLM-rewritten six-section H3 prompt built from the scene's action, dialogue, characters, and location. If you type anything, your text is sent verbatim and the model receives plain prose instead of the H3 format.
+- **Text Prompt — leave it empty.** An empty field gets the deterministic six-section H3 prompt built from the scene's action, dialogue, characters, and location. If you type anything, your text is sent verbatim — the compile never replaces it (so you can write directives like `<video 1> — extend and continue:` yourself).
 - **Ref 1 / Ref 2 — leave them on "Choose asset…"** to auto-fill from the scene's characters (in scene order) then the location, with `<Subject N>` numbering matched to those slots. Picking an asset manually overrides just that slot (and you take over subject numbering for it).
 - **Duration** auto-fills from the scene's estimated duration; edit it only when you want a different clip length.
 
-### Continue from previous clip (video extend)
+### Video inputs are workflow-owned (no auto-chaining)
 
-Long takes don't have to be one giant generation. Mark a clip **Continue from previous clip** in the **Script** stage (the toggle lives on a scene when it hasn't been expanded — expanding migrates it onto the clip) and instead of cutting a fresh clip, it extends the previous clip in the timeline as real continuation footage (the first clip can't use the toggle).
-
-The **Video** stage enforces one requirement: the workflow must have an input tagged `(Input:video)` (a `LoadVideo` node). Continue clips on a workflow without one have Generate disabled with a warning.
-
-When the workflow qualifies, a **clip source picker** appears on the continue scene:
-
-- **Auto** (default) — the previous clip in timeline order is used, resolved when the job actually runs.
-- **Upload file** — extend from any video you provide (a Playground upload).
-- **From timeline** — pick a specific earlier clip explicitly.
-
-Auto is safe even when clips are queued in one batch: Calliope's queue renders one job at a time, so by the time a continue clip runs, the clip before it has already rendered and is picked up automatically.
+Whether a render consumes a reference video is decided **entirely by the ComfyUI workflow** — a node tagged `(Input:video)` (a `LoadVideo` node). Calliope adds no per-scene "chain" flag and no clip-source picker: if your workflow has a video input, it appears in the Video-stage form like any other media slot, and you supply the video yourself — upload a file, or pick a rendered clip from the project via the asset picker. Leave it empty and the job fails in ComfyUI with its own error; Calliope never silently invents an input for you.
 
 The workflow pattern (per [kat3ri/ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend)) is a `LoadVideo (Input:video)` node feeding the MiniMax H3 extend patched nodes (`MiniMaxH3EncodeAVPatched` → `MiniMaxH3VideoExtendPatched`) with the `(Output:video)` node at the end. Recommended starting settings from that repo: `context_frames` **2**, `ref_spacing` **1–2**, `ref_decay` **0.3**, `ref_ramp` **3–4** (5–6 if the prior clip had heavy motion).
 
 ### Review the prompt before you generate
 
-Generate no longer fires blind. Hitting **Generate** first opens a prompt preview: the exact text that will land on the workflow's `(Input:prompt)` node — your saved draft if there is one, otherwise a fresh MiniMax H3 rewrite (six-section format) or the prose clip prompt (scene heading, the clip's shot description, and only the dialogue lines that clip performs).
+Generate no longer fires blind. Hitting **Generate** first opens a prompt preview: the exact text that will land on the workflow's `(Input:prompt)` node — your typed form text or saved draft if there is one, otherwise the instant MiniMax H3 six-section compile (or the prose clip prompt: scene heading, the clip's shot description, and only the dialogue lines that clip performs). Resolving is instant; the LLM is never in the default path.
 
 - **Edit it inline** — typos, camera notes, pacing, anything. The edited text is what gets sent.
-- **Regenerate** re-runs the H3 rewrite for a different take.
-- **Save draft** keeps it on the clip; future generates (single or **Generate all**) reuse the draft instead of calling the LLM again. A hint appears when the draft predates changes to the scene or clip.
+- **Regenerate** explicitly asks the LLM for a fresh six-section rewrite (this is the only path that waits on a model — and it can also ground on the project's continuity ledger).
+- **Save draft** keeps it on the clip; future generates (single or **Generate all**) reuse the draft. A hint appears when the draft predates changes to the scene or clip.
 - **Cancel** aborts with nothing enqueued.
 
 After a render, **View prompt & inputs** opens the scene's render history: every job as a chip, the payload each one actually sent to ComfyUI, and **Copy settings to form** to pull a past job's input values back into the live form.
 
-Your video-stage setup (workflow choice, input values, clip source) auto-saves and comes back after a reload or app restart. **Generate all** honors every saved setup and draft — the toast reports how many drafts were used.
+Your video-stage setup (workflow choice, input values) auto-saves and comes back after a reload or app restart. **Generate all** honors every saved setup and draft — the toast reports how many drafts were used.
 
 ### Better ComfyUI errors
 

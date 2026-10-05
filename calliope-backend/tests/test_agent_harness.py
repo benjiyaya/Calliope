@@ -293,8 +293,9 @@ def test_planner_llm_failure_degrades_to_single(fake_llm, client):
     import calliope.agent.harness.orchestrator as orch
 
     class _FailingPlanClient:
-        async def chat(self, *a, **kw):
+        async def chat_stream(self, *a, **kw):
             raise ConnectionError("llm down")
+            yield  # pragma: no cover — makes this an async generator
 
         async def close(self):
             return None
@@ -332,16 +333,22 @@ def test_swarm_synthesis_failure_falls_back_to_reports(client):
     class _SwarmThenFailClient:
         _n = 0  # class-level: a fresh instance per LLMClient() call
 
-        async def chat(self, messages, temperature=0.2, **kw):
-            _SwarmThenFailClient._n += 1
-            if _SwarmThenFailClient._n == 1:  # planner: order a minimal swarm
-                return json.dumps(
+        async def chat_stream(self, messages, temperature=0.2, **kw):
+            _SwarmThenFailClient._n += 1  # planner: order a minimal swarm
+            yield {
+                "type": "delta",
+                "content": json.dumps(
                     {
                         "mode": "swarm",
                         "note": "plan",
                         "tasks": [{"role": "script", "goal": "do thing"}],
                     }
-                )
+                ),
+            }
+            yield {"type": "done"}
+
+        async def chat(self, messages, temperature=0.2, **kw):
+            _SwarmThenFailClient._n += 1
             raise ConnectionError("llm down")  # synthesis call
 
         async def close(self):
@@ -704,14 +711,18 @@ def test_sub_agent_failure_names_empty_str_exception(client):
     pid = _make_project(client)
 
     class _SwarmPlanClient:
-        async def chat(self, messages, temperature=0.2, **kw):
-            return json.dumps(
-                {
-                    "mode": "swarm",
-                    "note": "plan",
-                    "tasks": [{"role": "assets", "goal": "update text assets"}],
-                }
-            )
+        async def chat_stream(self, messages, temperature=0.2, **kw):
+            yield {
+                "type": "delta",
+                "content": json.dumps(
+                    {
+                        "mode": "swarm",
+                        "note": "plan",
+                        "tasks": [{"role": "assets", "goal": "update text assets"}],
+                    }
+                ),
+            }
+            yield {"type": "done"}
 
         async def close(self):
             return None
@@ -792,8 +803,9 @@ def test_multimodal_goal_does_not_crash_orchestrate(client, tmp_path):
     # source of its flakiness: solo runs degraded to single, full-file runs
     # sometimes got a swarm plan and run_turn was never called).
     class _SingleModeClient:
-        async def chat(self, *a, **kw):
-            return json.dumps({"mode": "single", "tasks": [], "note": ""})
+        async def chat_stream(self, messages, temperature=0.2, **kw):
+            yield {"type": "delta", "content": json.dumps({"mode": "single", "tasks": [], "note": ""})}
+            yield {"type": "done"}
 
         async def close(self):
             return None
@@ -867,9 +879,10 @@ def test_swarm_goal_from_multimodal_message_plans(client, tmp_path):
     seen_goals: list[str] = []
 
     class _PlannerCaptureClient:
-        async def chat(self, messages, temperature=0.2, **kw):
+        async def chat_stream(self, messages, temperature=0.2, **kw):
             seen_goals.append(messages[-1]["content"])
-            return json.dumps({"mode": "single", "tasks": [], "note": ""})
+            yield {"type": "delta", "content": json.dumps({"mode": "single", "tasks": [], "note": ""})}
+            yield {"type": "done"}
 
         async def close(self):
             return None

@@ -47,6 +47,7 @@ GUARD_SHELL_DENIED_COMMAND = "guard_shell_denied_command"
 from calliope.agent.harness.registry import (  # noqa: E402
     GUARD_SCENE_TOOL_SCOPE,
     GUARD_NO_EXPORT_VIDEO_TOOL,
+    GUARD_WORKSPACE_PATH,
     EXPORT_VIDEO_DENIED_NAMES,
     _scene_scoped,
 )
@@ -185,6 +186,7 @@ def build_harness() -> tuple[ToolRegistry, SystemPromptService]:
     _load_plugins()
     from calliope.agent.harness.plugins import (  # noqa: E402
         canvas,
+        files,
         interaction,
         memory,
         render,
@@ -206,6 +208,7 @@ def build_harness() -> tuple[ToolRegistry, SystemPromptService]:
     skills.register(registry)
     shot_builder.register(registry)
     system.register(registry)
+    files.register(registry)
     registry.on_pre_execute(_destructive_guard)
     registry.on_pre_execute(_render_approval_guard)
     register_builtin_sections(prompts)

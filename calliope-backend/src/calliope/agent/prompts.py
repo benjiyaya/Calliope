@@ -652,9 +652,10 @@ def scene_video_prompt(scene: dict[str, Any], characters: list[dict[str, Any]]) 
 # ---------------------------------------------------------------------------
 # Condensed from MiniMax's VIDEO_PROMPT_WRITING_GUIDE_ref_en.md, adapted to
 # Calliope's single-scene clips. Image slots are (Input:image) in node-id
-# order and that order is <Subject N> / <Picture N>. Video slots are
-# (Input:video) and become <Video N>. The files the user put in those slots
-# are the identity and motion source; story text only fills an empty slot.
+# order and that order is <Subject N> / <Picture N>. The files the user put
+# in those slots are the identity source; story text only fills an empty
+# slot. Reference VIDEOS are a workflow wiring concern ((Input:video) nodes,
+# e.g. extend workflows) — the prompt text never mentions them.
 
 MINIMAX_H3_REF_SYSTEM = (
     "You rewrite scene descriptions into MiniMax H3's full-reference video prompt format. "
@@ -679,31 +680,23 @@ MINIMAX_H3_REF_SYSTEM = (
     "that is not that file. If a subject has no written appearance and you cannot see "
     "the picture, lock the line to the picture and do not invent a different identity.\n"
     "2. summary: one short English paragraph starting with '[reference generation]' that "
-    "states what happens using the <Subject N> labels. When a <Video N> is supplied, "
-    "say that its camera and physical performance drive the motion.\n"
+    "states what happens using the <Subject N> labels.\n"
     "3. retention_analysis: one line per subject: '<Subject N> (appears in [Shot 1]…): "
-    "fully_preserved - <which defined features are retained>.' One line per reference "
-    "video: '<Video N> (camera movement and action timing): attribute_transfer - <camera, "
-    "timing, and physical action taken from the clip>.' Every line uses one of H3's fixed "
-    "visual markers — fully_preserved, partially_preserved, attribute_transfer, "
+    "fully_preserved - <which defined features are retained>.' Every line uses one of "
+    "H3's fixed visual markers — fully_preserved, partially_preserved, attribute_transfer, "
     "weak_reference — and no other word.\n"
     "4. detailed_description: the main body, 150–350 words. Open with one or two style "
     "sentences (lighting, palette, medium) BEFORE '[Shot 1]'. '[Shot 1]' has no timestamp; "
     "later cuts use '[Shot N] At MM:SS.mmm, …'. For clips under ~8 seconds prefer a single "
     "shot. Introduce each <Subject N> at its first visible appearance with the features "
-    "visible in its picture, plus position and action; reuse the label afterwards. When "
-    "a reference video is supplied, state the camera move and the body action taken from "
-    "its frames. Describe only what is visible except sound/dialogue.\n"
+    "visible in its picture, plus position and action; reuse the label afterwards. Describe "
+    "only what is visible except sound/dialogue.\n"
     "5. Dialogue: give each speaker a stable ID in order of first speech — '<Subject N> (S1) "
     "says, <d>[English] …</d>'. A speaker with no defined subject uses a stable voice "
     "description, e.g. 'A narrator (S2) says, <d>[English] …</d>'. Keep the original "
     "language of every line inside <d> and tag it, e.g. [English], [Chinese].\n"
     "6. overall_soundscape: ambience and physical sounds across the clip, or 'N/A'. "
     "non_diegetic_music: audience-only score (instrumentation, tempo), or 'N/A'.\n"
-    "7. Reference videos: one subject_definitions line per <Video N> supplied in the "
-    "user message. Form: '<Video N> is the motion reference, with <camera and action "
-    "to preserve>.' Never drop a supplied video. Do not invent a <Video N> that was "
-    "not supplied.\n"
     "Write everything in English except dialogue/lyrics inside <d> and visible on-screen text."
 )
 
@@ -728,37 +721,21 @@ def _subject_roster_lines(subjects: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _video_roster_lines(videos: list[dict[str, Any]]) -> str:
-    lines = []
-    for v in videos:
-        name = v.get("name") or Path(str(v.get("path") or "")).name or "clip"
-        lines.append(
-            f"<Video {v['index']}> = motion reference \"{name}\" "
-            f"(reference video slot {v['index']}). Preserve its camera movement, "
-            "timing, and physical performance. Do not drop this label."
-        )
-    return "\n".join(lines)
-
-
 def build_minimax_h3_ref_messages(
     scene: dict[str, Any],
     subjects: list[dict[str, Any]],
-    videos: list[dict[str, Any]] | None = None,
     media_parts: list[dict[str, Any]] | None = None,
     continuity: str | None = None,
 ) -> list[dict[str, Any]]:
     """LLM messages that rewrite a scene into H3's six-section ref format.
 
     subjects: ordered image roster — index N is ref image slot N.
-    videos: ordered ``(Input:video)`` clips — index N is ``<Video N>``.
     media_parts: optional vision parts (picture labels + image_url frames)
     appended after the text so a vision model sees the actual files.
     """
-    videos = videos or []
     roster = _subject_roster_lines(subjects) or (
         "(no reference images — describe subjects from the action text)"
     )
-    video_roster = _video_roster_lines(videos) or "(no reference video)"
     lock = (continuity or "").strip()
     lock_block = ""
     if lock:
@@ -770,9 +747,9 @@ def build_minimax_h3_ref_messages(
         )
     user = f"""Rewrite this scene into MiniMax H3 full-reference format.
 
-The reference images and videos below are what the user wired into this clip.
-They decide who is on screen and how the shot moves. The scene action decides
-what happens. When a picture or video frame disagrees with a story name, the
+The reference images below are what the user wired into this clip.
+They decide who is on screen. The scene action decides
+what happens. When a picture disagrees with a story name, the
 file wins. Be specific about visible clothing, armor, weapons, face, hair, and colors.
 {lock_block}
 Scene heading: {scene.get('heading') or '(none)'}
@@ -787,9 +764,6 @@ map speakers to subjects by name and keep cues as delivery direction):
 
 Referenced images (keep these exact <Subject N> indices; Picture N is image N):
 {roster}
-
-Referenced videos (keep these exact <Video N> labels):
-{video_roster}
 """
     content: str | list[dict[str, Any]] = user
     if media_parts:
@@ -803,10 +777,13 @@ Referenced videos (keep these exact <Video N> labels):
 def minimax_h3_ref_fallback(
     scene: dict[str, Any],
     subjects: list[dict[str, Any]],
-    videos: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Deterministic six-section H3 prompt — used when the LLM rewrite fails."""
-    videos = videos or []
+    """Deterministic six-section H3 prompt — the fast default compile.
+
+    No LLM: the story text (heading, action, covered dialogue) and the subject
+    roster are assembled directly, so preview and enqueue never wait on a
+    model. The LLM rewrite is an explicit Regenerate on top of this baseline.
+    """
     defs = []
     retention = []
     for s in subjects:
@@ -827,38 +804,20 @@ def minimax_h3_ref_fallback(
             f"<Subject {s['index']}> (appears in [Shot 1]): fully_preserved - "
             f"the referenced appearance of \"{name}\" is retained."
         )
-    for v in videos:
-        name = v.get("name") or "clip"
-        defs.append(
-            f"<Video {v['index']}> is the motion reference \"{name}\". "
-            "Preserve its camera movement, action timing, and physical performance."
-        )
-        retention.append(
-            f"<Video {v['index']}> (camera movement and action timing): attribute_transfer - "
-            "camera path, timing, and physical performance from the reference video "
-            "are retained."
-        )
 
     heading = (scene.get("heading") or "").strip()
     action = (scene.get("action") or "").strip()
     labels = ", ".join(f"<Subject {s['index']}>" for s in subjects)
-    video_labels = ", ".join(f"<Video {v['index']}>" for v in videos)
     if labels:
         summary = f"[reference generation] {heading or 'A scene'} featuring {labels}."
     else:
         summary = f"[reference generation] {heading or 'A scene'}."
-    if video_labels:
-        summary += f" Motion and camera follow {video_labels}."
 
     body = (
         "The target video is in a cinematic style consistent with the reference images, "
         "with coherent lighting and natural motion.\n"
         f"[Shot 1] {heading} {action}".strip()
     )
-    if video_labels:
-        body += (
-            f"\nThe physical performance, camera path, and timing follow {video_labels}."
-        )
 
     # Map 'SPEAKER: line' rows onto subjects by name; assign speaker IDs in speech order.
     # An optional delivery cue — 'MIA (whispering): line' — is kept as performance direction.

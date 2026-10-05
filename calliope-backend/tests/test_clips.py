@@ -296,16 +296,12 @@ def test_normalize_clips_reindexes_and_clamps_durations():
     assert sum(c["duration_sec"] for c in clips) == 8
 
 
-def test_expand_scene_coverage_replaces_clips_and_migrates_chain(client, monkeypatch):
+def test_expand_scene_coverage_replaces_clips(client, monkeypatch):
     pid = _mk_project(client)
     scene = _add_scene(
         client, pid, 1, dialog="ANNA\nHello.\nBOB\nHi.", duration_sec=12
     )
     scene_id = scene["id"]
-    r = client.patch(
-        f"/api/projects/{pid}/scenes/{scene_id}", json={"chain_from_prev": True}
-    )
-    assert r.status_code == 200
 
     async def fake_llm(messages, temperature=0.5):
         return {
@@ -316,7 +312,6 @@ def test_expand_scene_coverage_replaces_clips_and_migrates_chain(client, monkeyp
                     "dialog_lines_covered": [1, 2],
                     "shot_size": "wide",
                     "duration_sec": 6,
-                    "chain_from_prev": True,
                 },
                 {
                     "order_index": 2,
@@ -324,7 +319,6 @@ def test_expand_scene_coverage_replaces_clips_and_migrates_chain(client, monkeyp
                     "dialog_lines_covered": [3, 4],
                     "shot_size": "medium",
                     "duration_sec": 6,
-                    "chain_from_prev": False,
                 },
             ]
         }
@@ -342,16 +336,13 @@ def test_expand_scene_coverage_replaces_clips_and_migrates_chain(client, monkeyp
             ).fetchall()
         ]
         assert len(rows) == 2
-        assert rows[0]["chain_from_prev"] == 1, "scene chain flag lands on clip #1"
-        assert rows[1]["chain_from_prev"] == 0
         assert json.loads(rows[0]["dialog_lines_covered"]) == [1, 2]
         assert json.loads(rows[1]["dialog_lines_covered"]) == [3, 4]
         # Legacy scene mirror cleared after expansion
         scene_row = conn.execute(
-            "SELECT video_path, chain_from_prev FROM scenes WHERE id = ?", (scene_id,)
+            "SELECT video_path FROM scenes WHERE id = ?", (scene_id,)
         ).fetchone()
         assert scene_row["video_path"] is None
-        assert scene_row["chain_from_prev"] == 0
     finally:
         conn.close()
 

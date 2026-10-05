@@ -13,7 +13,7 @@ from calliope.comfyui.client import ComfyUIClient
 from calliope.comfyui.dry_run import write_placeholder_mp4, write_placeholder_png
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.patcher import node_widget_field, patch_workflow
-from calliope.comfyui.roles import input_has_role, normalize_input_role
+from calliope.comfyui.roles import normalize_input_role
 from calliope.db import get_db
 from calliope.events.bus import event_bus
 from calliope.export.runner import run_export
@@ -276,10 +276,6 @@ class QueueWorker:
                 raise RuntimeError("No workflow found for job")
 
             input_values = payload.get("input_values") or {}
-            if payload.get("continue_source") and kind == "video":
-                input_values = await self._resolve_continue_source(
-                    job, payload, workflow["nodes"], dict(input_values)
-                )
             patched = patch_workflow(workflow["nodes"], input_values)
             if workflow["strict_mode"]:
                 patched = _apply_strict_mode(
@@ -318,85 +314,6 @@ class QueueWorker:
             return paths
         finally:
             await client.close()
-
-    async def _resolve_continue_source(
-        self,
-        job: dict[str, Any],
-        payload: dict[str, Any],
-        workflow: dict[str, Any],
-        input_values: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Fill the workflow's video input with the previous clip's file.
-
-        Enqueue defers continue-clips whose earlier clip does not exist yet
-        (batch generation); the queue is concurrency-1, so by the time this job
-        runs the earlier clip has been rendered and attached to its clip row.
-        The path is injected into ``input_values`` like any user-provided value
-        — ``patch_workflow`` writes it onto the ``(Input:video)`` node and
-        ``prepare_media_inputs`` uploads it to ComfyUI before queuing.
-        """
-        project_id = job["project_id"]
-        src = payload.get("continue_source") or {}
-        scene_pos = src.get("scene_order_index")
-        clip_pos = src.get("clip_order_index")
-        if scene_pos is None:
-            scene_pos = payload.get("scene_order_index") or 0
-        if clip_pos is None:
-            clip_pos = 1
-
-        prev: tuple[int, int] | None = None  # (scene_pos, clip_pos) of the donor
-        prev_clip: str | None = None
-        conn = get_db(config.settings.db_path)
-        try:
-            row = conn.execute(
-                """
-                SELECT s.order_index AS s_pos, c.order_index AS c_pos,
-                       COALESCE(c.clip_path, s.video_path) AS clip_path
-                FROM clips c JOIN scenes s ON s.id = c.scene_id
-                WHERE c.project_id = ?
-                  AND (s.order_index < ? OR (s.order_index = ? AND c.order_index < ?))
-                ORDER BY s.order_index DESC, c.order_index DESC LIMIT 1
-                """,
-                (project_id, scene_pos, scene_pos, clip_pos),
-            ).fetchone()
-            if row:
-                prev = (row["s_pos"], row["c_pos"])
-                prev_clip = row["clip_path"]
-        finally:
-            conn.close()
-
-        pos_label = f"{scene_pos}.{clip_pos}"
-        if prev is None:
-            raise RuntimeError(
-                f"Continue clip {pos_label}: no earlier clip in this project to continue from."
-            )
-        if not prev_clip or not _fs_path(prev_clip).exists():
-            raise RuntimeError(
-                f"Continue clip {pos_label}: previous clip (scene {prev[0]}.{prev[1]}) has no "
-                "video file — generate the earlier clip first."
-            )
-
-        video_node: str | None = None
-        for inp in parse_dynamic_inputs(workflow):
-            if input_has_role(inp, "video"):
-                video_node = str(inp["nodeId"])
-                break
-        if video_node is None:
-            raise RuntimeError(
-                "Continue clip "
-                f"{pos_label}: workflow has no (Input:video) node to receive the previous clip."
-            )
-
-        input_values[video_node] = prev_clip
-        await event_bus.publish(
-            "job.progress",
-            {
-                "job_id": job["id"],
-                "project_id": project_id,
-                "message": f"Continuing from clip {prev[0]}.{prev[1]}",
-            },
-        )
-        return input_values
 
     async def _dry_run(self, job: dict[str, Any], payload: dict[str, Any]) -> list[str]:
         project_id = job["project_id"]

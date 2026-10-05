@@ -114,23 +114,20 @@ def test_h3_fallback_without_subjects_or_dialog():
     assert "<d>" not in text
 
 
-def test_h3_fallback_includes_user_image_and_video():
-    """A user image with no story text, plus a video, must both appear."""
+def test_h3_fallback_ignores_reference_videos():
+    """Reference videos are workflow wiring, not prompt content — never mentioned."""
     scene = {"heading": "INT. METRO - NIGHT", "action": "She swings the extinguisher."}
     subjects = [
         {"index": 1, "kind": "reference", "name": "mercs", "appearance": "", "path": "mercs.png"},
     ]
-    videos = [{"index": 1, "path": "fight.mp4", "name": "fight.mp4"}]
-    text = minimax_h3_ref_fallback(scene, subjects, videos)
+    text = minimax_h3_ref_fallback(scene, subjects)
     assert '<Subject 1> is the reference image in <Picture 1> ("mercs")' in text
-    assert "<Video 1>" in text
-    assert "attribute_transfer" in text
+    assert "fully_preserved" in text
     assert "motion_preserved" not in text
-    assert "Motion and camera follow <Video 1>." in text
-    assert "Rooftops" not in text
+    assert "<Video" not in text
 
 
-def test_h3_messages_keep_video_and_picture_authority():
+def test_h3_messages_keep_picture_authority():
     from calliope.agent.prompts import build_minimax_h3_ref_messages
 
     scene = {"heading": "INT. METRO", "action": "She rises.", "duration_sec": 8}
@@ -143,17 +140,15 @@ def test_h3_messages_keep_video_and_picture_authority():
             "path": r"E:\assets\mercs.png",
         }
     ]
-    videos = [{"index": 1, "name": "fight.mp4", "path": r"E:\assets\fight.mp4"}]
     messages = build_minimax_h3_ref_messages(
         scene,
         subjects,
-        videos=videos,
         media_parts=[{"type": "text", "text": "Picture 2 is <Subject 2>."}],
     )
     user = messages[1]["content"]
     assert isinstance(user, list)
     text = user[0]["text"]
-    assert "<Video 1>" in text
+    assert "<Video" not in text
     assert "mercs.png" in text
     assert "file wins" in text
     assert user[1]["text"] == "Picture 2 is <Subject 2>."
@@ -220,36 +215,46 @@ def test_resolve_h3_references_prefers_form_files_over_story():
     assert videos[0]["path"].endswith("fight.mp4")
 
 
-def test_reference_media_parts_labels_picture_and_video(monkeypatch, tmp_path):
+def test_reference_media_parts_labels_picture(monkeypatch, tmp_path):
     import asyncio
 
     from calliope.agent.video_agent import _reference_media_parts
     from calliope.config import settings
 
     monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    monkeypatch.setattr(settings, "h3_rewrite_vision", True)
     image = tmp_path / "mercs.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nfake")
-    video = tmp_path / "fight.mp4"
-    video.write_bytes(b"0000")
 
-    def fake_frames(path):
-        assert Path(path).name == "fight.mp4"
-        return [
-            (0.5, "data:image/jpeg;base64,QQ=="),
-            (1.5, "data:image/jpeg;base64,Qg=="),
-        ]
-
-    monkeypatch.setattr("calliope.agent.video_agent._video_attachment_frames", fake_frames)
     parts = asyncio.run(
-        _reference_media_parts(
-            [{"index": 1, "path": str(image)}],
-            [{"index": 1, "path": str(video)}],
-        )
+        _reference_media_parts([{"index": 1, "path": str(image)}])
     )
     texts = [p["text"] for p in parts if p.get("type") == "text"]
     assert any("Picture 1" in t and "<Subject 1>" in t for t in texts)
-    assert any("<Video 1>" in t for t in texts)
-    assert sum(1 for p in parts if p.get("type") == "image_url") == 3
+    assert sum(1 for p in parts if p.get("type") == "image_url") == 1
+
+
+def test_reference_media_parts_vision_off_is_text_only(monkeypatch, tmp_path):
+    """h3_rewrite_vision defaults OFF: no image parts, no endpoint vision cost.
+
+    Attaching the subject roster makes a local endpoint prompt-process every
+    image — the "Resolving prompt… hangs for minutes" report. Off, the rewrite
+    grounds on the asset text descriptions instead.
+    """
+    import asyncio
+
+    from calliope.agent.video_agent import _reference_media_parts
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    monkeypatch.setattr(settings, "h3_rewrite_vision", False)
+    image = tmp_path / "mercs.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    parts = asyncio.run(
+        _reference_media_parts([{"index": 1, "path": str(image)}])
+    )
+    assert parts == []
 
 
 def test_prompt_hash_changes_when_references_change():
@@ -280,12 +285,12 @@ def test_h3_ref_prompt_uses_only_the_fixed_retention_markers():
     """H3 reads four fixed visual retention markers; an invented one is not one of them.
 
     The list is the one in skills_builtin/h3-video-prompt-enhancer/references/
-    ref2va-format.md ("using ONLY these fixed markers"), which covers <Video N> too.
+    ref2va-format.md ("using ONLY these fixed markers").
     """
     markers = ("fully_preserved", "partially_preserved", "attribute_transfer", "weak_reference")
     for marker in markers:
         assert marker in MINIMAX_H3_REF_SYSTEM
     assert "motion_preserved" not in MINIMAX_H3_REF_SYSTEM
-    videos = [{"index": 1, "path": "fight.mp4", "name": "fight.mp4"}]
-    text = minimax_h3_ref_fallback({"heading": "INT. HALL", "action": "He runs."}, [], videos)
-    assert "<Video 1> (camera movement and action timing): attribute_transfer - " in text
+    text = minimax_h3_ref_fallback({"heading": "INT. HALL", "action": "He runs."}, [])
+    assert "attribute_transfer" not in text or "<Video" not in text
+    assert "<Video" not in text

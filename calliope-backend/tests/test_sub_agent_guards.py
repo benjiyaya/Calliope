@@ -55,7 +55,7 @@ def _tc(name: str, args: str = "{}", call_id: str = "c1"):
 
 
 class _ScriptedClient:
-    """chat_with_tools that replays scripted responses, one per call."""
+    """chat_with_tools/chat_stream that replay scripted responses, one per call."""
 
     def __init__(self, responses):
         self._responses = list(responses)
@@ -66,6 +66,18 @@ class _ScriptedClient:
         if self._responses:
             return self._responses.pop(0)
         return {"role": "assistant", "content": "done", "tool_calls": []}
+
+    async def chat_stream(self, messages, temperature=0.4, tools=None, **kwargs):
+        self.seen_messages.append(list(messages))
+        if self._responses:
+            msg = self._responses.pop(0)
+        else:
+            msg = {"role": "assistant", "content": "done", "tool_calls": []}
+        if msg.get("content"):
+            yield {"type": "delta", "content": msg["content"]}
+        for tc in msg.get("tool_calls") or []:
+            yield {"type": "tool_call", "tool_call": tc}
+        yield {"type": "done"}
 
     async def close(self):
         pass
@@ -234,6 +246,66 @@ def test_ask_user_pauses_sub_agent():
     # The scripted "never reached" response stayed in the queue — only one
     # model call happened.
     assert len(client.seen_messages) == 1
+
+
+def test_sub_agent_streams_reasoning_events():
+    """The sub-agent publishes agent.thinking (agent_name-tagged) while its
+    model streams reasoning — between tool events the working-state card used
+    to sit silent for whole tasks. Token deltas stay unpublished."""
+    import calliope.agent.harness.orchestrator as orch
+
+    sid = _mk_session()
+
+    class _ThinkingClient:
+        def __init__(self):
+            self.step = 0
+
+        async def chat_stream(self, messages, temperature=0.3, tools=None, **kwargs):
+            self.step += 1
+            if self.step == 1:
+                yield {"type": "reasoning", "content": "Inspecting the board first. "}
+                yield {"type": "tool_call", "tool_call": _tc("get_workspace", call_id="w1")}
+            else:
+                yield {"type": "reasoning", "content": "Done inspecting — wrapping up."}
+                yield {"type": "delta", "content": "wrapping"}
+            yield {"type": "done"}
+
+        async def close(self):
+            pass
+
+    class _Recorder:
+        def __init__(self):
+            self.events: list[tuple[str, dict]] = []
+
+        async def publish(self, event, data):
+            self.events.append((event, data))
+
+    client = _ThinkingClient()
+    recorder = _Recorder()
+    orig_client, orig_bus = orch.LLMClient, orch.event_bus
+    orch.LLMClient = lambda: client
+    orch.event_bus = recorder
+    try:
+        final = asyncio.run(
+            orch._run_sub_agent(
+                ToolContext(session_id=sid, project_id=1),
+                [{"role": "user", "content": "do"}],
+                ["get_workspace"],
+                agent_name="script-agent",
+                max_iterations=4,
+            )
+        )
+    finally:
+        orch.LLMClient, orch.event_bus = orig_client, orig_bus
+
+    assert final == "wrapping"
+    assert not [ev for ev, _ in recorder.events if ev == "agent.token"]  # token deltas are not broadcast
+    thinking = [d for ev, d in recorder.events if ev == "agent.thinking"]
+    assert thinking, "no agent.thinking events published by the sub-agent"
+    assert all(d["agent_name"] == "script-agent" for d in thinking)
+    assert all(d["session_id"] == sid for d in thinking)
+    joined = "".join(d["content"] for d in thinking)
+    assert "Inspecting the board" in joined and "wrapping up" in joined
 
 
 def test_ask_user_visible_in_every_role():
@@ -405,18 +477,22 @@ def test_unknown_planner_role_clamped_to_story_with_note():
     )
 
     class _PlannerClient:
-        async def chat(self, *a, **kw):
-            return _json.dumps(
-                {
-                    "mode": "swarm",
-                    "note": "Plan ready.",
-                    "tasks": [
-                        {"role": "story", "goal": "write beats"},
-                        {"role": "asset", "goal": "make characters"},
-                        {"role": "renderer", "goal": "render it"},
-                    ],
-                }
-            )
+        async def chat_stream(self, messages, *a, **kw):
+            yield {
+                "type": "delta",
+                "content": _json.dumps(
+                    {
+                        "mode": "swarm",
+                        "note": "Plan ready.",
+                        "tasks": [
+                            {"role": "story", "goal": "write beats"},
+                            {"role": "asset", "goal": "make characters"},
+                            {"role": "renderer", "goal": "render it"},
+                        ],
+                    }
+                ),
+            }
+            yield {"type": "done"}
 
         async def close(self):
             return None
@@ -478,19 +554,23 @@ def test_valid_planner_roles_not_clamped():
     )
 
     class _PlannerClient:
-        async def chat(self, *a, **kw):
-            return _json.dumps(
-                {
-                    "mode": "swarm",
-                    "note": "",
-                    "tasks": [
-                        {"role": "story", "goal": "a"},
-                        {"role": "script", "goal": "b"},
-                        {"role": "assets", "goal": "c"},
-                        {"role": "video", "goal": "d"},
-                    ],
-                }
-            )
+        async def chat_stream(self, messages, *a, **kw):
+            yield {
+                "type": "delta",
+                "content": _json.dumps(
+                    {
+                        "mode": "swarm",
+                        "note": "",
+                        "tasks": [
+                            {"role": "story", "goal": "a"},
+                            {"role": "script", "goal": "b"},
+                            {"role": "assets", "goal": "c"},
+                            {"role": "video", "goal": "d"},
+                        ],
+                    }
+                ),
+            }
+            yield {"type": "done"}
 
         async def close(self):
             return None
@@ -548,16 +628,24 @@ def test_synthesis_states_the_truth_when_the_project_is_still_empty():
     class _PlannerClient:
         """Overclaims exactly like the live failure."""
 
-        async def chat(self, *a, **kw):
-            text = " ".join(str(m.get("content") or "") for m in (a[0] if a else []))
+        async def chat_stream(self, messages, *a, **kw):
+            text = " ".join(str(m.get("content") or "") for m in (messages or []))
             if "mode" in text:
-                return _json.dumps(
-                    {"mode": "swarm", "note": "", "tasks": [{"role": "story", "goal": "a"}]}
-                )
-            return (
-                "Storyline draft completed: beats, characters, environments, "
-                "and misc. items were produced. Failures: none reported."
-            )
+                yield {
+                    "type": "delta",
+                    "content": _json.dumps(
+                        {"mode": "swarm", "note": "", "tasks": [{"role": "story", "goal": "a"}]}
+                    ),
+                }
+            else:
+                yield {
+                    "type": "delta",
+                    "content": (
+                        "Storyline draft completed: beats, characters, environments, "
+                        "and misc. items were produced. Failures: none reported."
+                    ),
+                }
+            yield {"type": "done"}
 
         async def close(self):
             return None

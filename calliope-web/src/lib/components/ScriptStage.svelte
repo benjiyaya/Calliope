@@ -149,23 +149,6 @@
 		},
 	});
 
-	// Chain-from-previous toggle — persists on the scene; consumed at render time.
-	let chainPendingId = $state<number | null>(null);
-	async function toggleChain(scene: Scene) {
-		if (chainPendingId != null) return;
-		chainPendingId = scene.id;
-		try {
-			await projects.updateScene(projectId, scene.id, {
-				chain_from_prev: !scene.chain_from_prev,
-			});
-			await client.invalidateQueries({ queryKey: ['scenes'] });
-		} catch (err) {
-			toast.error(err instanceof Error ? err.message : t('script.toast.updateSceneFail'));
-		} finally {
-			chainPendingId = null;
-		}
-	}
-
 	function jobForScene(sceneId: number): Job | undefined {
 		const jobs = ($jobsQuery.data ?? []).filter(
 			(j) => j.scene_id === sceneId && j.kind === 'video',
@@ -508,19 +491,6 @@
 					{/if}
 					{#if scene.duration_sec}
 						<span class="chip"><Icon name="clock" size={12} /> {formatClock(scene.duration_sec)}</span>
-					{/if}
-					{#if i > 0}
-						<button
-							type="button"
-							class="chip chip-toggle"
-							class:chip-on={Boolean(scene.chain_from_prev)}
-							disabled={chainPendingId === scene.id}
-						title={t('script.chainTitle')}
-						onclick={() => toggleChain(scene)}
-					>
-						<Icon name="film" size={12} />
-						{Boolean(scene.chain_from_prev) ? t('script.chainOn') : t('script.chainOff')}
-						</button>
 					{/if}
 				</div>
 			</article>

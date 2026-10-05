@@ -187,6 +187,14 @@ def _last_asked_question(session_id: int) -> str:
 ROLE_TOOLS: dict[str, list[str]] = {
     "story": [
         "get_workspace",
+        # Scratch file tools (plugins/files.py): draft scripts/beat lists/
+        # shot plans as text files in the session workspace — shared with the
+        # main loop and sibling sub-agents. Committing content stays with the
+        # DB tools below; the files are the working medium, not the store.
+        "list_files",
+        "read_file",
+        "write_file",
+        "delete_file",
         "get_story",
         "generate_story",
         "add_beat",
@@ -229,6 +237,10 @@ ROLE_TOOLS: dict[str, list[str]] = {
     ],
     "script": [
         "get_workspace",
+        "list_files",
+        "read_file",
+        "write_file",
+        "delete_file",
         "list_scenes",
         "list_clips",
         "generate_script",
@@ -250,6 +262,10 @@ ROLE_TOOLS: dict[str, list[str]] = {
     ],
     "assets": [
         "get_workspace",
+        "list_files",
+        "read_file",
+        "write_file",
+        "delete_file",
         "add_character",
         "update_character",
         "delete_character",
@@ -279,6 +295,10 @@ ROLE_TOOLS: dict[str, list[str]] = {
     ],
     "video": [
         "get_workspace",
+        "list_files",
+        "read_file",
+        "write_file",
+        "delete_file",
         "list_scenes",
         "list_clips",
         "list_workflows",
@@ -366,10 +386,11 @@ def _scoped_payload(ctx: ToolContext, allowed: list[str]) -> list[dict[str, Any]
     return out
 
 
-async def _plan(goal: str, workspace_summary: str) -> dict[str, Any]:
+async def _plan(goal: str, workspace_summary: str, session_id: int) -> dict[str, Any]:
     client = _llm_for_role("planner")
     try:
-        text = await client.chat(
+        content: list[str] = []
+        async for ev in client.chat_stream(
             [
                 {"role": "system", "content": PLANNER_SYSTEM},
                 {
@@ -378,7 +399,18 @@ async def _plan(goal: str, workspace_summary: str) -> dict[str, Any]:
                 },
             ],
             temperature=0.2,
-        )
+        ):
+            if ev["type"] == "delta":
+                content.append(ev["content"])
+            elif ev["type"] == "reasoning":
+                # The working-state card has nothing else to show until the
+                # plan lands — stream the planner's thinking so the wait is
+                # visible (the UI renders agent.thinking from any agent).
+                await event_bus.publish(
+                    "agent.thinking",
+                    {"session_id": session_id, "agent_name": "planner", "content": ev["content"]},
+                )
+        text = "".join(content)
     except Exception:
         # Transient LLM failure must not kill the turn — degrade to the
         # single loop, which retries the LLM with its own error handling.
@@ -462,7 +494,7 @@ async def orchestrate(
     if len(summary) > 3000:
         summary = summary[:3000] + "…[truncated]"
 
-    plan = await _plan(goal, summary)
+    plan = await _plan(goal, summary, session_id)
     note = (plan.get("note") or "").strip()
     if note:
         session_log.append_event(
@@ -768,10 +800,11 @@ async def _run_sub_agent(
     max_iterations: int | None = None,
     on_message: MessageSink | None = None,
 ) -> str:
-    """A scoped agentic loop for one sub-agent (non-streaming variant).
+    """A scoped agentic loop for one sub-agent.
 
     Unlike run_turn this does not publish token events for every sub-agent —
-    only tool events carry the agent_name so the UI can group them.
+    tool events and the reasoning channel (agent.thinking) carry the
+    agent_name so the UI can group them.
     """
     if max_iterations is None:
         max_iterations = _default_max_iterations()
@@ -802,15 +835,21 @@ async def _run_sub_agent(
         "the whole timeline. Never add_scene to attach an mp4. For "
         "text-only edits, do the edit and stop."
     )
-    # Memory + skills sections, same content the main loop renders (order 35
-    # / 37). Rendered ONCE here: a sub-agent lives for one task, and memory
-    # recall doubles as use-count accounting, so per-step re-render would
-    # inflate ranking. Sections stay None when there is nothing to show.
+    # Memory + skills + scratch-workspace sections, same content the main loop
+    # renders (order 35 / 37 / 32). Rendered ONCE here: a sub-agent lives for
+    # one task, and memory recall doubles as use-count accounting, so per-step
+    # re-render would inflate ranking. Sections stay None when there is nothing
+    # to show (files_prompt_text is None for scene origin).
+    from calliope.agent.harness.plugins.files import files_prompt_text
     from calliope.agent.harness.plugins.memory import memory_prompt_text
     from calliope.agent.harness.plugins.skills import skills_prompt_text
 
     try:
-        for section in (memory_prompt_text(ctx), skills_prompt_text(ctx)):
+        for section in (
+            memory_prompt_text(ctx),
+            skills_prompt_text(ctx),
+            files_prompt_text(ctx),
+        ):
             if section:
                 system += "\n\n" + section
     except Exception:  # noqa: BLE001 — prompt garnish must never kill a task
@@ -839,12 +878,46 @@ async def _run_sub_agent(
             if max_iterations - iteration == 0:
                 # Final-step budget nudge: wrap up, don't start new work.
                 step_messages.append({"role": "user", "content": FINAL_STEP_NUDGE})
-            msg = await client.chat_with_tools(
+            content_acc: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            async for ev in client.chat_stream(
                 [{"role": "system", "content": system}] + step_messages,
                 temperature=0.3,
                 tools=payload or None,
-            )
-            tool_calls = msg.get("tool_calls") or []
+            ):
+                if ev["type"] == "delta":
+                    content_acc.append(ev["content"])
+                elif ev["type"] == "reasoning":
+                    # Between tool events a sub-agent used to be a bare
+                    # "working…" pill for minutes on a local model — stream
+                    # its reasoning so the wait is visible. Token events stay
+                    # unpublished (final text arrives as one assistant
+                    # message); the UI consumes agent.thinking from any agent.
+                    await event_bus.publish(
+                        "agent.thinking",
+                        {
+                            "session_id": ctx.session_id,
+                            "agent_name": agent_name,
+                            "content": ev["content"],
+                        },
+                    )
+                elif ev["type"] == "tool_call":
+                    tool_calls.append(ev["tool_call"])
+            msg: dict[str, Any] = {"role": "assistant", "content": "".join(content_acc) or None}
+            if tool_calls:
+                # Normalize like the old chat_with_tools path did — some
+                # OpenAI-compatible servers omit id/name on tool calls.
+                msg["tool_calls"] = [
+                    {
+                        "id": tc.get("id") or f"call_{id(tc) & 0xFFFFFF:x}",
+                        "type": "function",
+                        "function": {
+                            "name": (tc.get("function") or {}).get("name") or "unknown_tool",
+                            "arguments": (tc.get("function") or {}).get("arguments") or "{}",
+                        },
+                    }
+                    for tc in tool_calls
+                ]
             messages.append(msg)
             if not tool_calls:
                 final = (msg.get("content") or "").strip()

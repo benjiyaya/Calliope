@@ -134,7 +134,9 @@ def test_batch_compiles_every_clip_and_saves_the_drafts(client, monkeypatch):
     _stub_plan(ids, monkeypatch)
     _stub_rewrite(monkeypatch)
 
-    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True))
+    # force=True: the LLM compile pass this module tests (default is the instant
+    # deterministic compile).
+    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True, force=True))
 
     assert out["total"] == 3
     assert out["compiled"] == 3
@@ -153,10 +155,10 @@ def test_only_missing_leaves_finished_shots_alone(client, monkeypatch):
     _stub_plan(ids, monkeypatch)
     _stub_rewrite(monkeypatch, body="FIRST PASS")
 
-    asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True))
+    asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True, force=True))
     calls_after_first = len(_stub_rewrite(monkeypatch, body="SECOND PASS"))
 
-    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True))
+    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=True, force=True))
 
     assert out["skipped"] == 3
     assert out["compiled"] == 0
@@ -173,7 +175,7 @@ def test_clip_ids_recompiles_exactly_one_shot(client, monkeypatch):
     _stub_plan(ids, monkeypatch)
     calls = _stub_rewrite(monkeypatch, body="ONE SHOT")
 
-    out = asyncio.run(rewrite_clip_prompts(pid, clip_ids=[ids[1]]))
+    out = asyncio.run(rewrite_clip_prompts(pid, clip_ids=[ids[1]], force=True))
 
     assert out["total"] == 1
     assert out["compiled"] == 1
@@ -210,7 +212,7 @@ def test_dead_endpoint_costs_one_timeout_not_one_per_clip(client, monkeypatch):
         classmethod(lambda cls, role, **kw: _DeadClient()),
     )
 
-    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True))
+    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, force=True))
 
     assert len(attempts) == 1, "the breaker must stop the batch after the first failure"
     assert out["endpoint_dead"] is True
@@ -235,7 +237,7 @@ def test_one_uncompilable_clip_does_not_lose_the_rest(client, monkeypatch):
 
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", selective)
 
-    out = asyncio.run(rewrite_clip_prompts(pid))
+    out = asyncio.run(rewrite_clip_prompts(pid, force=True))
 
     assert out["failed"] == 1
     assert out["compiled"] == 2
@@ -256,7 +258,7 @@ def test_save_false_leaves_nothing_behind(client, monkeypatch):
     _stub_plan(ids, monkeypatch)
     _stub_rewrite(monkeypatch)
 
-    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=False))
+    out = asyncio.run(rewrite_clip_prompts(pid, only_missing=True, save=False, force=True))
 
     assert out["compiled"] == 3
     assert all(r["saved"] is False for r in out["results"])
@@ -272,7 +274,7 @@ def test_batch_endpoint_reports_per_clip_results(client, monkeypatch):
     _stub_plan(ids, monkeypatch)
     _stub_rewrite(monkeypatch)
 
-    out = asyncio.run(rewrite_clip_prompts(pid))
+    out = asyncio.run(rewrite_clip_prompts(pid, force=True))
 
     assert [r["clip_id"] for r in out["results"]] == ids
     for r in out["results"]:
