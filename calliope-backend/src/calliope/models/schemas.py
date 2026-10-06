@@ -44,7 +44,11 @@ class ProjectStats(BaseModel):
 class Project(BaseModel):
     id: int
     title: str
-    idea: str | None
+    # `idea` is the full source text and is present only on the single-project
+    # response. It defaults to None so the *list* response can omit it -- a list
+    # of projects must not ship every novel to the browser on each page load.
+    idea: str | None = None
+    idea_preview: str | None = None
     genre: str | None
     tone: str | None
     target_duration: str | None

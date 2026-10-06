@@ -100,8 +100,16 @@
 		if (filter !== 'all') list = list.filter((p) => p.status === filter);
 		const q = search.trim().toLowerCase();
 		if (q) {
+			// `idea_preview`, not `idea`: the list endpoint deliberately omits
+			// the full source text so the page does not download every novel on
+			// every load. For a normal logline project the preview *is* the
+			// whole text, so this search is unchanged; only a novel project
+			// matches on its opening rather than anywhere in the text. Grep
+			// inside a novel is `calliope-cli project source --grep`.
 			list = list.filter(
-				(p) => p.title.toLowerCase().includes(q) || (p.idea ?? '').toLowerCase().includes(q),
+				(p) =>
+					p.title.toLowerCase().includes(q) ||
+					(p.idea_preview ?? '').toLowerCase().includes(q),
 			);
 		}
 		return list;

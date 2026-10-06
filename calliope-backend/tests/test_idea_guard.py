@@ -369,3 +369,101 @@ def test_force_does_not_get_past_the_guard(monkeypatch):
     assert plan["refreshed"] is True
 
 
+# -- the other half of the same problem: what a *list* is allowed to carry ----
+#
+# The guard above stops the model being fed a novel. This stops the novel being
+# fed to something that never asked for one: the project list, which reloads on
+# every visit and grows with (projects x novel length).
+
+
+def test_a_preview_fills_the_two_line_card_and_no_more():
+    """`ProjectCard.svelte` clamps to two lines, so more than this is invisible
+    there -- and in the search box an ellipsis would be a token nobody typed."""
+    from calliope.authoring.projects import IDEA_PREVIEW_CHARS, idea_preview
+
+    assert idea_preview("short pitch") == "short pitch"
+    assert idea_preview(NOVEL) == NOVEL[:IDEA_PREVIEW_CHARS]
+    assert len(idea_preview(NOVEL)) == 200
+
+
+def test_a_preview_is_not_the_novel():
+    from calliope.authoring.projects import idea_preview
+
+    assert idea_preview(NOVEL) != NOVEL
+    assert len(idea_preview(NOVEL)) < len(NOVEL) / 10
+
+
+def test_an_absent_idea_previews_to_itself():
+    """`null` must stay `null`: turning "no idea" into ``""`` would make the
+    card render its empty-state copy differently from a real empty idea."""
+    from calliope.authoring.projects import idea_preview
+
+    assert idea_preview(None) is None
+    assert idea_preview("") == ""
+
+
+def test_the_list_endpoint_does_not_ship_the_novel(client):
+    r = client.post("/api/projects", json={"title": "Novel", "idea": NOVEL})
+    pid = r.json()["id"]
+    row = next(p for p in client.get("/api/projects").json() if p["id"] == pid)
+    assert row["idea"] is None
+    assert row["idea_preview"] == NOVEL[:200]
+
+
+def test_the_list_response_does_not_grow_with_the_novel(client):
+    """The actual claim being defended: payload size is independent of how long
+    the source text is. Compared as sizes, because that is what the browser
+    pays -- and a novel is over 10,000 characters here, so the difference is
+    unmissable rather than a rounding error."""
+    import json
+
+    short = client.post("/api/projects", json={"title": "S", "idea": "x" * 50}).json()["id"]
+    long_id = client.post("/api/projects", json={"title": "L", "idea": NOVEL}).json()["id"]
+    rows = {p["id"]: p for p in client.get("/api/projects").json()}
+
+    def size(pid):
+        return len(json.dumps(rows[pid], ensure_ascii=False))
+
+    # Both rows are the same shape apart from id/title, so the only thing that
+    # could differ is the source text -- and it must not.
+    assert abs(size(short) - size(long_id)) < 300
+    assert len(json.dumps([long_id], ensure_ascii=False)) > 0
+
+
+def test_the_single_project_response_still_carries_the_novel(client):
+    """The non-regression that matters most. The story editor loads this and
+    edits it; a preview there would quietly destroy a long source text on the
+    first save."""
+    pid = client.post("/api/projects", json={"title": "Novel", "idea": NOVEL}).json()["id"]
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert detail["idea"] == NOVEL
+    assert detail["idea_preview"] == NOVEL[:200]
+
+
+def test_the_cli_list_does_not_dump_the_novel_either(cli_env):
+    """Same response, same reason. `project list` is what an agent reads first;
+    34k characters of novel at the top of a project's row is context nobody
+    spent."""
+    run_json = cli_env["json"]
+    code, proj, err = run_json("project", "create", "--title", "Novel", "--idea", NOVEL)
+    assert code == 0, err
+    code, listed, err = run_json("project", "list")
+    assert code == 0, err
+    row = next(p for p in listed if p["id"] == proj["project_id"])
+    assert row["idea"] is None
+    assert row["idea_preview"] == NOVEL[:200]
+
+
+def test_the_cli_still_returns_the_novel_when_asked(cli_env):
+    """Truncation is not deletion. `project source` and `project show
+    --with-idea` are how the text is actually read."""
+    run_json = cli_env["json"]
+    code, proj, err = run_json("project", "create", "--title", "Novel", "--idea", NOVEL)
+    assert code == 0, err
+    code, shown, err = run_json(
+        "project", "show", "--project", str(proj["project_id"]), "--with-idea"
+    )
+    assert code == 0, err
+    assert shown["idea"] == NOVEL
+
+

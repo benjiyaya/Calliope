@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from calliope.authoring.projects import idea_preview
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.models.schemas import Project, ProjectCreate, ProjectUpdate
@@ -74,6 +75,14 @@ async def list_projects():
         out = []
         for row in rows:
             project = row_to_dict(row)
+            # Hand out a preview, not the novel. This response is the one that
+            # grows with (projects x novel length) and it reloads on every visit
+            # to the project list, so a handful of long-form projects is already
+            # hundreds of KB of JSON for a description the card clamps to two
+            # lines. `GET /api/projects/{id}` still returns the full text, which
+            # is the one place an editor genuinely needs it.
+            project["idea_preview"] = idea_preview(project.get("idea"))
+            project["idea"] = None
             project["stats"] = _project_stats(row["id"], conn)
             out.append(project)
         return out
@@ -89,6 +98,11 @@ async def get_project(project_id: int):
         if not row:
             raise HTTPException(status_code=404, detail="Project not found")
         project = row_to_dict(row)
+        # The full text stays here -- this is the response an editor loads and
+        # edits, so truncating it would destroy a novel on the first save. The
+        # preview comes along for free so the `Project` shape is the same
+        # whichever endpoint produced it.
+        project["idea_preview"] = idea_preview(project.get("idea"))
         project["stats"] = _project_stats(project_id, conn)
         return project
     finally:

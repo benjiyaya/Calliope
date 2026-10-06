@@ -6,7 +6,14 @@ const API_BASE = '';
 export interface Project {
 	id: number;
 	title: string;
+	/** Full source text. Present only on the single-project response. */
 	idea: string | null;
+	/**
+	 * First 200 characters of the source text. The list endpoint sends this
+	 * instead of `idea` so the project list does not download every novel on
+	 * every page load. For a logline project it equals `idea`.
+	 */
+	idea_preview: string | null;
 	genre: string | null;
 	tone: string | null;
 	target_duration: string | null;

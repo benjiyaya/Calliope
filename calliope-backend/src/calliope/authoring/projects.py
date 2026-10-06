@@ -3,9 +3,9 @@
 Note on ``idea`` (plan §4.2). The long-form source text lives in the existing
 ``projects.idea`` column -- the same textarea a user pastes into when creating
 a project in the web UI. No column or table was added for it. That column is
-read by six untruncated LLM prompt templates, which is why the built-in
-generators refuse a long ``idea`` (see ``routers/story.py`` and friends); the
-CLI path is the supported way to author such a project.
+read by five untruncated LLM prompt templates, which is why the built-in
+generators refuse a long ``idea`` (``calliope/agent/idea_guard.py``); the CLI
+path is the supported way to author such a project.
 
 Nothing here writes a new column, changes a column type, or touches
 ``projects.idea``'s definition.
@@ -15,6 +15,12 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+# The one definition of "long". Imported rather than redeclared: the built-in
+# generators refuse above this line and this module reports `is_long` below it,
+# and two constants that drifted apart would mean the refusal and the report
+# disagreeing about what counts as a novel. The layering is fine --
+# `authoring.context` already imports from `agent.continuity`.
+from calliope.agent.idea_guard import is_long
 from calliope.authoring.service import (
     NotFound,
     ValidationFailed,
@@ -22,13 +28,33 @@ from calliope.authoring.service import (
 )
 from calliope.db import row_to_dict
 
-# Above this many characters, `idea` is treated as a source text rather than a
-# logline. The number is the repository's own existing threshold
-# (harness/plugins/workspace.py:268) -- not an invented number.
-LONG_IDEA_CHARS = 2000
+# How much of `idea` a *list* of projects is allowed to carry. 200 characters
+# fills the two-line card clamp (`ProjectCard.svelte` uses `-webkit-line-clamp:
+# 2`) with room to spare, and for the ordinary logline project it is the whole
+# text, so search is unchanged for everyone not writing a novel.
+IDEA_PREVIEW_CHARS = 200
 
 # project_source is not a thing: `idea` is the source text (plan §4.2).
 SOURCE_FIELDS = ("idea",)
+
+
+def idea_preview(idea: str | None) -> str | None:
+    """The first ``IDEA_PREVIEW_CHARS`` characters of ``idea``.
+
+    Every project *list* -- the web UI's and the CLI's -- hands out this
+    instead of the text. A list is the one response that grows with the number
+    of projects times the size of their novels: four long-form projects is
+    400KB+ of JSON sent to the browser on every page load, unbounded as
+    projects are added. The single-project response still carries the full
+    text, which is where an editor actually needs it.
+
+    Truncated without an ellipsis on purpose. The card clamps to two lines
+    anyway, so a marker would be invisible there, and in the search box it
+    would be a token the user never typed.
+    """
+    if not idea:
+        return idea
+    return idea[:IDEA_PREVIEW_CHARS]
 
 
 def get_project(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
@@ -57,7 +83,14 @@ def list_projects(
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY id"
-    return [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    rows = [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+    # A list must not carry the novels. `project list` exists to answer "which
+    # projects exist and what are they about", and a full novel per row answers
+    # a question nobody asked at a cost that grows with every project added.
+    for row in rows:
+        row["idea_preview"] = idea_preview(row.get("idea"))
+        row["idea"] = None
+    return rows
 
 
 def create_project(
@@ -136,7 +169,7 @@ def idea_meta(idea: str | None) -> dict[str, Any]:
     text = idea or ""
     return {
         "chars": len(text),
-        "is_long": len(text) > LONG_IDEA_CHARS,
+        "is_long": is_long(text),
         "lines": text.count("\n") + 1 if text else 0,
     }
 
