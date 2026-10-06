@@ -63,6 +63,10 @@
 
 	const scenes = $derived($scenesQuery.data?.scenes ?? []);
 	const sceneCount = $derived(scenes.length);
+	// See StoryStage: a CLI-authored board is not something the built-in script
+	// generator should be able to overwrite, so its button is removed rather
+	// than left to fail with a 422.
+	const externallyAuthored = $derived($storyQuery.data?.project?.ingest_mode === 'external');
 	const totalClips = $derived(scenes.reduce((n, s) => n + (s.clips?.length ?? 0), 0));
 	const totalSec = $derived($scenesQuery.data?.estimated_duration_sec ?? 0);
 	const targetSec = $derived.by(() => {
@@ -349,9 +353,16 @@
 		>
 			<Icon name="film" size={14} /> {t('script.breakAllIntoShots')}
 		</Button>
-		<Button variant="primary" disabled={busy} onclick={requestRegenerate}>
-			<Icon name="sparkle" size={15} /> {t('script.regenerate')}
-		</Button>
+		{#if externallyAuthored}
+			<!-- "Break into shots" deliberately stays. It never reads the source
+			     text, so it costs no model call on a novel and it is the one
+			     built-in pass that legitimately refines a CLI-authored board. -->
+			<p class="externally-authored">{t('script.externallyAuthored')}</p>
+		{:else}
+			<Button variant="primary" disabled={busy} onclick={requestRegenerate}>
+				<Icon name="sparkle" size={15} /> {t('script.regenerate')}
+			</Button>
+		{/if}
 	</div>
 </header>
 
@@ -611,6 +622,14 @@
 	.stage-actions {
 		display: flex;
 		gap: 8px;
+		align-items: center;
+	}
+	.externally-authored {
+		color: var(--text-secondary);
+		font-size: 12px;
+		margin: 0;
+		max-width: 32ch;
+		line-height: 1.4;
 	}
 	.muted {
 		color: var(--text-secondary);

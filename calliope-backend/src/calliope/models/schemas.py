@@ -54,6 +54,11 @@ class Project(BaseModel):
     target_duration: str | None
     cover_path: str | None = None
     status: str
+    # "builtin" = the in-app generators own the content. "external" = it was
+    # authored outside Calliope (calliope-cli), so the web UI hides the buttons
+    # that would overwrite it. Defaults to the column's own default so a
+    # response that forgot to select it is still valid.
+    ingest_mode: str = "builtin"
     created_at: datetime
     updated_at: datetime
     stats: ProjectStats | None = None

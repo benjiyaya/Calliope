@@ -111,6 +111,12 @@
 	const beatBudget = $derived(recommendBeatCount(lengthDraft));
 	const sceneBudget = $derived(recommendSceneCount(lengthDraft));
 	const secsBudget = $derived(estimateTargetSeconds(lengthDraft));
+	// A project authored through calliope-cli keeps its beats, cast and scenes
+	// out of the built-in generators' way. "Draft Storyline" would refuse with a
+	// 422 on a long source text anyway, so the button is removed rather than
+	// left there to fail -- and it is the one button that would delete a
+	// CLI-authored board outright, since it replaces beats and cast wholesale.
+	const externallyAuthored = $derived(story.project.ingest_mode === 'external');
 	const draftPromptPreview = $derived(
 		buildStoryDraftPromptPreview({
 			title: story.project.title,
@@ -358,9 +364,13 @@
 		>
 			{t('story.loadExample')}
 		</Button>
-		<Button variant="primary" disabled={!configured} onclick={() => void draftStoryline()}>
-			<Icon name="sparkle" size={15} /> {t('story.draftStoryline')}
-		</Button>
+		{#if externallyAuthored}
+			<p class="externally-authored">{t('story.externallyAuthored')}</p>
+		{:else}
+			<Button variant="primary" disabled={!configured} onclick={() => void draftStoryline()}>
+				<Icon name="sparkle" size={15} /> {t('story.draftStoryline')}
+			</Button>
+		{/if}
 	</div>
 </header>
 
@@ -743,6 +753,14 @@
 	.stage-actions {
 		display: flex;
 		gap: var(--space-sm);
+		align-items: center;
+	}
+	.externally-authored {
+		color: var(--text-secondary);
+		font-size: 12px;
+		margin: 0;
+		max-width: 32ch;
+		line-height: 1.4;
 	}
 	.banner {
 		background: rgba(245, 158, 11, 0.1);

@@ -467,3 +467,61 @@ def test_the_cli_still_returns_the_novel_when_asked(cli_env):
     assert shown["idea"] == NOVEL
 
 
+# -- what the web UI uses to hide the buttons ------------------------------
+#
+# The 422s above are the backstop. `ingest_mode` is the front line: a project
+# authored through the CLI has its generate buttons removed rather than left
+# there to fail. Both stages read `/api/projects/{id}/story`, and both hide a
+# different button, so the field has to survive that response.
+
+def test_the_story_response_carries_ingest_mode(client):
+    """Both stages read the story endpoint, not the project endpoint. A field
+    added only to `GET /api/projects/{id}` would typecheck and then be
+    `undefined` at runtime -- falsy, so the buttons would simply never hide."""
+    pid = client.post("/api/projects", json={"title": "T", "idea": "x"}).json()["id"]
+    assert client.get(f"/api/projects/{pid}/story").json()["project"]["ingest_mode"] == (
+        "builtin"
+    )
+
+
+def test_the_project_schema_keeps_ingest_mode(client):
+    """`list_projects` has a `response_model`, so anything the schema does not
+    declare is silently dropped from the list payload."""
+    from calliope.models.schemas import Project
+
+    assert "ingest_mode" in Project.model_fields
+    assert Project.model_fields["ingest_mode"].default == "builtin"
+    pid = client.post("/api/projects", json={"title": "T", "idea": "x"}).json()["id"]
+    row = next(p for p in client.get("/api/projects").json() if p["id"] == pid)
+    assert row["ingest_mode"] == "builtin"
+
+
+def test_an_externally_authored_project_is_labelled_as_such(client, monkeypatch):
+    """The value the CLI writes. A UI that cannot tell a CLI-authored project
+    from a built-in one will happily offer to overwrite the former."""
+    from calliope.config import settings
+    from calliope.db import get_db
+
+    pid = client.post("/api/projects", json={"title": "T", "idea": "x"}).json()["id"]
+    conn = get_db(settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE projects SET ingest_mode = 'external' WHERE id = ?", (pid,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert client.get(f"/api/projects/{pid}/story").json()["project"][
+        "ingest_mode"
+    ] == "external"
+
+
+def test_a_web_created_project_is_still_builtin(client):
+    """The web form has no ingest-mode control, so pasting a novel there yields
+    a `builtin` project. That is the whole reason the length guard exists in
+    addition to this flag -- neither signal alone covers every case."""
+    pid = client.post("/api/projects", json={"title": "T", "idea": NOVEL}).json()["id"]
+    assert client.get(f"/api/projects/{pid}/story").json()["project"]["ingest_mode"] == (
+        "builtin"
+    )
+    assert client.post(f"/api/projects/{pid}/generate-story").status_code == 422

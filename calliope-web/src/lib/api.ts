@@ -19,6 +19,12 @@ export interface Project {
 	target_duration: string | null;
 	cover_path: string | null;
 	status: string;
+	/**
+	 * `builtin` = the in-app generators own this project's content.
+	 * `external` = authored outside Calliope via calliope-cli, so the web UI
+	 * hides the buttons that would overwrite it.
+	 */
+	ingest_mode: string;
 	created_at: string;
 	updated_at: string;
 	stats?: ProjectStats;
