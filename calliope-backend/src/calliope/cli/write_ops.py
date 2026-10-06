@@ -20,7 +20,7 @@ is no earlier state to have drifted from.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Callable, Sequence
+from typing import Any, Callable
 
 from calliope.authoring import beats as beats_mod
 from calliope.authoring import cast as cast_mod
@@ -439,10 +439,7 @@ def _context_set(ctx: CliContext, args: Any) -> Any:
     model = validate_payload("context", "set", payload)[0]
 
     def write(conn: sqlite3.Connection, entry: AuditEntry) -> Any:
-        row = conn.execute(
-            "SELECT continuity_json FROM projects WHERE id = ?", (int(pid),)
-        ).fetchone()
-        before = ctx_mod.stored_plan({"continuity_json": row["continuity_json"]})
+        before = ctx_mod.load_stored_plan(conn, pid)
         after = ctx_mod.set_context(
             conn, pid, overview=model.overview, requirements=model.requirements
         )

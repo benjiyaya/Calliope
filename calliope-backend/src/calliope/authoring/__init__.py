@@ -10,8 +10,10 @@ Design contract (docs/plans/2026-10-05-cli-authoring-bridge.md §3.1):
 - No LLM. ``ensure_continuity_plan`` and friends are permanently off limits
   here; ``authoring.context`` may only use the pure functions from
   ``agent.continuity`` (``load_board`` / ``basis_hash`` / ``deterministic_plan``).
-- No filesystem writes outside ``<data_dir>/audit/`` and
-  ``<data_dir>/cli_snapshots/``.
+- No filesystem writes outside ``<data_dir>/audit/``. ``--snapshot`` was dropped
+  for ``--expect-hash`` (plan §3.5.1), so there is no snapshot directory and
+  this layer contains exactly one write call: the JSONL mirror in
+  ``audit.write_mirror``. ``tests/test_cli_physical.py`` pins that count.
 """
 
 from calliope.authoring.service import (

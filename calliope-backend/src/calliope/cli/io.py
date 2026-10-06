@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from calliope.authoring.models import validate_payload
 from calliope.authoring.service import (
     AuthoringError,
     DriftDetected,

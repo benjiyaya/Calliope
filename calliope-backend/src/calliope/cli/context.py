@@ -21,7 +21,6 @@ import json
 import sqlite3
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from calliope.authoring import audit as audit_mod

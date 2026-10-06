@@ -33,8 +33,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -242,42 +240,18 @@ def write_mirror(
     return path
 
 
-def project_log_files(data_dir: Path, project_id: int) -> list[Path]:
-    """Files to remove when a project is deleted.
+def mirror_file(data_dir: Path, project_id: int) -> Path:
+    """The one on-disk artifact a project owns, for post-commit cleanup.
 
-    Returned as a list and deleted by the caller only AFTER the commit that
-    deleted the project: touching disk inside the transaction would leave a file
-    whose project no longer exists if the rollback happened, and a log entry
-    pointing at rows that came back if it did not.
+    ``routers/projects.py::delete_project`` builds this path *before* the
+    ``DELETE FROM projects`` commit (it is named by ``project_id``, so it has to
+    be listed while the row still exists) and unlinks it only *after*. Touching
+    disk inside the transaction would leave a file for a project that came back
+    on rollback, or keep one for a project that is gone.
+
+    There is deliberately no second entry here. ``--snapshot`` was dropped in
+    favour of ``--expect-hash`` (plan §3.5.1), so no snapshot directory ever
+    existed on disk; keeping a cleanup branch for one would be a path that no
+    code can populate.
     """
-    audit_dir = Path(data_dir) / AUDIT_DIRNAME
-    files: list[Path] = []
-    for candidate in (
-        audit_dir / f"project-{int(project_id)}.jsonl",
-        Path(data_dir) / "cli_snapshots" / f"project-{int(project_id)}",
-    ):
-        if candidate.exists():
-            files.append(candidate)
-    return files
-
-
-def remove_files(paths: list[Path]) -> list[str]:
-    """Delete ``paths`` (files or directories). Returns what was removed."""
-    removed: list[str] = []
-    for path in paths:
-        if path.is_dir():
-            shutil.rmtree(path)
-            removed.append(str(path))
-        elif path.exists():
-            path.unlink()
-            removed.append(str(path))
-    return removed
-
-
-def is_inside(candidate: Path, root: Path) -> bool:
-    """Containment check for any path the CLI is asked to touch."""
-    try:
-        Path(os.path.normpath(candidate)).relative_to(Path(os.path.normpath(root)))
-    except ValueError:
-        return False
-    return True
+    return Path(data_dir) / AUDIT_DIRNAME / f"project-{int(project_id)}.jsonl"

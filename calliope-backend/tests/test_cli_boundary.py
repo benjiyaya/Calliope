@@ -11,9 +11,11 @@ ships rather than after someone uses it.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pytest
 
+from calliope.authoring.service import PolicyError
 from calliope.cli import read_ops, write_ops
 from calliope.cli.main import build_parser
 from calliope.cli.policy import (
@@ -23,7 +25,6 @@ from calliope.cli.policy import (
     check_op,
     is_forbidden_name,
 )
-from calliope.authoring.service import PolicyError
 
 
 def _walk(parser: argparse.ArgumentParser, path: tuple[str, ...] = ()):
@@ -191,7 +192,6 @@ def test_delete_project_removes_the_jsonl_mirror(tmp_path, monkeypatch):
     present, so the loop has to tolerate a missing file.
     """
     import asyncio
-    import shutil
 
     import calliope.config as config_module
     from calliope.db import migrate_db
@@ -203,18 +203,56 @@ def test_delete_project_removes_the_jsonl_mirror(tmp_path, monkeypatch):
     mirror = tmp_path / "audit" / "project-42.jsonl"
     mirror.parent.mkdir(parents=True, exist_ok=True)
     mirror.write_text("{}\n", encoding="utf-8")
-    snapshots = tmp_path / "cli_snapshots" / "project-42"
-    snapshots.mkdir(parents=True)
-    (snapshots / "before.json").write_text("{}", encoding="utf-8")
 
-    assert set(_cli_project_files(42)) == {mirror, snapshots}
+    assert set(_cli_project_files(42)) == {mirror}
 
     # Mirrors routers/projects.py::delete_project's post-commit loop.
     for path in _cli_project_files(42):
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
+        path.unlink(missing_ok=True)
 
     assert not mirror.exists()
-    assert not snapshots.exists()
+
+
+def test_delete_project_is_fine_with_no_audit_mirror(tmp_path, monkeypatch):
+    """A project that never used the CLI has no mirror. That is not an error.
+
+    ``delete`` must not depend on the CLI having touched the project -- the
+    common case is deleting something the user created and abandoned in the UI.
+    """
+    import asyncio
+
+    import calliope.config as config_module
+    from calliope.db import migrate_db
+    from calliope.routers.projects import _cli_project_files
+
+    monkeypatch.setattr(config_module.settings, "data_dir", tmp_path)
+    asyncio.run(migrate_db(config_module.settings.db_path))
+
+    for path in _cli_project_files(42):
+        path.unlink(missing_ok=True)
+
+    assert all(not p.exists() for p in _cli_project_files(42))
+
+
+def test_no_snapshot_directory_is_referenced_anywhere():
+    """``cli_snapshots/`` is not a thing, and no source file may say it is.
+
+    ``--snapshot`` was dropped for ``--expect-hash`` (plan §3.5.1), so the
+    directory never exists on disk. A cleanup branch and a docstring that still
+    name it describe a path no code can populate -- the kind of dead reference
+    that reads as a live guarantee. Grepped across both packages because the
+    failure mode is prose, not behaviour.
+    """
+    from calliope import authoring, cli
+
+    offenders: list[str] = []
+    for pkg in (cli, authoring):
+        for path in sorted(Path(pkg.__file__).parent.glob("*.py")):
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if "cli_snapshots" in line:
+                    offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+    assert not offenders, "cli_snapshots/ is dead -- drop the reference:\n" + "\n".join(
+        offenders
+    )

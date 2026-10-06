@@ -19,7 +19,6 @@ from calliope.authoring.service import (
     NotFound,
     ValidationFailed,
     check_status,
-    next_order_index,
 )
 from calliope.db import row_to_dict
 

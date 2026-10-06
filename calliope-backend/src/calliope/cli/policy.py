@@ -10,14 +10,13 @@ system, so it is fenced three ways that fail independently (plan §3.4):
 2. **Policy.** ``FORBIDDEN_OPS`` below, checked against the parsed verb pair
    before dispatch. Catches a verb that *looks* harmless but routes into a
    destructive code path.
-3. **Tests.** ``tests/test_cli_delete_boundary.py`` walks the whole argparse
-   tree and asserts none of the forbidden names appear at any level -- so a
-   future subcommand cannot quietly reintroduce one.
+3. **Tests.** ``tests/test_cli_boundary.py`` walks the whole argparse tree and
+   asserts none of the forbidden names appear at any level -- so a future
+   subcommand cannot quietly reintroduce one.
 
 There is no flag, env var, or config key that turns any layer off. The only way
 to delete a project is the web UI, which is also the only place that cleans up
-its audit log and snapshot directory (``delete_project`` in
-``routers/projects.py``).
+its audit mirror (``delete_project`` in ``routers/projects.py``).
 
 ``replace-range`` is not a loophole: it removes rows, but only inside one
 project\'s sequence, only as part of an insert that replaces them in the same
@@ -54,10 +53,10 @@ FORBIDDEN_VERBS = frozenset(
 FORBIDDEN_OPS: frozenset[tuple[str, str]] = frozenset()
 
 #: Groups whose verbs are all reads. This is an ASSERTION about the op tables,
-#: not a runtime block: ``tests/test_cli_delete_boundary.py`` cross-checks it
-#: against ``write_ops.WRITE_OPS`` so a write verb cannot appear under one of
-#: these names by accident. Refusing at dispatch instead would just break the
-#: read commands that are the point of these groups.
+#: not a runtime block: ``tests/test_cli_boundary.py`` cross-checks it against
+#: ``write_ops.WRITE_OPS`` so a write verb cannot appear under one of these
+#: names by accident. Refusing at dispatch instead would just break the read
+#: commands that are the point of these groups.
 READ_ONLY_GROUPS = frozenset({"log", "schema", "plan", "shots"})
 
 

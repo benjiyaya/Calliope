@@ -99,6 +99,23 @@ def stored_plan(project_row: dict[str, Any]) -> dict[str, Any] | None:
     return data
 
 
+def load_stored_plan(
+    conn: sqlite3.Connection, project_id: int
+) -> dict[str, Any] | None:
+    """The stored plan for one project, or ``None`` if there is no usable one.
+
+    Exists so ``context set`` can capture a before-image without writing its own
+    SELECT -- ``cli/`` holds no SQL (plan §3.1), and a caller that reaches for
+    ``conn.execute`` to get this is how the layer gets eroded.
+    """
+    row = conn.execute(
+        "SELECT id, continuity_json FROM projects WHERE id = ?", (int(project_id),)
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"Project {project_id} not found")
+    return stored_plan(row_to_dict(row))
+
+
 def plan_state(
     conn: sqlite3.Connection, project_id: int
 ) -> dict[str, Any]:
@@ -161,6 +178,10 @@ def set_context(
 
     Preserves ``shots``/``based_on`` from whatever is stored so a metadata-only
     write does not look like "the plan is gone" to the UI.
+
+    Returns the merged document, so a caller that needs the previous value --
+    ``context set`` records the derived half's before-image in its audit entry --
+    gets it here rather than reaching for its own SELECT.
     """
     project = conn.execute(
         "SELECT id, continuity_json FROM projects WHERE id = ?", (int(project_id),)

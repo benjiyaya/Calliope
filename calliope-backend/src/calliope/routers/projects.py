@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -18,14 +17,16 @@ router = APIRouter()
 def _cli_project_files(project_id: int) -> list[Path]:
     """On-disk CLI artifacts belonging to one project.
 
-    Two things and nothing else: the JSONL audit mirror and the snapshot
-    directory. The ``cli_audit`` rows themselves are removed by
-    ``ON DELETE CASCADE`` on ``cli_audit.project_id`` (``db.py``), inside the
-    same transaction as the project delete.
+    Exactly one file: the JSONL audit mirror. The ``cli_audit`` rows themselves
+    are removed by ``ON DELETE CASCADE`` on ``cli_audit.project_id`` (``db.py``),
+    inside the same transaction as the project delete.
+
+    The mirror is returned whether or not it exists -- ``delete`` must not care,
+    since a project that never used the CLI has no mirror, and that is not an
+    error. The caller's post-commit loop tolerates a missing file.
     """
     return [
         settings.data_dir / "audit" / f"project-{int(project_id)}.jsonl",
-        settings.data_dir / "cli_snapshots" / f"project-{int(project_id)}",
     ]
 
 
@@ -150,12 +151,12 @@ async def delete_project(project_id: int):
                     f"({', '.join(map(str, running))}). Cancel or wait for them first."
                 ),
             )
-        # The CLI's audit log and snapshot files live on disk, not under the
-        # project_id FK, so ON DELETE CASCADE does not reach them. Collect the
-        # paths BEFORE the delete (they are named by project_id, so they must be
-        # listed before the row goes away) and unlink them only AFTER the commit.
-        # Doing it the other way round would leave a log for a project that came
-        # back on rollback, or keep files for a project that is gone.
+        # The CLI's audit mirror lives on disk, not under the project_id FK, so
+        # ON DELETE CASCADE does not reach it. Collect the path BEFORE the
+        # delete (it is named by project_id, so it must be listed while the row
+        # still exists) and unlink it only AFTER the commit. Doing it the other
+        # way round would leave a log for a project that came back on rollback,
+        # or keep one for a project that is gone.
         #
         # The CLI has no delete verb at all -- this endpoint is the only way a
         # project and its log are ever removed together.
@@ -164,14 +165,11 @@ async def delete_project(project_id: int):
         conn.commit()
         for path in log_paths:
             try:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                elif path.exists():
-                    path.unlink()
+                path.unlink(missing_ok=True)
             except OSError:
                 # A leftover file must not fail the delete: the project row is
                 # already gone, which is what the user asked for.
-                logger.warning("Could not remove CLI log file %s", path)
+                logger.warning("Could not remove CLI audit mirror %s", path)
         return {"ok": True}
     finally:
         conn.close()

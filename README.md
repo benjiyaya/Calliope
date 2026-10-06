@@ -209,6 +209,49 @@ If ComfyUI "doesn't know what to generate" or jobs come back empty:
 
 Calliope talks to ComfyUI purely over its HTTP API: it uploads reference files with `POST /upload/image`, patches the workflow JSON and queues it via `POST /prompt`, polls `/history/{prompt_id}`, and downloads the results. It **never reads or writes ComfyUI's local `input/` / `output/` folders** — any folder paths stay configured on the ComfyUI side, not in Calliope.
 
+## `calliope-cli` — writing project content from a tool
+
+The web UI is the only way to run renders, and it stays that way. But writing
+**text** — beats, cast, scenes, shot clips, continuity requirements — does not
+need a browser, and a 34k-character novel is a bad fit for a textarea. So there
+is a second door in, for scripts and AI agents:
+
+```bat
+calliope-cli.bat project create --title "灯笼" --idea-file novel.txt --json
+calliope-cli.bat plan next --project 7 --json
+```
+
+31 commands across 10 groups (`project` `story` `cast` `script` `clips`
+`context` `shots` `plan` `log` `schema`). Run `calliope-cli.bat --help`, or
+`schema show story append` for the exact payload shape of any write.
+
+Three things it will not do, with no flag to change that:
+
+- **Never delete.** No `delete` verb exists; the web UI is the only path that
+  removes a project, and it also removes that project's audit log.
+- **Never call a model.** It writes text you give it. It does not summarise,
+  expand, or "improve" anything.
+- **Never touch images or video.** Those columns are read-only.
+
+Because you edit in the UI while a tool works, every write takes
+`--expect-hash` and compares it **inside** the write transaction:
+
+```bat
+calliope-cli.bat project hash --project 7 --json
+calliope-cli.bat story append --project 7 --file beats.json --expect-hash 4f2a9c1e8b7d6053
+```
+
+Refusing because the content moved is **exit 3**, distinct from exit 2 (your
+payload is wrong) — re-read and re-apply rather than retrying the same file.
+Every write is recorded in `cli_audit` with per-row before-images, readable via
+`log list` / `log show`.
+
+An opencode skill lives at `calliope-backend/skills_opencode/calliope/SKILL.md`.
+
+Multi-line text **must** go through `--idea-file` (or `--file -` for stdin).
+`cmd.exe` terminates a command line at a raw newline, so the argument after it is
+silently dropped and the command still exits 0.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE) 
@@ -217,7 +260,11 @@ This project is licensed under the [MIT License](LICENSE)
 
 ```text
 calliope-backend/            FastAPI backend (Python)
+  src/calliope/authoring/    the only place SQL lives; shared with the web UI
+  src/calliope/cli/          calliope-cli — no SQL, no shell, no model calls
+  skills_opencode/           agent-facing skill for the CLI
 calliope-web/                SvelteKit frontend
+calliope-cli.bat             CLI entry point (Windows)
 example_ComfyUI_workflows/   ready-to-import API-format workflow JSONs
 docs/wiki/                   design notes (wiki source): ComfyUI HTTP vs MCP, multi-ref workflows
 ```
