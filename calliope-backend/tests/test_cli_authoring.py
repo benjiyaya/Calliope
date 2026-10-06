@@ -199,8 +199,28 @@ def test_mirror_is_written_after_the_commit(env, tmp_path):
         for line in mirror.read_text(encoding="utf-8").splitlines()
         if line
     ]
-    assert len(lines) == 1
-    assert lines[0]["command"] == "story append"
+    assert [e["command"] for e in lines] == ["project create", "story append"]
+
+
+def test_project_create_mirror_is_filed_under_the_new_project(env):
+    """``project create`` must mirror under the id it just created, not null.
+
+    It opens its entry with ``project_id=None`` (the row does not exist yet)
+    and re-points ``entry.project_id`` at the new id inside ``write()``. Taking
+    the ``cli_txn`` argument instead files the line under ``global.jsonl`` with
+    ``project_id`` null, while ``cli_audit`` records the real id -- and
+    ``delete_project`` only ever unlinks ``project-{id}.jsonl``, so the log
+    would outlive the project it describes.
+    """
+    mirror = env["data_dir"] / "audit" / f"project-{env['project_id']}.jsonl"
+    lines = [
+        json.loads(line)
+        for line in mirror.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    create = next(e for e in lines if e["command"] == "project create")
+    assert create["project_id"] == env["project_id"]
+    assert not (env["data_dir"] / "audit" / "global.jsonl").exists()
 
 
 # -- drift preflight -------------------------------------------------------

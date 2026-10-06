@@ -102,17 +102,25 @@ def cli_txn(
     if not ctx.dry_run:
         # Disk after commit, never before: if we die here SQLite already has
         # the truth and the mirror is allowed to lag.
+        #
+        # entry.project_id, never the cli_txn argument. `project create` opens
+        # its entry with project_id=None (the row does not exist yet) and
+        # re-points it at the new id inside write(), so the row and this call
+        # otherwise take two different sources: the line would be filed under
+        # global.jsonl with project_id null while cli_audit records the real id.
+        # delete_project only ever unlinks project-{id}.jsonl, so that line
+        # would outlive the project it describes.
         audit_mod.write_mirror(
             settings.data_dir,
             entry_id,
             {
-                "project_id": project_id,
+                "project_id": entry.project_id,
                 "command": command,
                 "actor": ctx.actor,
                 "changes": entry.changes,
                 "summary": entry.summary(),
             },
-            project_id=project_id,
+            project_id=entry.project_id,
         )
     yield {"result": result, "entry_id": entry_id, "entry": entry, "dry_run": ctx.dry_run}
 
