@@ -468,10 +468,25 @@ a batch is large or the target is not obvious.
 
 ## Invocation
 
-`calliope-cli` is `calliope-cli.bat` at the repo root. From PowerShell use
-`.\calliope-cli.bat`; from cmd, `calliope-cli.bat`. It sets the code page to UTF-8
-itself, so Chinese in `--idea` or a payload file survives the round trip.
+`calliope-cli` is **not on PATH**: a bare `calliope-cli ...` comes back as
+"not recognized". The entry point is `calliope-cli.bat` at the repo root — the
+directory that also holds `calliope-backend/`. Two ways to reach it:
 
-The project is resolved from the backend config, so the CLI and a running web UI
-point at the same database. That is intentional — it is what makes the drift
-guard meaningful — and it is also why you must read immediately before writing.
+```bash
+cd <repo root>                             # once per shell
+.\calliope-cli.bat project list --json     # cmd: calliope-cli.bat
+```
+
+or by full path from any working directory:
+`D:\checkout\Calliope\calliope-cli.bat project list --json`.
+Every bare `calliope-cli ...` in this file means `.\calliope-cli.bat`.
+
+The working directory matters only for finding the bat. The bat locates its own
+Python from its own position, and the config locates the database from the
+package's own position — both absolute — so the CLI and a running web UI point at
+the same database wherever you invoked it from. That is intentional: it is what
+makes the drift guard meaningful, and it is also why you must read immediately
+before writing.
+
+The bat sets the code page to UTF-8 itself, so Chinese in `--idea` or a payload
+file survives the round trip.
