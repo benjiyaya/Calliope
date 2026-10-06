@@ -119,11 +119,21 @@ caller omits `order_index` and lets the server pick `max + 1`; a caller that
 chooses a position from a read has exactly such a state, and that is the flow the
 skill documents.
 
-Still open, and deliberately not bundled into that fix: `cast upsert` and
-`context set` accept the flag without comparing it. `context set` says why in the
-source (the preflight would hash the whole source text to set four short
-strings); `cast upsert` has no stated reason and one hash cannot cover the three
-tables it may touch.
+The two verbs left open in that pass are covered now. `context set` had declined
+the guard in a source note on the grounds that preflight would hash the whole
+source text to set four short strings; measured on the real database that is
+0.13 ms on an 8,581-character novel — 0.093 ms is the SHA256 of 34,000
+characters alone — against 0.20 ms for the `project hash` the caller has already
+run to obtain the value. What the guard costs is precision rather than time:
+`continuity_json` and the idea share a row, so retyping the novel re-reads a
+pending context write, which errs the safe way.
+
+`cast upsert` guards whichever single table its payload lands in, and refuses the
+flag when the payload spans more than one — one value cannot name two scopes, so
+comparing one and ignoring the rest would be the same lie as comparing neither.
+The same pass found `--kind` on that verb parsed and never read: it promised to
+override every payload row and did nothing, so `--kind location` wrote
+characters and reported success. It overrides now.
 
 ## Boundaries — not configurable
 

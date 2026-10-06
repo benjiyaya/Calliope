@@ -202,8 +202,34 @@ def _story_replace(ctx: CliContext, args: Any) -> Any:
 def _cast_upsert(ctx: CliContext, args: Any) -> Any:
     pid = _pid(ctx, args)
     entries = validate_payload("cast", "upsert", load_payload(args.file))
+    if args.kind:
+        # help: "override the kind of every row in the payload". The flag was
+        # parsed and never read, so --kind location wrote characters and
+        # reported success -- a wrong-table write, the one failure mode that
+        # looks like nothing went wrong.
+        for row in entries:
+            row.kind = args.kind
+    # One --expect-hash value names one scope. A payload that stays inside a
+    # single table is guarded exactly like every other write; one that spans
+    # tables has no fingerprint that could match them all, so the combination is
+    # refused instead of checking one table and leaving the rest to look
+    # covered. With no value supplied nothing here changes -- the flag is
+    # optional and stays optional.
+    tables = sorted({cast_mod.KIND_TABLE[row.kind] for row in entries})
+    if args.expect_hash and len(tables) > 1:
+        raise ValidationFailed(
+            f"cast upsert spans {len(tables)} tables ({', '.join(tables)}); "
+            "--expect-hash compares a single scope and cannot cover more than "
+            "one of them. Split the payload so each write stays inside one "
+            "table, or drop --expect-hash and compare `project hash` per table "
+            "yourself before writing.",
+            [{"loc": "expect-hash", "msg": f"tables: {tables}"}],
+        )
 
     def write(conn: sqlite3.Connection, entry: AuditEntry) -> Any:
+        if args.expect_hash and len(tables) == 1:
+            _guard(conn, table=tables[0], project_id=pid,
+                   expected=args.expect_hash)
         results = cast_mod.upsert(conn, pid, entries)
         for record in results:
             table = cast_mod.KIND_TABLE[record["kind"]]
@@ -429,11 +455,20 @@ def _scene_arg(ctx: CliContext, args: Any, pid: int) -> int:
 def _context_set(ctx: CliContext, args: Any) -> Any:
     pid = _pid(ctx, args)
     payload = load_payload(args.file)
-    # NOTE: no --expect-hash here on purpose. The preflight compares row hashes,
-    # and projects.idea can be 34k characters of source text -- hashing that on
-    # every context write would mean reading the whole novel to set four short
-    # strings. The ledger lives in the same row as the idea, so the two cannot
-    # be written independently anyway.
+    # The guard compares the whole projects row, idea included. There is no
+    # narrower scope to compare, because continuity_json and the source text
+    # share one row and cannot be fingerprinted apart.
+    #
+    # An earlier note here declined the guard on cost grounds -- "hashing 34k
+    # characters to set four short strings". Measured on the real database that
+    # is 0.13 ms for an 8,581-character novel (0.093 ms is the SHA256 of 34,000
+    # characters alone), against 0.20 ms for the whole `project hash` the caller
+    # has already run to obtain this value. The cost was never the reason to
+    # leave the help text promising a comparison that did not happen.
+    #
+    # What the guard does cost is precision: retyping the novel in the web UI
+    # makes a pending context write re-read, even though continuity_json itself
+    # did not move. That errs the safe way -- refuse rather than overwrite.
     if payload is None:
         raise ValidationFailed(
             "context set needs --file", [{"loc": "file", "msg": "missing"}]
@@ -444,6 +479,7 @@ def _context_set(ctx: CliContext, args: Any) -> Any:
     model = validate_payload("context", "set", payload)[0]
 
     def write(conn: sqlite3.Connection, entry: AuditEntry) -> Any:
+        _guard(conn, table="projects", project_id=pid, expected=args.expect_hash)
         before = ctx_mod.load_stored_plan(conn, pid)
         after = ctx_mod.set_context(
             conn, pid, overview=model.overview, requirements=model.requirements

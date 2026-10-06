@@ -335,6 +335,145 @@ def test_stale_expect_hash_is_refused_on_script_append(env):
     assert n == 1
 
 
+def test_stale_expect_hash_is_refused_on_cast_upsert(env):
+    """``cast upsert`` offers ``--expect-hash`` with the same help text as every
+    other write. A payload that names one kind lands in one table, so the check
+    is no harder here than anywhere else -- it was simply never called."""
+    from calliope.authoring.hash import hash_rows, scope_digest
+
+    env["json"]("cast", "upsert", "--project", env["project_id"],
+                "--file", env["payload"]("a.json", [{"name": "Ann"}]))
+    conn = env["conn"]
+    seen = scope_digest(hash_rows(conn, "characters", project_id=env["project_id"]))
+    # The user renames a role in the web UI after the fingerprint was taken.
+    conn.execute(
+        "UPDATE characters SET role = 'changed by the UI' WHERE project_id = ?",
+        (env["project_id"],),
+    )
+    conn.commit()
+
+    code, _, err = env["json"](
+        "cast", "upsert", "--project", env["project_id"],
+        "--file", env["payload"]("b.json", [{"name": "Ben"}]),
+        "--expect-hash", seen,
+    )
+    assert code == 3, err
+    assert "changed since you read it" in err
+    names = conn.execute(
+        "SELECT name FROM characters WHERE project_id = ?", (env["project_id"],)
+    ).fetchall()
+    assert [r["name"] for r in names] == ["Ann"]
+
+
+def test_a_fresh_hash_still_writes_cast(env):
+    """Refusing a stale one must not become refusing every one."""
+    code, digests, err = env["json"]("project", "hash", "--project", env["project_id"])
+    assert code == 0, err
+    code, _, err = env["json"](
+        "cast", "upsert", "--project", env["project_id"],
+        "--file", env["payload"]("c.json", [{"name": "Ann"}]),
+        "--expect-hash", digests["characters"],
+    )
+    assert code == 0, err
+
+
+def test_a_mixed_cast_payload_cannot_carry_one_expect_hash(env):
+    """``--expect-hash`` takes one value; this payload spans characters and
+    locations, two scopes no single value can name. Comparing one and ignoring
+    the other would be the same lie as comparing neither, so the combination is
+    refused outright instead of quietly doing half a check."""
+    mixed = env["payload"]("c.json", [
+        {"name": "Ann", "kind": "character"},
+        {"name": "Dock", "kind": "location"},
+    ])
+    code, _, err = env["json"](
+        "cast", "upsert", "--project", env["project_id"], "--file", mixed,
+        "--expect-hash", "deadbeefdeadbeef",
+    )
+    assert code == 2, err
+    assert "characters" in err and "locations" in err
+    n = env["conn"].execute(
+        "SELECT COUNT(*) AS c FROM characters WHERE project_id = ?",
+        (env["project_id"],),
+    ).fetchone()["c"]
+    assert n == 0
+
+
+def test_a_mixed_cast_payload_still_writes_without_a_hash(env):
+    """Refusing the combination is not refusing the payload."""
+    mixed = env["payload"]("c.json", [
+        {"name": "Ann", "kind": "character"},
+        {"name": "Dock", "kind": "location"},
+    ])
+    code, _, err = env["json"](
+        "cast", "upsert", "--project", env["project_id"], "--file", mixed
+    )
+    assert code == 0, err
+
+
+def test_stale_expect_hash_is_refused_on_context_set(env):
+    """``context set`` wrote projects.continuity_json with no comparison while
+    its help promised one. The whole projects row is one scope, idea included,
+    so the value comes from ``project hash`` like any other."""
+    from calliope.authoring.hash import hash_rows, scope_digest
+
+    conn = env["conn"]
+    seen = scope_digest(hash_rows(conn, "projects", project_id=env["project_id"]))
+    # The user edits the source novel in the web UI between read and write.
+    conn.execute(
+        "UPDATE projects SET idea = 'retyped in the web UI' WHERE id = ?",
+        (env["project_id"],),
+    )
+    conn.commit()
+
+    code, _, err = env["json"](
+        "context", "set", "--project", env["project_id"],
+        "--file", env["payload"]("ctx.json", {"overview": {"style": "noir"}}),
+        "--expect-hash", seen,
+    )
+    assert code == 3, err
+    assert "changed since you read it" in err
+    row = conn.execute(
+        "SELECT continuity_json FROM projects WHERE id = ?", (env["project_id"],)
+    ).fetchone()
+    assert row["continuity_json"] is None
+
+
+def test_context_set_accepts_the_projects_hash(env):
+    """The round trip the help text describes: take the value from
+    ``project hash``, hand it back to the write."""
+    code, digests, err = env["json"]("project", "hash", "--project", env["project_id"])
+    assert code == 0, err
+    code, _, err = env["json"](
+        "context", "set", "--project", env["project_id"],
+        "--file", env["payload"]("ctx.json", {"overview": {"style": "noir"}}),
+        "--expect-hash", digests["projects"],
+    )
+    assert code == 0, err
+
+
+def test_cast_upsert_kind_overrides_every_payload_row(env):
+    """``--kind`` promises to override the kind of every row. It was parsed and
+    never read, so ``--kind location`` silently wrote characters -- a wrong-table
+    write that looked like success."""
+    code, _, err = env["json"](
+        "cast", "upsert", "--project", env["project_id"],
+        "--file", env["payload"]("c.json", [{"name": "Dock"}]),
+        "--kind", "location",
+    )
+    assert code == 0, err
+    conn = env["conn"]
+    locations = conn.execute(
+        "SELECT name FROM locations WHERE project_id = ?", (env["project_id"],)
+    ).fetchall()
+    assert [r["name"] for r in locations] == ["Dock"]
+    n = conn.execute(
+        "SELECT COUNT(*) AS c FROM characters WHERE project_id = ?",
+        (env["project_id"],),
+    ).fetchone()["c"]
+    assert n == 0
+
+
 # -- project hash: making the guard reachable -----------------------------
 
 
