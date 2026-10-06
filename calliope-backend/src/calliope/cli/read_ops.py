@@ -98,6 +98,19 @@ def _story_list(ctx: CliContext, args: Any) -> Any:
     )
 
 
+def _story_order(ctx: CliContext, args: Any) -> Any:
+    """Report on the beat sequence without changing it.
+
+    A read-only companion to ``story list``, because that one returns rows and
+    a gap is invisible in a list -- "beat 7" simply is not in the output, which
+    looks like the end of the story rather than a hole in the middle. Duplicates
+    are worse: two rows claim one position and the tiebreak is ``id``, so the
+    order the caller sees is not the order they asked for.
+    """
+    pid = _pid(ctx, args)
+    return beats_mod.order_report(ctx.conn, pid)
+
+
 def _story_get(ctx: CliContext, args: Any) -> Any:
     return beats_mod.get_beat(ctx.conn, _pid(ctx, args), args.beat_id)
 
@@ -289,6 +302,7 @@ READ_OPS: list[tuple[str, str, Callable[[CliContext, Any], Any]]] = [
     ("project", "hash", _project_hash),
     ("story", "list", _story_list),
     ("story", "get", _story_get),
+    ("story", "order", _story_order),
     ("cast", "list", _cast_list),
     ("script", "list", _script_list),
     ("script", "get", _script_get),

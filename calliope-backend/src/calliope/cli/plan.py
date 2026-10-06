@@ -24,6 +24,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from calliope.authoring import beats as beats_mod
 from calliope.authoring import context as ctx_mod
 from calliope.authoring import script as script_mod
 from calliope.authoring.service import count_rows
@@ -43,25 +44,35 @@ def next_step(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
     board_counts = row_counts(conn, project_id)
     state = ctx_mod.plan_state(conn, project_id)
     unshot = script_mod.undescribed_scenes(conn, project_id)
+    # Reported, never acted on. `scenes`/`clips` are renumbered dense on write
+    # and a violation raises; beats are not, because the web UI is allowed to
+    # leave gaps. So a gap survives silently unless something looks -- and
+    # `plan next` is the one command a caller is guaranteed to run, which makes
+    # it the cheapest place to say so.
+    beat_order = beats_mod.order_report(conn, project_id)
 
-    # Ordered first-match. The order IS the contract.
+    # Ordered first-match. The order IS the contract. `beat_order` rides along on
+    # every branch purely to populate `note`; it never gates.
     if not board_counts["story_beats"]:
         return _step(
             "story.append", project_id, board_counts, state,
             "no beats yet; write the beat list from the source text first",
             hint="calliope-cli schema show story append",
+            beat_order=beat_order,
         )
     if not board_counts["characters"]:
         return _step(
             "cast.upsert", project_id, board_counts, state,
             "beats exist but no cast; scenes reference characters by name",
             hint="calliope-cli schema show cast upsert",
+            beat_order=beat_order,
         )
     if not board_counts["scenes"]:
         return _step(
             "script.append", project_id, board_counts, state,
             "cast exists but the script is empty; write scenes",
             hint="calliope-cli schema show script append",
+            beat_order=beat_order,
         )
     if unshot:
         return _step(
@@ -70,6 +81,7 @@ def next_step(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
             "expand them into shots",
             targets=[int(s["id"]) for s in unshot][:20],
             hint="calliope-cli schema show clips append",
+            beat_order=beat_order,
         )
     # Gated on `authored`, not on `stale`. `stale` tracks the derived `shots`,
     # which only `ensure_continuity_plan` can refresh -- it needs the model, and
@@ -81,11 +93,13 @@ def next_step(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
             "every clip has a description but the ledger has no authored "
             "content yet; write overview + requirements",
             hint="calliope-cli schema show context set",
+            beat_order=beat_order,
         )
     return _step(
         "render", project_id, board_counts, state,
         "script, shots, and ledger are all written; render in the web UI "
         "(the CLI never calls the model)",
+        beat_order=beat_order,
         # Surfaced, not acted on: the per-shot plan is derived and the UI
         # recalculates it on render. Worth saying out loud so the caller does
         # not read `stale: true` as unfinished CLI work.
@@ -117,6 +131,7 @@ def _step(
     targets: list[int] | None = None,
     hint: str | None = None,
     note: str | None = None,
+    beat_order: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "project_id": int(project_id),
@@ -130,6 +145,38 @@ def _step(
         out["targets"] = targets
     if hint:
         out["hint"] = hint
-    if note:
-        out["note"] = note
+    notes = [n for n in (note, _beat_order_note(beat_order)) if n]
+    if notes:
+        out["note"] = " | ".join(notes)
     return out
+
+
+def _beat_order_note(beat_order: dict[str, Any] | None) -> str | None:
+    """One sentence about a gapped or duplicated beat sequence, or ``None``.
+
+    Advisory only -- it never changes ``step``. A caller in the middle of
+    writing beats should not be told to stop; but a caller about to
+    ``replace-range`` by index needs to know the indices do not mean what they
+    look like, and the cheapest moment to learn that is before they read.
+    """
+    if not beat_order or beat_order["dense"]:
+        return None
+    parts = []
+    if beat_order["duplicates"]:
+        dupes = ", ".join(
+            f"#{d['order_index']} (ids {', '.join(str(i) for i in d['ids'])})"
+            for d in beat_order["duplicates"][:5]
+        )
+        parts.append(f"duplicate order_index at {dupes}")
+    if beat_order["holes"]:
+        holes = ", ".join(str(h) for h in beat_order["holes"][:10])
+        more = "..." if len(beat_order["holes"]) > 10 else ""
+        parts.append(f"holes at {holes}{more}")
+    if not parts:
+        return None
+    return (
+        "story_beats.order_index is not a dense 1..N sequence ("
+        + "; ".join(parts)
+        + ") -- a soft invariant the web UI may also leave; check `story order` "
+        "before replacing a range by index"
+    )

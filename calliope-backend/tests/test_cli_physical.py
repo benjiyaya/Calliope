@@ -185,19 +185,59 @@ def test_audit_mirror_is_the_only_filesystem_write():
     Plan §3.7 allows ``<data_dir>/audit/``. Everything else -- a stray temp file,
     a cache, a "helpful" export -- is out of bounds, and none of it would fail a
     behavioural test because a test only ever exercises one command.
+
+    Located by enclosing function rather than by line number, so an unrelated
+    docstring edit does not turn this into a red herring.
     """
     writers = {"write_text", "write_bytes", "mkdir", "rmdir", "unlink", "rename"}
-    offenders = []
+    found: list[str] = []
     for path in sorted(AUTHORING_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in writers:
-                    offenders.append(f"{path.name}:{node.lineno}: .{node.func.attr}(")
-    # audit.py's mirror is the sanctioned one; assert exactly that and nothing
-    # else, so a second writer has to be argued for explicitly.
-    assert offenders == ["audit.py:234: .mkdir("], (
-        "authoring/ may only write the audit mirror:\n" + "\n".join(offenders)
+        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            for node in ast.walk(func):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in writers
+                ):
+                    found.append(f"{path.name}::{func.name}: .{node.func.attr}(")
+    # The sanctioned writer is `write_mirror`, which appends the JSONL mirror
+    # after the commit. Assert exactly that and nothing else, so a second writer
+    # has to be argued for explicitly rather than added quietly.
+    assert found == ["audit.py::write_mirror: .mkdir("], (
+        "authoring/ may only write the audit mirror, from write_mirror:\n"
+        + "\n".join(found)
+    )
+
+
+def test_the_mirror_is_written_after_the_commit_not_inside_it():
+    """The mirror is allowed to lag the database, never the other way round.
+
+    ``write_mirror`` is called by ``cli_txn`` *after* ``commit()``, so a crash
+    mid-write leaves the SQLite log complete and the mirror short. Written
+    inside the transaction instead, a rollback would leave a mirror describing
+    rows that came back -- a log that lies, which is worse than no log.
+    """
+    import inspect
+
+    from calliope.cli import context as cli_ctx
+
+    src = inspect.getsource(cli_ctx)
+    commit_at = src.index("conn.commit()")
+    mirror_at = src.index("write_mirror")
+    assert mirror_at > commit_at, "the mirror is written before the commit"
+
+
+def test_unused_write_helper_is_not_left_behind():
+    """``mirror_file`` exists for the router's cleanup path; assert it is used.
+
+    It was introduced when the dead snapshot directory was removed, and a helper
+    with no caller is exactly the kind of thing that reads as a live guarantee.
+    """
+    routers = CLI_DIR.parent / "routers" / "projects.py"
+    assert "audit" in routers.read_text(encoding="utf-8"), (
+        "routers/projects.py no longer mentions the audit mirror -- is "
+        "delete_project still cleaning up the CLI's on-disk log?"
     )
 
 

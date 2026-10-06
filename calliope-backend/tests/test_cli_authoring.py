@@ -61,7 +61,89 @@ def test_dry_run_writes_no_mirror_file(env):
     assert after == before
 
 
+# -- story order: the read face for a soft invariant -----------------------
+
+
+def test_story_order_reports_a_clean_sequence(env):
+    p = env["payload"]("b.json", [{"title": f"B{i}"} for i in (1, 2, 3)])
+    code, _, err = env["json"](
+        "story", "append", "--project", env["project_id"], "--file", p
+    )
+    assert code == 0, err
+    code, out, err = env["json"](
+        "story", "order", "--project", env["project_id"], "--json"
+    )
+    assert code == 0, err
+    assert out["dense"] is True
+    assert out["counts"] == {"rows": 3, "distinct": 3, "min": 1, "max": 3}
+    assert out["holes"] == [] and out["duplicates"] == []
+
+
+def test_story_order_sees_a_hole_the_write_left_behind(env):
+    """`append` extends from the tail, so it cannot fill a hole. Without this
+    read command the gap would be permanent and invisible."""
+    p = env["payload"]("b.json", [{"title": "B1", "order_index": 1},
+                                  {"title": "B3", "order_index": 3}])
+    code, _, err = env["json"](
+        "story", "append", "--project", env["project_id"], "--file", p
+    )
+    assert code == 0, err
+    code, out, err = env["json"](
+        "story", "order", "--project", env["project_id"], "--json"
+    )
+    assert code == 0, err
+    assert out["dense"] is False
+    assert out["holes"] == [2]
+
+
+def test_story_order_writes_nothing(env):
+    """It is a read verb under a group that has writers; it must still be free."""
+    p = env["payload"]("b.json", [{"title": "B1"}])
+    env["json"]("story", "append", "--project", env["project_id"], "--file", p)
+    before = len(env["logs"](env["project_id"]))
+    code, _, err = env["json"](
+        "story", "order", "--project", env["project_id"], "--json"
+    )
+    assert code == 0, err
+    assert len(env["logs"](env["project_id"])) == before
+
+
+def test_story_order_is_read_only_per_the_policy_table(env):
+    """`story` has writers, so READ_ONLY_GROUPS cannot cover it. The op table is
+    the assertion instead -- pin that the new verb is flagged as a read."""
+    from calliope.cli.read_ops import READ_OPS
+
+    writes = {(g, v) for g, v, _h, _w in __import__(
+        "calliope.cli.write_ops", fromlist=["WRITE_OPS"]
+    ).WRITE_OPS}
+    assert ("story", "order") not in writes
+    assert ("story", "order") in {(g, v) for g, v, _h in READ_OPS}
+
+
 # -- audit -----------------------------------------------------------------
+
+
+def test_nothing_is_an_undo_entry(env):
+    """``cli_audit.undo_of_entry_id`` is reserved and always NULL.
+
+    Rollback is a new row pointing back at the one it reverses; reverse
+    execution was rejected because ``replace-range`` has already deleted the
+    original rows and undo would mean resurrecting them -- the capability the
+    delete boundary forbids (plan §5.13.2). Pinning it means a caller appearing
+    later has to confront this rather than arrive as undocumented behaviour.
+    """
+    p = env["payload"]("b.json", [{"title": "B1"}, {"title": "B2"}])
+    code, _, err = env["json"](
+        "story", "append", "--project", env["project_id"], "--file", p
+    )
+    assert code == 0, err
+    rows = env["conn"].execute(
+        "SELECT id, undo_of_entry_id FROM cli_audit WHERE project_id = ?",
+        (env["project_id"],),
+    ).fetchall()
+    assert rows, "the write produced no audit entry at all"
+    for row in rows:
+        assert row["undo_of_entry_id"] is None
 
 
 def test_every_write_logs_one_entry(env):
@@ -83,7 +165,7 @@ def test_audit_entry_records_the_before_image(env):
                                  "--beat-id", "1", "--title", "B1 renamed")
     assert code == 0, err
     code, logs, _ = env["json"]("log", "list", "--project", env["project_id"])
-    update = next(l for l in logs if l["command"] == "story update")
+    update = next(entry for entry in logs if entry["command"] == "story update")
     change = update["changes"][0]
     assert change["before"]["title"] == "B1"
     assert change["after"]["title"] == "B1 renamed"
@@ -103,7 +185,7 @@ def test_audit_is_append_only(env):
     env["json"]("story", "append", "--project", env["project_id"], "--file", p)
     env["json"]("story", "update", "--project", env["project_id"], "--beat-id", "1",
                 "--title", "x")
-    ids = [l["id"] for l in env["json"]("log", "list", "--project", env["project_id"])[1]]
+    ids = [e["id"] for e in env["json"]("log", "list", "--project", env["project_id"])[1]]
     assert ids == sorted(ids, reverse=True)  # newest first
     assert len(set(ids)) == len(ids)
 
@@ -112,7 +194,11 @@ def test_mirror_is_written_after_the_commit(env, tmp_path):
     p = env["payload"]("b.json", [{"title": "B1"}])
     env["json"]("story", "append", "--project", env["project_id"], "--file", p)
     mirror = tmp_path / "audit" / f"project-{env['project_id']}.jsonl"
-    lines = [json.loads(l) for l in mirror.read_text(encoding="utf-8").splitlines() if l]
+    lines = [
+        json.loads(line)
+        for line in mirror.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     assert len(lines) == 1
     assert lines[0]["command"] == "story append"
 

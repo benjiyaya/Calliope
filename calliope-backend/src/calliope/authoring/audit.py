@@ -128,6 +128,17 @@ def audit_finish(
     """INSERT the ``cli_audit`` row. Does NOT commit -- the caller does that.
 
     Returns the new row id.
+
+    ``undo_of_entry_id`` is **reserved and currently always ``None``.** Rollback
+    was designed as a new row pointing back at the one it reverses, not as
+    reverse execution of a write -- ``replace-range`` has already deleted the
+    original rows, so replaying backwards would mean resurrecting them, which is
+    the one capability the delete boundary forbids (plan §5.13.2). The column
+    stays because the schema is the right place to record that decision, and
+    because a future manual correction has somewhere to point. No CLI verb
+    sets it; ``tests/test_cli_authoring.py`` asserts that, so a caller appearing
+    has to update the docstring above rather than quietly becoming the mechanism
+    nobody documented.
     """
     scope_hash = ""
     if after_hashes:

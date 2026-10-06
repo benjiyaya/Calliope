@@ -242,6 +242,8 @@ def _add_read_args(p: argparse.ArgumentParser, group: str, verb: str) -> None:
         if verb == "list":
             p.add_argument("--from-index", type=int, default=None)
             p.add_argument("--to-index", type=int, default=None)
+        elif verb == "order":
+            pass  # --project is the whole argument list
         else:
             p.add_argument("--beat-id", type=int, required=True)
         return

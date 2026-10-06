@@ -119,7 +119,10 @@ calliope-cli plan next --project 7 --json
 | `render` | stop — everything is written; the user renders in the web UI |
 
 `clips.append` and `context.set` also return `targets` (the scene ids still to
-shoot) and `note` (anything true but not actionable by you).
+shoot). Any step may return a `note` — anything true but **not** a reason to stop
+what you were doing. `plan next` never gates on a note; it also uses one to report
+a gapped or duplicated beat sequence (`story order` has the detail). When several
+notes apply they are joined with `" | "`.
 
 The order is beats → cast → script → clips → continuity, and it is not negotiable:
 a scene names characters by name, and a continuity ledger describes shots that
@@ -252,6 +255,32 @@ and `order_index` always matches position, so you never have to compute it.
 Every scene already has one auto-generated clip with an empty description, so
 "the scene has clips" does not mean "the scene is written". `plan next` counts
 that correctly and hands you the scene ids in `targets`.
+
+### Beats are the one exception
+
+Scenes and clips are forced dense. **Beats are not**, because the web UI is also
+allowed to leave a gap and a half-written beat list is normal mid-project. So
+`story list` can legitimately come back with `1, 2, 4` — and `story append`
+extends from the tail, which means the gap does not heal itself.
+
+```bash
+calliope-cli story order --project 7 --json
+```
+
+```json
+{
+  "counts": {"rows": 3, "distinct": 3, "min": 1, "max": 4},
+  "dense": false,
+  "duplicates": [],
+  "holes": [3]
+}
+```
+
+`duplicates` is the dangerous one: two rows claim the same `order_index`, reads
+order by `(order_index, id)`, so you get an order you did not write. `plan next`
+reports both in its `note` when it finds them — read that note before using a
+position in `replace-range`, because "replace beat 3" means something different
+when no beat 3 exists.
 
 ## `context set` and staleness — two different flags
 

@@ -7,7 +7,9 @@ one transaction, so one ``undo`` entry restores the whole thing.
 ``story_beats.order_index`` is a soft invariant in the existing code -- holes
 do not raise (``story.py:541`` does not renumber). We renumber on write anyway
 so ``plan`` can report a dense range, but we do not reject a caller's explicit
-gaps at read time.
+gaps at read time. A gap therefore survives a write without complaint, so
+:func:`order_report` exists to *say so* on demand; nothing calls it implicitly,
+because a soft invariant that suddenly raises would break the UI's own editors.
 """
 from __future__ import annotations
 
@@ -165,4 +167,77 @@ def replace_range(
         "added_ids": new_ids,
         "shift": shift,
         "range": [from_index, to_index],
+    }
+
+
+def order_report(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
+    """Describe the ``story_beats.order_index`` sequence without judging it.
+
+    A report, not an assertion. ``scenes`` and ``clips`` are renumbered to a
+    dense 1..N on every write and a write that breaks that raises; beats are not,
+    because the existing web UI is allowed to leave gaps (``story.py:541`` does
+    not renumber) and a soft invariant that suddenly became a hard one would
+    break the user's own editor. The cost of that tolerance is that a gap can
+    otherwise go unnoticed forever -- this is the detector that was missing.
+
+    Reports both failure shapes, which need different fixes:
+
+    * a **duplicate** means two rows claim one position, and the read order
+      between them is ``id``, i.e. arbitrary from the caller's point of view.
+      ``story append`` with an explicit occupied ``order_index`` does this.
+    * a **hole** means a position in 1..max is unused. Harmless for reading
+      (everything sorts by ``order_index, id``) but it means "replace beat 7"
+      and "beat 7" are not the same row, which is a real trap for a caller.
+
+    ``counts`` is the cheap form (``story list`` reports the same numbers), and
+    ``dense`` is the one-word answer to "is anything wrong".
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n, COUNT(DISTINCT order_index) AS d,
+               MIN(order_index) AS lo, MAX(order_index) AS hi
+        FROM story_beats WHERE project_id = ?
+        """,
+        (int(project_id),),
+    ).fetchone()
+    n, distinct = int(row["n"]), int(row["d"])
+    lo = int(row["lo"]) if row["lo"] is not None else None
+    hi = int(row["hi"]) if row["hi"] is not None else None
+    dense = bool(n) and n == distinct and lo == 1 and hi == n
+
+    duplicates: list[dict[str, Any]] = []
+    holes: list[int] = []
+    if n and not dense:
+        for dup in conn.execute(
+            """
+            SELECT order_index, COUNT(*) AS c FROM story_beats
+            WHERE project_id = ? GROUP BY order_index HAVING c > 1
+            ORDER BY order_index
+            """,
+            (int(project_id),),
+        ).fetchall():
+            ids = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM story_beats WHERE project_id = ? AND order_index = ?"
+                    " ORDER BY id",
+                    (int(project_id), int(dup["order_index"])),
+                ).fetchall()
+            ]
+            duplicates.append({"order_index": int(dup["order_index"]), "ids": ids})
+        if lo and hi:
+            taken = {
+                int(r["order_index"])
+                for r in conn.execute(
+                    "SELECT DISTINCT order_index FROM story_beats WHERE project_id = ?",
+                    (int(project_id),),
+                ).fetchall()
+            }
+            holes = [i for i in range(lo, hi + 1) if i not in taken]
+
+    return {
+        "counts": {"rows": n, "distinct": distinct, "min": lo, "max": hi},
+        "dense": dense,
+        "duplicates": duplicates,
+        "holes": holes,
     }

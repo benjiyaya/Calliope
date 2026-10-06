@@ -18,8 +18,8 @@ import json
 
 import pytest
 
-from calliope.db import get_db, migrate_db
 from calliope.cli.plan import GATING_TABLES, next_step
+from calliope.db import get_db, migrate_db
 
 
 @pytest.fixture
@@ -99,6 +99,20 @@ def world(tmp_path, monkeypatch):
             """An arbitrary continuity_json, for the malformed-blob cases."""
             conn.execute(
                 "UPDATE projects SET continuity_json = ? WHERE id = ?", (blob, pid)
+            )
+            return self
+
+        def beats_at(self, indices, title="B"):
+            """Beats at explicit positions, gaps and collisions included.
+
+            Goes around ``beats()`` on purpose: that one writes 1..n, which is
+            the only shape the happy path ever produces. The interesting cases
+            are the ones a caller creates by typing a number.
+            """
+            conn.executemany(
+                "INSERT INTO story_beats (project_id, order_index, title) "
+                "VALUES (?, ?, ?)",
+                [(pid, i, f"{title}{i}") for i in indices],
             )
             return self
 
@@ -350,6 +364,106 @@ def test_the_hint_always_names_a_real_command(world):
             w.shot_list()
         else:
             break
+
+
+# -- a gapped beat sequence is reported, not fixed ------------------------
+#
+# `story_beats.order_index` is a soft invariant: the web UI may leave holes
+# (`story.py:541` does not renumber), so beats are not forced dense on write the
+# way scenes and clips are. Without a detector that tolerance means a gap or a
+# collision is invisible forever. `plan next` carries the report because it is
+# the one command a caller always runs.
+
+
+def test_a_hole_is_named_with_its_position(world):
+    conn, pid, w = world
+    w.beats_at([1, 2, 4, 5])
+    out = next_step(conn, pid)
+    assert "not a dense" in out["note"]
+    assert "3" in out["note"]
+
+
+def test_a_collision_names_both_row_ids(world):
+    """The dangerous shape. Two rows claim one position and reads order by
+    (order_index, id), so the caller sees a sequence they did not write."""
+    conn, pid, w = world
+    w.beats_at([1, 2, 3, 3])
+    out = next_step(conn, pid)
+    assert "duplicate order_index at #3" in out["note"]
+    dup_ids = [
+        int(r["id"])
+        for r in conn.execute(
+            "SELECT id FROM story_beats WHERE project_id = ? AND order_index = 3"
+            " ORDER BY id",
+            (pid,),
+        ).fetchall()
+    ]
+    for beat_id in dup_ids:
+        assert str(beat_id) in out["note"]
+
+
+def test_a_clean_sequence_says_nothing(world):
+    """An advisory that fires on every healthy project trains the caller to
+    ignore it."""
+    conn, pid, w = world
+    w.beats(4)
+    out = next_step(conn, pid)
+    assert "note" not in out
+
+
+def test_the_report_never_changes_the_decision(world):
+    """It is advice, not a gate. A caller mid-way through writing beats must
+    not be told to stop."""
+    from calliope.cli.plan import _beat_order_note
+
+    clean = {"dense": True, "duplicates": [], "holes": []}
+    broken = {"dense": False, "duplicates": [{"order_index": 2, "ids": [1, 2]}],
+              "holes": [3]}
+    assert _beat_order_note(clean) is None
+    assert _beat_order_note(broken)
+    assert _beat_order_note(None) is None
+
+
+def test_a_gap_survives_the_write_that_should_have_removed_it(world):
+    """`story append` extends from the tail, so appending after a hole does not
+    fill it -- which is exactly why the hole needs reporting rather than an
+    automatic renumber."""
+    from calliope.authoring import beats as beats_mod
+    from calliope.authoring.models import BeatIn
+
+    conn, pid, w = world
+    w.beats_at([1, 2, 4])
+    beats_mod.append_beats(conn, pid, [BeatIn(title="new")])
+    report = beats_mod.order_report(conn, pid)
+    assert report["holes"] == [3]
+    assert not report["dense"]
+
+
+def test_order_report_agrees_with_the_rows(world):
+    from calliope.authoring import beats as beats_mod
+
+    conn, pid, w = world
+    w.beats_at([2, 2, 5])
+    report = beats_mod.order_report(conn, pid)
+    rows = conn.execute(
+        "SELECT order_index FROM story_beats WHERE project_id = ?", (pid,)
+    ).fetchall()
+    assert report["counts"]["rows"] == len(rows)
+    assert report["counts"]["distinct"] == len({int(r[0]) for r in rows})
+    assert report["counts"]["min"] == 2
+    assert report["dense"] is False
+
+
+def test_order_report_on_an_empty_project_is_not_dense_but_is_quiet(world):
+    """Zero beats is the normal first-run state, not a defect. It must not
+    claim `dense`, and it must not invent holes."""
+    from calliope.authoring import beats as beats_mod
+
+    conn, pid, _w = world
+    report = beats_mod.order_report(conn, pid)
+    assert report["counts"]["rows"] == 0
+    assert report["holes"] == []
+    assert report["duplicates"] == []
 
 
 def test_targets_are_scene_ids_not_positions(world):

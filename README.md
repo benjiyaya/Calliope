@@ -221,7 +221,7 @@ calliope-cli.bat project create --title "灯笼" --idea-file novel.txt --json
 calliope-cli.bat plan next --project 7 --json
 ```
 
-31 commands across 10 groups (`project` `story` `cast` `script` `clips`
+32 commands across 10 groups (`project` `story` `cast` `script` `clips`
 `context` `shots` `plan` `log` `schema`). Run `calliope-cli.bat --help`, or
 `schema show story append` for the exact payload shape of any write.
 

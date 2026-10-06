@@ -12,7 +12,7 @@ never touches images or video, and never deletes anything.
 
 ## What changed
 
-- **`calliope-cli`** — 31 commands across 10 groups: `project`, `story`, `cast`,
+- **`calliope-cli`** — 32 commands across 10 groups: `project`, `story`, `cast`,
   `script`, `clips`, `context`, `shots`, `plan`, `log`, `schema`. Run it as
   `calliope-cli.bat` at the repo root.
 - **`plan next`** decides what to write, and says why. Ordered
@@ -32,6 +32,12 @@ never touches images or video, and never deletes anything.
   derived and would be discarded on the next recalculation.
 - **Append-only audit** with per-row before-images, recorded in the same
   transaction as the change. `log list` / `log show` answer "what changed".
+- **`story order`** reports a beat sequence that is not a dense `1..N`, naming
+  both the holes and the positions two rows are fighting over. Scenes and clips
+  are renumbered on every write; beats deliberately are not, because the web UI
+  is allowed to leave gaps. That tolerance would otherwise hide a mistake
+  forever — `story list` cannot show a hole, since "beat 3 is absent" looks the
+  same as "the story ends here".
 - **opencode skill** at `skills_opencode/calliope/SKILL.md`.
 
 ## Drift: read → hash → write
