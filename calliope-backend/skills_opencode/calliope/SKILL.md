@@ -210,9 +210,89 @@ accepted empty form — it means "unset".
 
 `clip_path`, `workflow_id`, `video_settings_json`, `chain_from_prev`,
 `video_node_id`, `render_status`, `portrait_path` (from a payload), and every
-`id` / `order_index`-internal bookkeeping column are rejected with exit 2. Those
-belong to the render pipeline. If you need one changed, the user does it in the
-web UI.
+bookkeeping column a payload has no business naming — `id`, `project_id`,
+`created_at`, `scene_id` — are rejected with exit 2. Those belong to the render
+pipeline or to the CLI's own addressing. If you need one changed, the user does
+it in the web UI.
+
+`order_index` is the awkward one: `schema show` lists it for every group, but
+only **beats** honour it. Scenes and clips take it and overwrite it with a dense
+append order. See the two sections below before sending one.
+
+## If another skill did the novel conversion
+
+The common shape of this work: some third-party skill turns the novel into an
+intermediate artifact, and you then write that into Calliope. Fully supported.
+One rule covers it:
+
+> **The intermediate artifact's shape is your problem. Calliope's shape belongs
+> to `schema`.**
+
+That skill may emit markdown, its own JSON, prose — anything. The CLI has never
+heard of its format and will not try to. Ask the CLI for the shape, then convert
+in your own context:
+
+```bash
+# 1. ask what the shape is -- never infer it from the upstream output,
+#    and never reverse-engineer it from what `get` happens to return
+calliope-cli schema show story replace-range
+calliope-cli schema validate --group story --verb replace-range --file beats.json
+
+# 2. fingerprint the rows you are about to overwrite
+calliope-cli project hash --project 7 --json
+
+# 3. dry-run first: it prints both sides plus the invariant preflight
+calliope-cli story replace-range --project 7 --from-index 1 --to-index 999 \
+    --file beats.json --expect-hash <story_beats hash> --dry-run
+
+# 4. same line without --dry-run
+```
+
+**Do not hand the upstream artifact to `--file` unchanged.** Four habits it
+reliably has are all caught, and catching them is the design working, not an
+obstacle to route around:
+
+| Upstream habit | What the CLI says |
+| --- | --- |
+| a character name that is not in the cast | exit 2, naming it: `unknown character '安'; write it with \`cast upsert --kind character\` first` |
+| `"closeup"` | exit 2 — the list is closed and case-exact (see above) |
+| `dialog_lines_covered` as `"12,14"` | exit 2 — it is a list of ints |
+| `id` / `project_id` / `created_at` in the payload | exit 2 — those are the CLI's to set |
+
+So when a write comes back exit 2, **fix the conversion, not the CLI.** There is
+no flag to loosen validation and there will not be one: a payload that reached
+the database half-converted would look like a success that silently did nothing.
+
+**One upstream habit gets through, so watch it yourself: `order_index`.** It is
+listed in `schema show` for every group, so an artifact that carries positions
+looks perfectly valid — and the three groups then disagree about what it means:
+
+| Group | an explicit `order_index` | what tells you |
+| --- | --- | --- |
+| `story` (beats) | **honoured**, stored as sent | `story order` reports the hole afterwards |
+| `script` (scenes) | **overwritten** with a dense append order | nothing |
+| `clips` | **overwritten** with a dense order within the scene | nothing |
+
+An upstream artifact numbered `1, 3, 7` therefore becomes three beats at `1, 3,
+7` with holes `2, 4, 5, 6` — not a rejection, and not what a dense list would
+have been. After writing beats, run `story order --project 7 --json` and read the
+holes and duplicates. For scenes and clips the safest move is to strip
+`order_index` from the artifact during conversion and let append order speak.
+
+**Compatibility is a property of the CLI boundary, not of this skill.** Whatever
+the upstream produced — valid, nearly valid, or prose — either it validates or it
+never enters the database.
+
+**Do not route `[CARRY]` constraints through the third-party skill.** It rewrites
+descriptions, reorders, and "improves" copy; constraint lines do not survive
+that. Append them *after* conversion, or accept that upstream has no idea the
+constraint exists.
+
+One thing the CLI being used instead of the built-in generators means: those
+generators **refuse** a source text over 2,000 characters (exit 422), because
+they would spend a real call on text they cannot use and return beats that
+quietly ignore it. Nothing here refuses — writing a novel's worth of beats is
+the point.
 
 ## Per-clip continuity: the `[CARRY]` block
 
@@ -245,8 +325,9 @@ calliope-cli clips list --project 7 --scene 3 --json
 
 ## Ordering and renumbering
 
-`story append` and `script append` renumber to a dense `1..N`. There are no gaps
-and `order_index` always matches position, so you never have to compute it.
+`script append` and `clips append` renumber to a dense `1..N`. There are no gaps
+and `order_index` always matches position, so you never have to compute it — and
+if you send one anyway, it is overwritten rather than honoured.
 
 - `replace-range --from-index A --to-index B` replaces that inclusive slice and
   renumbers. An **empty** replacement is rejected — use `update` to delete a row.
@@ -259,8 +340,12 @@ that correctly and hands you the scene ids in `targets`.
 ### Beats are the one exception
 
 Scenes and clips are forced dense. **Beats are not**, because the web UI is also
-allowed to leave a gap and a half-written beat list is normal mid-project. So
-`story list` can legitimately come back with `1, 2, 4` — and `story append`
+allowed to leave a gap and a half-written beat list is normal mid-project. A beat
+may also *land* on a position you chose — `order_index: 9` in a `story append`
+payload is stored as 9, and the next untargeted beat follows it to 10, so one
+invented number leaves `2..8` missing.
+
+So `story list` can legitimately come back with `1, 9, 10`, and `story append`
 extends from the tail, which means the gap does not heal itself.
 
 ```bash

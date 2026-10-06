@@ -40,6 +40,46 @@ never touches images or video, and never deletes anything.
   same as "the story ends here".
 - **opencode skill** at `skills_opencode/calliope/SKILL.md`.
 
+## Storing a novel in the same field as a pitch
+
+`projects.idea` holds both the logline the built-in generators were written
+against and, now, the novel `calliope-cli` writes into. One column, two
+meanings, and three consequences:
+
+- **The built-in generators refuse a novel.** Past 2,000 characters
+  `generate-story` and `generate-script` return 422 and say to use the CLI —
+  checked *before* the prompt is built, so a refusal costs nothing. They would
+  otherwise spend a real call on 34k characters the model cannot use, and
+  return beats that quietly ignore the novel. Truncating would hide that;
+  refusing is the honest version. The threshold is the repository's own
+  (`workspace.py`'s existing `project_idea_large` warning), not a new number.
+- **The continuity planner skips the model instead of refusing.** It runs
+  inside the render loop, so raising there would break rendering for exactly
+  the projects this feature exists to serve. It already falls back to a
+  board-derived plan when the model is unavailable; a long `idea` now selects
+  that fallback on purpose. That is also the better answer — the plan describes
+  the board, which is what the ledger is supposed to describe.
+- **`expand-clips` is deliberately not guarded.** It never reads `idea`, so
+  guarding it would block a working operation in exchange for nothing. "Break
+  into shots" stays available on a CLI-authored board; it is how a user refines
+  shots without giving up the text they wrote.
+
+A **project list no longer ships the novels**. Both `GET /api/projects` and
+`calliope-cli project list` return the first 200 characters as `idea_preview`
+and null out `idea`; the single-project responses still carry the full text,
+because that is the one an editor loads and edits. The list is the response
+that grows with (projects × novel length) and reloads on every visit, so four
+long-form projects was already 400KB+ of JSON for a description the card clamps
+to two lines. Search now covers the preview — unchanged for every logline
+project, whose preview *is* the whole text.
+
+The web UI **hides the two generate buttons** ("Draft storyline", "Regenerate
+script") on an `ingest_mode='external'` project, replacing them with a one-line
+explanation in all seven locales rather than leaving a dead button that cannot
+say why. Length and `ingest_mode` are complementary signals: the web form has
+no mode control, so a novel pasted there is still `builtin` and still gets the
+422.
+
 ## Drift: read → hash → write
 
 The user edits in the web UI while a tool is working. A write built on a read
