@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from calliope.agent.idea_guard import skip_reason
 from calliope.agent.llm import LLMClient, extract_json
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
@@ -485,6 +486,19 @@ async def ensure_continuity_plan(
 
     A dead model falls back to a deterministic plan. The call never raises for
     model failures.
+
+    A long ``projects.idea`` takes the same fallback, but deliberately rather
+    than by accident. This runs inside the render loop
+    (``video_agent.py``), so raising here would break rendering for exactly the
+    projects the CLI bridge exists to serve -- the user's own next step after
+    opencode authors the content. Skipping the model is also the correct answer
+    rather than merely the safe one: ``_board_digest`` would paste the whole
+    novel into the prompt, so the plan would describe a novel the model only
+    partially read. The board plan describes the board, which is what the
+    ledger is supposed to describe anyway.
+
+    A ``force=True`` refresh is treated the same way. Forcing past a guard
+    would be the caller asking for a worse plan at full price.
     """
     board = load_board(project_id)
     basis = basis_hash(board, live_refs)
@@ -492,6 +506,14 @@ async def ensure_continuity_plan(
     if stored and not force and stored.get("based_on") == basis:
         stored["refreshed"] = False
         return stored
+    guard = skip_reason(board)
+    if guard:
+        logger.info("Continuity plan: %s", guard)
+        plan = deterministic_plan(board)
+        plan["based_on"] = basis
+        plan["refreshed"] = True
+        _persist(project_id, plan)
+        return plan
     try:
         plan = normalize_plan(await _llm_plan(board), board)
     except Exception as exc:

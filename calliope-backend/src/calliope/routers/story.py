@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from calliope.agent.idea_guard import LongSourceText, refuse_long_idea
 from calliope.agent.llm import generate_structured
 from calliope.agent.prompts import (
     STORY_GENERATION_SYSTEM,
@@ -253,6 +254,12 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
     try:
         project = _require_project(conn, project_id)
 
+        # Before any prompt is built, so a refusal costs no tokens. This is the
+        # one built-in generator that would overwrite a CLI-authored beat list
+        # (`replace=True` deletes story_beats/cast), so the burn is the smaller
+        # half of the problem.
+        refuse_long_idea(project, generator="storyline generator")
+
         required_beats = recommend_beat_count(project.get("target_duration"))
         await event_bus.publish(
             "agent.thinking",
@@ -428,6 +435,12 @@ async def generate_story(project_id: int, replace: bool = True) -> dict[str, Any
         }
     except HTTPException:
         raise
+    except LongSourceText as exc:
+        # A refusal, not a failure. 422 with no traceback and no
+        # "Story draft failed" -- the caller asked for something the guard has
+        # already explained, and logging a stack trace for it would train
+        # everyone to ignore the log.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Story generation failed for project %s", project_id)
         await event_bus.publish(

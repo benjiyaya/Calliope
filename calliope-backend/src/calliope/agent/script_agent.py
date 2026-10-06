@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from calliope.agent.idea_guard import refuse_long_idea
 from calliope.agent.llm import generate_structured
 from calliope.agent.prompts import (
     build_script_chunk_messages,
@@ -212,6 +213,11 @@ async def generate_script(
         if not project:
             raise ValueError("Project not found")
         p = row_to_dict(project)
+        # Before the first chunk prompt. LongSourceText is a ValueError, so the
+        # existing router branch already turns it into 422 -- and unlike that
+        # branch's substring heuristic it cannot be misread, because the message
+        # never contains "not found".
+        refuse_long_idea(p, generator="script generator")
         beats = [
             row_to_dict(r)
             for r in conn.execute(
