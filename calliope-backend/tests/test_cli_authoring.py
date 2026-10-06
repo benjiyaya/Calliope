@@ -246,7 +246,14 @@ def test_fresh_expect_hash_is_accepted(env):
 
 
 def test_expect_hash_is_optional(env):
-    """Appending has no earlier state to drift from, so it does not need one."""
+    """Passing no fingerprint at all is still a valid choice: ``_guard``
+    compares only when given something to compare against.
+
+    (The old rationale here read "Appending has no earlier state to drift
+    from", which is wrong -- a caller that chose its ``order_index`` from a
+    read has exactly such a state. Wrong rationale, so the stale case was
+    never asserted and ``story append`` shipped accepting ``--expect-hash``
+    without comparing it.)"""
     p = env["payload"]("b.json", [{"title": "B1"}])
     code, _, err = env["json"](
         "story", "append", "--project", env["project_id"], "--file", p
@@ -274,6 +281,58 @@ def test_preflight_catches_a_row_added_inside_the_scope(env):
                                "--file", p, "--expect-hash", seen)
     assert code == 3
     assert "changed since you read it" in err
+
+
+def test_stale_expect_hash_is_refused_on_story_append(env):
+    """SKILL.md shows ``story append --expect-hash`` twice and labels it
+    ``# 4. write, guarded``. The flag is offered on every verb, so a caller
+    following the skill must get the protection its help text promises -- not
+    an exit 0 that means nothing was checked."""
+    from calliope.authoring.hash import hash_rows, scope_digest
+
+    conn = env["conn"]
+    seen = scope_digest(hash_rows(conn, "story_beats", project_id=env["project_id"]))
+    # The web UI lands a row after the caller took its fingerprint.
+    conn.execute(
+        "INSERT INTO story_beats (project_id, order_index, title) VALUES (?, 1, 'UI')",
+        (env["project_id"],),
+    )
+    conn.commit()
+
+    code, _, err = env["json"](
+        "story", "append", "--project", env["project_id"],
+        "--file", env["payload"]("b.json", [{"title": "B1"}]),
+        "--expect-hash", seen,
+    )
+    assert code == 3, err
+    assert "changed since you read it" in err
+    rows = conn.execute(
+        "SELECT title FROM story_beats WHERE project_id = ?", (env["project_id"],)
+    ).fetchall()
+    assert [r["title"] for r in rows] == ["UI"]
+
+
+def test_stale_expect_hash_is_refused_on_script_append(env):
+    """The same verb class on the other group: ``script append`` accepts the
+    flag, so it has to compare it too."""
+    from calliope.authoring.hash import hash_rows, scope_digest
+
+    conn = env["conn"]
+    seen = scope_digest(hash_rows(conn, "scenes", project_id=env["project_id"]))
+    env["json"]("script", "append", "--project", env["project_id"],
+                "--file", env["payload"]("a.json", [{"heading": "S1"}]))
+
+    code, _, err = env["json"](
+        "script", "append", "--project", env["project_id"],
+        "--file", env["payload"]("b.json", [{"heading": "S2"}]),
+        "--expect-hash", seen,
+    )
+    assert code == 3, err
+    assert "changed since you read it" in err
+    n = conn.execute(
+        "SELECT COUNT(*) AS c FROM scenes WHERE project_id = ?", (env["project_id"],)
+    ).fetchone()["c"]
+    assert n == 1
 
 
 # -- project hash: making the guard reachable -----------------------------

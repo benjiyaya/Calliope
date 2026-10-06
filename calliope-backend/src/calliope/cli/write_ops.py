@@ -134,6 +134,10 @@ def _story_append(ctx: CliContext, args: Any) -> Any:
     beats = validate_payload("story", "append", load_payload(args.file))
 
     def write(conn: sqlite3.Connection, entry: AuditEntry) -> Any:
+        # Guarded like every other write that carries an explicit scope: the
+        # caller read order_index before choosing it, so a row the web UI landed
+        # in between would be over-written onto a position that is now taken.
+        _guard(conn, table="story_beats", project_id=pid, expected=args.expect_hash)
         ids = beats_mod.append_beats(conn, pid, beats)
         for beat_id, beat in zip(ids, beats):
             entry.note(op="insert", table="story_beats", row_id=beat_id,
@@ -248,6 +252,7 @@ def _script_append(ctx: CliContext, args: Any) -> Any:
     scenes = validate_payload("script", "append", load_payload(args.file))
 
     def write(conn: sqlite3.Connection, entry: AuditEntry) -> Any:
+        _guard(conn, table="scenes", project_id=pid, expected=args.expect_hash)
         ids = script_mod.append_scenes(conn, pid, scenes)
         script_mod.assert_invariants(conn, pid)
         for scene_id, scene in zip(ids, scenes):

@@ -105,6 +105,26 @@ hold the content have no `updated_at` column at all, so there is no timestamp to
 compare. Refusal is **exit 3**, distinct from exit 2 (your payload is wrong) —
 the fix is to re-read and re-apply, not to retry the same payload.
 
+**Correction (2026-10-06, found during real-machine acceptance).** `story append`
+and `script append` shipped offering `--expect-hash` while never comparing it, so
+the example above returned **exit 0** on a stale fingerprint and protected
+nothing. The guard was wired into `update`, `replace`/`replace-range`,
+`project set` and `clips append`, and simply never called by the two `append`s —
+`clips append` guarding is what shows this was an oversight rather than a
+deliberate split. Both now compare it like every other write.
+
+The suite did not catch it because it asserted the opposite rationale
+(*"Appending has no earlier state to drift from"*), which holds only when the
+caller omits `order_index` and lets the server pick `max + 1`; a caller that
+chooses a position from a read has exactly such a state, and that is the flow the
+skill documents.
+
+Still open, and deliberately not bundled into that fix: `cast upsert` and
+`context set` accept the flag without comparing it. `context set` says why in the
+source (the preflight would hash the whole source text to set four short
+strings); `cast upsert` has no stated reason and one hash cannot cover the three
+tables it may touch.
+
 ## Boundaries — not configurable
 
 - **The CLI cannot delete a project.** No `delete` verb, no flag that enables
