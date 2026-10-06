@@ -64,6 +64,12 @@
 	let search = $state('');
 	let filter = $state('all');
 
+	// 2000 is the backend's own threshold (`agent/idea_guard.py`), restated as a
+	// literal because a form that only discovers the limit on submit is a form
+	// that lies. The backend stays the authority -- this only warns, and a
+	// project created this way is still `builtin` and so still gets the 422.
+	const ideaTooLong = $derived(idea.length > 2000);
+
 	function onCreate(e: Event) {
 		e.preventDefault();
 		if (!title.trim()) return;
@@ -159,7 +165,13 @@
 					placeholder={t('projects.ideaPlaceholder')}
 					rows={4}
 				></textarea>
-				<p class="field-hint">{t('projects.ideaHint')}</p>
+				<p class="field-hint">
+					{t('projects.ideaHint')}
+					<span class="idea-count">{t('projects.ideaCount', { count: idea.length })}</span>
+				</p>
+				{#if ideaTooLong}
+					<p class="field-warn">{t('projects.ideaTooLong')}</p>
+				{/if}
 			</label>
 
 			<div class="form-grid">

@@ -80,6 +80,8 @@ export const es: Dict = {
 	'projects.ideaField': 'Idea de la historia',
 	'projects.ideaPlaceholder': 'Un farero encuentra una botella brillante que muestra recuerdos de marineros perdidos en el mar…',
 	'projects.ideaHint': 'Opcional. Una idea breve funciona con los generadores integrados. Una novela entera también cabe aquí, pero esa escríbela con calliope-cli.',
+	'projects.ideaCount': '{n} caracteres',
+	'projects.ideaTooLong': 'Pasados los 2.000 caracteres, los generadores integrados rechazarán este proyecto. Escribe los beats, el reparto y las escenas con calliope-cli.',
 	'projects.genre': 'Género',
 	'projects.tone': 'Tono',
 	'projects.duration': 'Duración objetivo',

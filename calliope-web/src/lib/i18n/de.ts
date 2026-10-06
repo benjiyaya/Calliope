@@ -80,6 +80,8 @@ export const de: Dict = {
 	'projects.ideaField': 'Story-Idee',
 	'projects.ideaPlaceholder': 'Ein Leuchtturmwärter findet eine leuchtende Flasche, die Erinnerungen an auf See verlorene Seeleute zeigt…',
 	'projects.ideaHint': 'Optional. Ein Pitch funktioniert mit den eingebauten Generatoren. Ein ganzer Roman passt ebenfalls hierher — den aber mit calliope-cli schreiben.',
+	'projects.ideaCount': '{n} Zeichen',
+	'projects.ideaTooLong': 'Über 2.000 Zeichen verweigern die eingebauten Generatoren. Beats, Figuren und Szenen stattdessen mit calliope-cli schreiben.',
 	'projects.genre': 'Genre',
 	'projects.tone': 'Tonfall',
 	'projects.duration': 'Zieldauer',

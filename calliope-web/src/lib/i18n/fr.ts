@@ -80,6 +80,8 @@ export const fr: Dict = {
 	'projects.ideaField': "Idée d'histoire",
 	'projects.ideaPlaceholder': 'Un gardien de phare découvre une bouteille lumineuse qui montre les souvenirs de marins perdus en mer…',
 	'projects.ideaHint': "Facultatif. Un pitch fonctionne avec les générateurs intégrés. Un roman complet passe aussi ici — mais écrivez-le avec calliope-cli.",
+	'projects.ideaCount': '{n} caractères',
+	'projects.ideaTooLong': 'Au-delà de 2 000 caractères, les générateurs intégrés refuseront ce projet. Écrivez les beats, le casting et les scènes avec calliope-cli.',
 	'projects.genre': 'Genre',
 	'projects.tone': 'Ton',
 	'projects.duration': 'Durée cible',

@@ -80,6 +80,8 @@ export const ja: Dict = {
 	'projects.ideaField': 'ストーリーのアイデア',
 	'projects.ideaPlaceholder': '灯台守が、海で失われた船乗りたちの記憶を映す光る瓶を見つける…',
 	'projects.ideaHint': '任意 — 短い企画なら組み込みの生成器をそのまま使えます。小説全体が貼り付けられるのも同じ場所ですが、その場合は calliope-cli で執筆してください。',
+	'projects.ideaCount': '{n} 文字',
+	'projects.ideaTooLong': '2000 文字を超えると組み込みの生成器はこのプロジェクトを拒否します。beats・登場人物・シーンは calliope-cli で執筆してください。',
 	'projects.genre': 'ジャンル',
 	'projects.tone': 'トーン',
 	'projects.duration': '目標の長さ',

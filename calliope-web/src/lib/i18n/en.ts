@@ -79,6 +79,8 @@ export const en = {
 	'projects.ideaPlaceholder':
 		'A lighthouse keeper finds a glowing bottle that shows memories of sailors lost at sea…',
 	'projects.ideaHint': 'Optional. A pitch works with the built-in generators. A whole novel fits here too — but author that one with calliope-cli.',
+	'projects.ideaCount': '{n} characters',
+	'projects.ideaTooLong': 'Past 2,000 characters the built-in generators will refuse this. Author beats, cast and scenes with calliope-cli instead.',
 	'projects.genre': 'Genre',
 	'projects.tone': 'Tone',
 	'projects.duration': 'Target duration',

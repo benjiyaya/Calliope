@@ -80,6 +80,8 @@ export const ko: Dict = {
 	'projects.ideaField': '스토리 아이디어',
 	'projects.ideaPlaceholder': '등대지기가 바다에서 사라진 선원들의 기억을 보여주는 빛나는 병을 발견한다…',
 	'projects.ideaHint': '선택 사항 — 짧은 피치라면 내장 생성기를 그대로 쓸 수 있습니다. 소설 전체를 넣을 수 있는 곳도 여기지만, 그 내용은 calliope-cli로 작성하세요.',
+	'projects.ideaCount': '{n}자',
+	'projects.ideaTooLong': '2,000자를 넘으면 내장 생성기가 이 프로젝트를 거부합니다. 비트·등장인물·장면은 calliope-cli로 작성하세요.',
 	'projects.genre': '장르',
 	'projects.tone': '분위기',
 	'projects.duration': '목표 길이',

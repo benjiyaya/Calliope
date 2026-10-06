@@ -80,6 +80,14 @@ say why. Length and `ingest_mode` are complementary signals: the web form has
 no mode control, so a novel pasted there is still `builtin` and still gets the
 422.
 
+The new-project form therefore **counts the story-idea characters and warns at
+the guard's own threshold**: at 2,000 the hint grows a line saying what will
+happen and what to do instead. Otherwise the hint promises a novel fits and then
+reports the failure as a 422 from a button three screens away, with nothing
+saying the character count was why. The backend stays the authority — a project
+created from this form is still `builtin` and must still get the 422 rather than
+quietly becoming `external`.
+
 ## Drift: read → hash → write
 
 The user edits in the web UI while a tool is working. A write built on a read

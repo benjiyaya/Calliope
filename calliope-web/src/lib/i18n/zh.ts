@@ -80,6 +80,8 @@ export const zh: Dict = {
 	'projects.ideaField': '故事创意',
 	'projects.ideaPlaceholder': '一位灯塔看守人发现了一个发光的瓶子，里面映照着葬身大海的水手们的记忆……',
 	'projects.ideaHint': '可选。一句话创意可以直接用内置生成器；整本小说也可以贴在这里，但那种请用 calliope-cli 写内容。',
+	'projects.ideaCount': '{n} 字',
+	'projects.ideaTooLong': '超过 2000 字后，内置生成器会拒绝这个项目。请改用 calliope-cli 写 beats、角色和场景。',
 	'projects.genre': '类型',
 	'projects.tone': '基调',
 	'projects.duration': '目标时长',
