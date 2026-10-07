@@ -306,7 +306,9 @@ def test_preview_returns_critic_notes(client, monkeypatch):
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
-    result = asyncio.run(preview_clip_prompt(pid, clip_id))
+    # The critic runs only after an explicit LLM rewrite (force) — never on
+    # the instant paths.
+    result = asyncio.run(preview_clip_prompt(pid, clip_id, force=True))
     assert result["prompt"] == "COMPILED CANDIDATE"
     assert result["critic"]["ok"] is False
     assert result["critic"]["notes"] == ["lighting contradicts the previous shot"]
@@ -345,7 +347,7 @@ def test_failing_critic_keeps_the_compiled_prompt(client, monkeypatch):
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
-    result = asyncio.run(preview_clip_prompt(pid, clip_id))
+    result = asyncio.run(preview_clip_prompt(pid, clip_id, force=True))
     assert result["prompt"] == "COMPILED CANDIDATE"
     assert result["critic"]["ok"] is False
     assert "judge down" in result["critic"]["notes"][0]
@@ -416,34 +418,71 @@ def test_failing_critic_keeps_a_saved_draft(client, monkeypatch):
                 clip_id,
             ),
         )
+        # The stored continuity plan (written by an earlier forced preview or
+        # the refresh tool) is what the instant paths hash drafts against.
+        conn.execute(
+            "UPDATE projects SET continuity_json = ? WHERE id = ?",
+            (json.dumps({"based_on": "planhash", "shots": []}), pid),
+        )
         conn.commit()
     finally:
         conn.close()
-
-    async def fake_plan(project_id, **kwargs):
-        return {
-            "based_on": "planhash",
-            "overview": {},
-            "requirements": {},
-            "shots": [],
-            "refreshed": False,
-        }
 
     async def fake_rewrite(self_, scene_, subjects, **kwargs):
         raise AssertionError("fresh draft must skip the compiler")
 
     async def fake_critic(prompt, plan, clip_id_):
-        raise RuntimeError("judge down")
+        raise AssertionError("the critic must not run on the draft path")
 
-    monkeypatch.setattr("calliope.agent.video_agent.ensure_continuity_plan", fake_plan)
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
     monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", fake_critic)
 
     result = asyncio.run(preview_clip_prompt(pid, clip_id))
     assert result["prompt"] == "MY SAVED DRAFT"
     assert result["from_draft"] is True
-    assert result["critic"]["ok"] is False
-    assert "judge down" in result["critic"]["notes"][0]
+    assert result["critic"] == {"ok": True, "notes": []}
+
+
+def test_default_preview_is_deterministic_and_form_prompt_wins(client, monkeypatch):
+    """The instant paths never call the LLM: no rewrite, no critic, no ledger refresh.
+
+    A prompt typed on the clip form wins verbatim over the deterministic
+    template; with an empty form the six-section template compiles instantly.
+    """
+    from calliope.agent.video_agent import preview_clip_prompt
+
+    pid = _mk_project(client, "Instant")
+    scene = _add_scene(client, pid, 1, action="She waits by the window.")
+    clip_id = _clip_id(pid, scene["id"])
+    conn = get_db(settings.db_path)
+    try:
+        wf_id = _insert_h3(conn, "H3 instant")
+        conn.execute("UPDATE clips SET workflow_id = ? WHERE id = ?", (wf_id, clip_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("LLM must not be called on the default preview path")
+
+    monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", boom)
+    monkeypatch.setattr("calliope.agent.video_agent.critique_prompt", boom)
+    monkeypatch.setattr("calliope.agent.video_agent.ensure_continuity_plan", boom)
+
+    result = asyncio.run(preview_clip_prompt(pid, clip_id))
+    assert result["from_draft"] is False
+    assert "subject_definitions:" in result["prompt"]
+    assert "[Shot 1]" in result["prompt"]
+    assert "She waits by the window." in result["prompt"]
+    assert result["critic"] == {"ok": True, "notes": []}
+
+    # The user's own typed prompt text is sent verbatim.
+    typed = "<video 1>~ to extend video continue :\nThe camera drifts down."
+    typed_result = asyncio.run(
+        preview_clip_prompt(pid, clip_id, input_values={"10": typed})
+    )
+    assert typed_result["prompt"] == typed
+    assert typed_result["from_draft"] is False
 
 
 def test_refresh_tool_is_on_the_script_role(client, monkeypatch):

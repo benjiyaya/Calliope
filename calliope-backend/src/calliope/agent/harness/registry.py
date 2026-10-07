@@ -46,6 +46,11 @@ _SCENE_ALLOWED_TOOLS = {
 GUARD_NO_EXPORT_VIDEO_TOOL = "guard_no_export_video_tool"
 EXPORT_VIDEO_DENIED_NAMES = frozenset({"export_video", "exportVideo"})
 
+# Workspace file tools (plugins/files.py) path containment — defined here like
+# GUARD_SCENE_TOOL_SCOPE to avoid a circular import; re-exported from the
+# package for the contracts exporter.
+GUARD_WORKSPACE_PATH = "guard_workspace_path"
+
 
 def _tool_timeout_sec() -> float:
     """Wall-clock cap for one agent tool call: Settings → Queue → Timeout.

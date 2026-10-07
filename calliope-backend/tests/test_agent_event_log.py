@@ -700,6 +700,83 @@ def test_project_user_content_large_image_attachment_still_becomes_image_part(
     assert len(url) <= 700_000  # ~512 KB budget + base64 overhead
 
 
+def test_project_user_content_small_bytes_but_4k_image_is_resized(tmp_path, monkeypatch):
+    """The vision gate is dimensions, not just bytes.
+
+    A 4K image that compresses under the 512 KB budget (WebP, hard-squeezed
+    JPEG) used to be sent at full resolution — cloud vision APIs tile by
+    PIXELS, so it cost ~8-20x the vision tokens of a 1024px image and made
+    every vision request crawl. Widths beyond the cap must re-encode, even
+    when the file itself is tiny.
+    """
+    import io
+
+    from PIL import Image
+
+    from calliope.agent.harness import log as session_log
+    from calliope.config import settings as cfg
+
+    img_path = tmp_path / "huge-4k.webp"
+    # 3840x2160 flat color → WebP compresses far under the byte budget while
+    # keeping full 4K dimensions (the exact slip-through case).
+    Image.new("RGB", (3840, 2160), (30, 60, 90)).save(img_path, format="WEBP")
+    assert img_path.stat().st_size <= 512_000, "test image must be under the byte budget"
+    monkeypatch.setattr(cfg, "assets_dir", tmp_path)
+
+    url = session_log._image_attachment_data_url(str(img_path))
+    assert url, "4K image degraded to a text path line"
+    assert url.startswith("data:image/jpeg;base64,"), "4K image was passed through unresized"
+    # Decode the base64 payload back into an image to measure it.
+    import base64 as b64
+    import io as _io
+
+    raw = _io.BytesIO(b64.b64decode(url.split(",", 1)[1]))
+    with Image.open(raw) as out:
+        assert max(out.width, out.height) <= 1024, (
+            f"long edge still {out.width}x{out.height} — 4K slipped through"
+        )
+
+
+def test_vision_data_url_cached_until_file_changes(tmp_path, monkeypatch):
+    """History is re-derived before every step of a turn — the encoded data
+    URL must come from the cache, not a fresh 4K decode+encode, until the
+    file actually changes (mtime/size)."""
+    from PIL import Image
+
+    from calliope.agent.harness import log as session_log
+    from calliope.config import settings as cfg
+
+    img_path = tmp_path / "ref.png"
+    Image.new("RGB", (4000, 2000), (10, 10, 10)).save(img_path, format="PNG")
+    monkeypatch.setattr(cfg, "assets_dir", tmp_path)
+
+    calls = {"n": 0}
+    real_downscale = session_log._downscale_image
+
+    def counting(target, mime):
+        calls["n"] += 1
+        return real_downscale(target, mime)
+
+    monkeypatch.setattr(session_log, "_downscale_image", counting)
+
+    first = session_log._image_attachment_data_url(str(img_path))
+    assert first and calls["n"] == 1
+    # Same file again (next step of the turn): served from cache.
+    second = session_log._image_attachment_data_url(str(img_path))
+    assert second == first and calls["n"] == 1
+
+    # File edited → new mtime/size → cache invalidated, re-encoded once.
+    import os
+    import time
+
+    stat_before = img_path.stat()
+    os.utime(img_path, (time.time(), time.time() + 5))
+    assert img_path.stat().st_mtime_ns != stat_before.st_mtime_ns
+    third = session_log._image_attachment_data_url(str(img_path))
+    assert calls["n"] == 2
+    assert third  # still a usable data URL
+
+
 def test_project_user_content_document_attachment_becomes_script_text(tmp_path, monkeypatch):
     """.txt/.md/.docx attachments are read and injected between delimiters —
     the script-upload path. Degradation mirrors image/video handling."""

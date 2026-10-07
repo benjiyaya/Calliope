@@ -160,9 +160,8 @@ class SceneUpdate(BaseModel):
     character_ids: list[int] | None = None
     location_id: int | None = None
     video_path: str | None = None
-    chain_from_prev: bool | None = None
-    # Persisted video-stage setup: form input_values, clip source, prompt
-    # draft + metadata. Serialized into scenes.video_settings_json.
+    # Persisted video-stage setup: form input_values, prompt draft + metadata.
+    # Serialized into scenes.video_settings_json.
     video_settings: dict[str, Any] | None = None
 
 
@@ -177,7 +176,6 @@ class ClipCreate(BaseModel):
     dialog_lines_covered: list[int] | None = None
     duration_sec: int | None = None
     workflow_id: int | None = None
-    chain_from_prev: bool = False
     video_settings: dict[str, Any] | None = None
 
 
@@ -189,7 +187,6 @@ class ClipUpdate(BaseModel):
     duration_sec: int | None = None
     workflow_id: int | None = None
     clip_path: str | None = None
-    chain_from_prev: bool | None = None
     video_settings: dict[str, Any] | None = None
 
 
@@ -290,4 +287,6 @@ class BatchPromptRequest(BaseModel):
     input_values: dict[str, Any] | None = None
     only_missing: bool = False
     save: bool = True
-    force: bool = True
+    # Default false: compile = the instant deterministic template. force=true
+    # asks the LLM for a fresh rewrite per clip (slow — one call per clip).
+    force: bool = False

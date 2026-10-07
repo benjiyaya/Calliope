@@ -50,6 +50,13 @@ def test_script_regenerate_keeps_expanded_count(client, monkeypatch):
         }
 
     monkeypatch.setattr("calliope.agent.script_agent.generate_structured", fake_structured)
+    # generate_script now also breaks the fresh board into shot clips
+    # (with_clips=True) — the coverage agent makes its own LLM calls and must
+    # be stubbed too, or the test leaks a real HTTP request.
+    async def fake_coverage(project_id, scene_ids, **kwargs):
+        return {"scenes": [{"scene_id": sid, "clips": 1} for sid in scene_ids]}
+
+    monkeypatch.setattr("calliope.agent.coverage_agent.expand_scene_coverage", fake_coverage)
 
     r = client.post("/api/projects", json={"title": "Expand", "idea": "desert", "target_duration": "30 seconds"})
     pid = r.json()["id"]

@@ -7,7 +7,8 @@ Two things the settings page needs and nothing else in Calliope had:
    process fronts several GGUFs and reports each model's capabilities
    (``architecture.input_modalities`` for vision, ``status.args`` for the
    effective ``--reasoning-effort`` / ``--ctx-size``) — all as plain GETs, with
-   nothing loaded.
+   nothing loaded. vLLM-style servers (vLLM, oMLX) report the served window as
+   ``max_model_len`` on each OpenAI ``/v1/models`` entry instead.
 2. **Does the endpoint actually answer, and does thinking take effect?** One
    short completion with the requested thinking setting applied. This is what
    turns a mis-typed model name into an immediate, readable error instead of a
@@ -84,6 +85,13 @@ def _as_int(value: str | None) -> int | None:
         return None
 
 
+def _positive_int(value: Any) -> int | None:
+    """A JSON integer above zero, else None (bools are not integers here)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
 def _model_row(raw: Any) -> dict[str, Any] | None:
     """One `/models` entry -> a flat row the UI can render."""
     if isinstance(raw, str):
@@ -123,6 +131,11 @@ def _model_row(raw: Any) -> dict[str, Any] | None:
         ctx = _as_int(flags.get(flag))
         if ctx is not None:
             break
+    if ctx is None:
+        # vLLM's ModelCard field, also served by oMLX: the window the server
+        # accepts. llama.cpp's --ctx-size, when present, is the configured one
+        # and wins.
+        ctx = _positive_int(raw.get("max_model_len"))
 
     loaded = status.get("value")
     return {

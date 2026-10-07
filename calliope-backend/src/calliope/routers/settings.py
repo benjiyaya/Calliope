@@ -74,6 +74,7 @@ class SettingsUpdate(BaseModel):
     llm_chars_per_token: float | None = Field(None, ge=0.5, le=8.0)
     llm_max_output_tokens: int | None = Field(None, ge=0, le=200_000)
     h3_rewrite_extra_body: dict[str, Any] | None = None
+    h3_rewrite_vision: bool | None = None
     dry_run: bool | None = None
 
 
@@ -181,6 +182,9 @@ async def update_settings(payload: SettingsUpdate) -> dict[str, Any]:
             setattr(settings, key, bool(value))
             continue
         if key == "agent_shell_enabled":
+            setattr(settings, key, bool(value))
+            continue
+        if key == "h3_rewrite_vision":
             setattr(settings, key, bool(value))
             continue
         setattr(settings, key, value)

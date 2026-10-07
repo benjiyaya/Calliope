@@ -80,6 +80,18 @@ class _ScriptedClient:
             return self._responses.pop(0)
         return {"role": "assistant", "content": "done", "tool_calls": []}
 
+    async def chat_stream(self, messages, temperature=0.4, tools=None, **kwargs):
+        self.seen_messages.append(list(messages))
+        if self._responses:
+            msg = self._responses.pop(0)
+        else:
+            msg = {"role": "assistant", "content": "done", "tool_calls": []}
+        if msg.get("content"):
+            yield {"type": "delta", "content": msg["content"]}
+        for tc in msg.get("tool_calls") or []:
+            yield {"type": "tool_call", "tool_call": tc}
+        yield {"type": "done"}
+
     async def close(self):
         pass
 

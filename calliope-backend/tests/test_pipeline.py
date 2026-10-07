@@ -84,6 +84,77 @@ def test_patch_workflow_no_fuzzy_fallback():
     assert patched["7"]["inputs"]["aspect_ratio"] == "16:9"
 
 
+def test_patch_boolean_false_overrides_primitive_default():
+    """A real false, and the string "false", must replace PrimitiveBoolean true."""
+    wf = {
+        "12": {
+            "inputs": {"value": True},
+            "class_type": "PrimitiveBoolean",
+            "_meta": {"title": "PE (Input:pe_enabled)"},
+        }
+    }
+    for incoming in (False, "false", "off", "0"):
+        patched = patch_workflow(wf, {"12": incoming})
+        assert patched["12"]["inputs"]["value"] is False
+
+
+def test_patch_boolean_false_uses_custom_widget_key():
+    """pe_enabled is the widget, not a guessed `value` key."""
+    wf = {
+        "4": {
+            "inputs": {"pe_enabled": True, "seed": 1},
+            "class_type": "CustomToggle",
+            "_meta": {"title": "PE (Input:pe_enabled)"},
+        }
+    }
+    patched = patch_workflow(wf, {"4": "false"})
+    assert patched["4"]["inputs"]["pe_enabled"] is False
+    assert "value" not in patched["4"]["inputs"]
+    assert patched["4"]["inputs"]["seed"] == 1
+
+    parsed = parse_dynamic_inputs(wf)
+    assert parsed[0]["kind"] == "boolean"
+    assert parsed[0]["defaultValue"] is True
+
+
+def test_select_output_prefers_tagged_video_over_load_preview():
+    from calliope.comfyui.client import select_output_files
+
+    nodes = {
+        "10": {
+            "class_type": "VHS_LoadVideo",
+            "inputs": {},
+            "_meta": {"title": "(Input:video) Load Video"},
+        },
+        "20": {
+            "class_type": "VHS_VideoCombine",
+            "inputs": {},
+            "_meta": {"title": "(output:video) Output"},
+        },
+    }
+    files = [
+        {"filename": "preview.gif", "node_id": "10", "type": "output", "subfolder": ""},
+        {"filename": "final.mp4", "node_id": "20", "type": "output", "subfolder": ""},
+    ]
+    chosen = select_output_files(files, nodes, "video")
+    assert [item["filename"] for item in chosen] == ["final.mp4"]
+
+
+def test_select_output_skips_loader_when_nothing_is_tagged():
+    from calliope.comfyui.client import select_output_files
+
+    nodes = {
+        "10": {"class_type": "VHS_LoadVideo", "inputs": {}, "_meta": {"title": "Load Video"}},
+        "20": {"class_type": "VHS_VideoCombine", "inputs": {}, "_meta": {"title": "Output"}},
+    }
+    files = [
+        {"filename": "preview.gif", "node_id": "10", "type": "output", "subfolder": ""},
+        {"filename": "final.mp4", "node_id": "20", "type": "output", "subfolder": ""},
+    ]
+    chosen = select_output_files(files, nodes, "video")
+    assert [item["filename"] for item in chosen] == ["final.mp4"]
+
+
 def test_queue_prompt_surfaces_comfy_error_body(monkeypatch):
     """A 400 from Comfy /prompt must name the node, not just the status code."""
     import httpx

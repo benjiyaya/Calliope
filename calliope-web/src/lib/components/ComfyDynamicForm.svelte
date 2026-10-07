@@ -8,7 +8,7 @@
 
 	interface Props {
 		inputs: ComfyDynamicInput[];
-		values?: Record<string, string | number>;
+		values?: Record<string, string | number | boolean>;
 		readonly?: boolean;
 		/** Hide technical role/kind chips (Playground human labels). */
 		quiet?: boolean;
@@ -19,7 +19,7 @@
 		showErrors?: boolean;
 		/** Emits labels of required-but-empty inputs whenever the set changes. */
 		onValidityChange?: (missing: string[]) => void;
-		onChange?: (values: Record<string, string | number>) => void;
+		onChange?: (values: Record<string, string | number | boolean>) => void;
 	}
 
 	let {
@@ -42,7 +42,7 @@
 		return `cdf-${uid}-${nodeId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
 	}
 
-	function setValue(nodeId: string, value: string | number) {
+	function setValue(nodeId: string, value: string | number | boolean) {
 		values = { ...values, [nodeId]: value };
 		onChange?.(values);
 	}
@@ -62,8 +62,13 @@
 		if (!touched[nodeId]) touched = { ...touched, [nodeId]: true };
 	}
 
-	function isBlank(value: string | number | undefined): boolean {
+	function isBlank(value: string | number | boolean | undefined): boolean {
+		if (typeof value === 'boolean') return false;
 		return value === undefined || (typeof value === 'string' && !value.trim());
+	}
+
+	function boolChecked(value: string | number | boolean | undefined): boolean {
+		return value === true || value === 'true' || value === 1 || value === '1';
 	}
 
 	function isMissing(inp: ComfyDynamicInput): boolean {
@@ -249,6 +254,19 @@
 						oninput={(e) => setValue(inp.nodeId, e.currentTarget.value)}
 						onblur={() => markTouched(inp.nodeId)}
 					></textarea>
+				{:else if inp.kind === 'boolean'}
+					<label class="check">
+						<input
+							{id}
+							type="checkbox"
+							checked={boolChecked(values[inp.nodeId])}
+							onchange={(e) => {
+								setValue(inp.nodeId, e.currentTarget.checked);
+								markTouched(inp.nodeId);
+							}}
+						/>
+						<span>{boolChecked(values[inp.nodeId]) ? 'true' : 'false'}</span>
+					</label>
 				{:else if inp.kind === 'number'}
 					<input
 						{id}
@@ -453,6 +471,17 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
+	}
+	.check {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 13px;
+		color: var(--text-primary);
+	}
+	.check input {
+		width: 16px;
+		height: 16px;
 	}
 	.field {
 		display: flex;

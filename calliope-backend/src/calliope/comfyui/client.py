@@ -278,7 +278,7 @@ class ComfyUIClient:
 
     def extract_outputs(self, history: dict[str, Any]) -> list[dict[str, str]]:
         outputs: list[dict[str, str]] = []
-        for _node_id, node_out in (history.get("outputs") or {}).items():
+        for node_id, node_out in (history.get("outputs") or {}).items():
             for key in ("images", "gifs", "videos"):
                 for item in node_out.get(key) or []:
                     outputs.append(
@@ -286,6 +286,57 @@ class ComfyUIClient:
                             "filename": item.get("filename", ""),
                             "subfolder": item.get("subfolder", ""),
                             "type": item.get("type", "output"),
+                            "node_id": str(node_id),
                         }
                     )
         return outputs
+
+
+# Input loaders publish the source file into ComfyUI history (VHS_LoadVideo's
+# preview gif). That file is not the generated clip.
+_LOADER_OUTPUT_CLASSES = frozenset(
+    {
+        "LoadVideo",
+        "VHS_LoadVideo",
+        "VHS_LoadVideoPath",
+        "LoadImage",
+        "ImageLoader",
+        "ETN_LoadImageBase64",
+        "LoadAudio",
+        "VHS_LoadAudio",
+    }
+)
+
+
+def select_output_files(
+    files: list[dict[str, str]],
+    nodes: dict[str, Any],
+    kind: str,
+) -> list[dict[str, str]]:
+    """Files that belong to this job, not a loader's echo of the input.
+
+    Prefer nodes tagged ``(Output:video)`` / ``(Output:image)``. When nothing
+    is tagged, drop loader-class results and keep the rest. A workflow whose
+    only history file is a save node is unchanged.
+    """
+    from calliope.comfyui.parser import parse_dynamic_outputs
+
+    role = "video" if kind == "video" else "image" if kind == "image" else None
+    if role:
+        tagged = {
+            str(item["nodeId"])
+            for item in parse_dynamic_outputs(nodes)
+            if item.get("role") == role or item.get("kind") == role
+        }
+        chosen = [item for item in files if item.get("node_id") in tagged]
+        if chosen:
+            return chosen
+
+    loaders = {
+        str(node_id)
+        for node_id, node in nodes.items()
+        if isinstance(node, dict) and node.get("class_type") in _LOADER_OUTPUT_CLASSES
+    }
+    if not loaders:
+        return files
+    return [item for item in files if item.get("node_id") not in loaders]

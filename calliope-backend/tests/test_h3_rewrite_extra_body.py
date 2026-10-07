@@ -102,3 +102,15 @@ def test_setting_roundtrip(client):
     assert client.get("/api/settings").json()["h3_rewrite_extra_body"] == {}
     client.post("/api/settings", json={"h3_rewrite_extra_body": original})
     assert client.get("/api/settings").json()["h3_rewrite_extra_body"] == original
+
+
+def test_vision_setting_roundtrip_and_default_off(client):
+    """h3_rewrite_vision: absent from the payload means keep; explicit bools
+    round-trip; the default is OFF (fast text-only rewrite grounding)."""
+    view = client.get("/api/settings").json()
+    assert view["h3_rewrite_vision"] is False  # shipped default
+    r = client.post("/api/settings", json={"h3_rewrite_vision": True})
+    assert r.status_code == 200
+    assert client.get("/api/settings").json()["h3_rewrite_vision"] is True
+    client.post("/api/settings", json={"h3_rewrite_vision": False})
+    assert client.get("/api/settings").json()["h3_rewrite_vision"] is False

@@ -141,6 +141,37 @@ def test_parse_models_handles_equals_form_and_bare_flags():
     assert row["speculative"] is None
 
 
+def test_parse_models_reads_max_model_len_from_vllm_style_servers():
+    # vLLM's ModelCard and oMLX list the served window as `max_model_len`;
+    # there are no llama.cpp `status.args` to read --ctx-size from.
+    row = llm_probe.parse_models(
+        {
+            "object": "list",
+            "data": [
+                {
+                    "id": "qwen3.8-27b",
+                    "object": "model",
+                    "created": 1791190000,
+                    "owned_by": "omlx",
+                    "max_model_len": 262144,
+                }
+            ],
+        }
+    )[0]
+    assert row["ctx"] == 262144
+
+
+def test_parse_models_prefers_ctx_size_flag_over_max_model_len():
+    row = llm_probe.parse_models({"data": [_router_row("q", max_model_len=262144)]})[0]
+    assert row["ctx"] == 131072
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, "262144", True, 1.5, [262144]])
+def test_parse_models_ignores_unusable_max_model_len(value):
+    row = llm_probe.parse_models({"data": [{"id": "m", "max_model_len": value}]})[0]
+    assert row["ctx"] is None
+
+
 @pytest.mark.parametrize(
     "payload,expected",
     [
@@ -463,6 +494,51 @@ def test_llm_test_reports_probe_timings_and_reasoning(client, monkeypatch):
     assert body["reasoning_chars"] == 42
     assert body["thinking"] == "low"
     assert body["thinking_sent"] == {"chat_template_kwargs": {"reasoning_effort": "low"}}
+
+
+def test_llm_test_caches_a_vllm_style_window_on_the_profile(client, monkeypatch):
+    from calliope.config import settings
+
+    profile = {
+        "id": "p-vllm",
+        "name": "served",
+        "base_url": "http://h:1/v1",
+        "model": "served",
+        "api_key": None,
+        "thinking": None,
+        "context_tokens": 0,
+    }
+    monkeypatch.setattr(settings, "llm_profiles", [profile])
+    monkeypatch.setattr(settings, "llm_active_id", "p-vllm")
+    monkeypatch.setattr(settings, "llm_context_tokens", 0)
+    _stub_get(
+        monkeypatch,
+        {
+            "http://h:1/v1/models": httpx.Response(
+                200, json={"data": [{"id": "served", "object": "model", "max_model_len": 65536}]}
+            )
+        },
+    )
+
+    async def fake_probe(self, prompt, *, max_tokens=48):
+        return {
+            "chat_ok": True,
+            "latency_ms": 5,
+            "first_token_ms": 4,
+            "content": "pong",
+            "reasoning_chars": 0,
+            "reasoning_preview": None,
+            "usage": None,
+            "error": None,
+        }
+
+    monkeypatch.setattr(LLMClient, "probe", fake_probe)
+    body = client.post(
+        "/api/settings/llm/test", json={"base_url": "http://h:1/v1", "model": "served"}
+    ).json()
+    assert body["context_tokens"] == 65536
+    assert settings.llm_profiles[0]["context_tokens"] == 65536
+    assert settings.context_window_tokens() == 65536
 
 
 def test_llm_test_surfaces_probe_error_without_raising(client, monkeypatch):

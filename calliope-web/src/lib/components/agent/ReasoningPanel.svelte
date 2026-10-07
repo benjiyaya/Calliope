@@ -16,6 +16,13 @@
 	const hasReasoning = $derived(!!reasoning || !!streaming);
 	const display = $derived(streaming || reasoning || '');
 	const isLive = $derived(!!streaming);
+
+	// A live stream is the "what is the agent doing right now" feedback — open
+	// automatically and close when it ends. A manual toggle during the stream
+	// stands: this effect only reruns when isLive flips.
+	$effect(() => {
+		open = isLive;
+	});
 </script>
 
 {#if hasReasoning}

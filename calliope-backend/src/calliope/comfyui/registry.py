@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-ComfyInputKind = Literal["text", "textarea", "number", "image", "image_url", "audio", "video"]
+ComfyInputKind = Literal[
+    "text", "textarea", "number", "boolean", "image", "image_url", "audio", "video"
+]
 ComfyOutputKind = Literal["image", "video", "other"]
 PatchField = Literal[
     "image", "url", "audio", "video", "file", "text", "value", "int", "float", "prompt"
@@ -22,6 +24,7 @@ TEXT_AREA_CLASSES = frozenset(
 NUMBER_CLASSES = frozenset(
     {"INT", "FLOAT", "PrimitiveInt", "PrimitiveFloat", "KSampler", "KSamplerAdvanced"}
 )
+BOOLEAN_CLASSES = frozenset({"PrimitiveBoolean"})
 IMAGE_CLASSES = frozenset({"LoadImage", "ImageLoader", "ETN_LoadImageBase64"})
 IMAGE_URL_CLASSES = frozenset({"Load Image From Url (mtb)"})
 AUDIO_CLASSES = frozenset({"LoadAudio", "VHS_LoadAudio"})
@@ -75,6 +78,8 @@ def class_to_input_kind(class_type: str) -> ComfyInputKind:
         return "audio"
     if class_type in VIDEO_CLASSES:
         return "video"
+    if class_type in BOOLEAN_CLASSES or "boolean" in class_type.lower():
+        return "boolean"
     if class_type in NUMBER_CLASSES:
         return "number"
     if class_type in TEXT_AREA_CLASSES:
@@ -110,7 +115,7 @@ def class_to_patch_field(class_type: str) -> PatchField:
         return "video"
     if class_type in {"CLIPTextEncode", "Note", "ShowText", "ImpactWildcardProcessor"}:
         return "text"
-    if class_type.startswith("Primitive"):
+    if class_type in BOOLEAN_CLASSES or class_type.startswith("Primitive"):
         return "value"
     if class_type in PROMPT_CLASSES:
         return "prompt"

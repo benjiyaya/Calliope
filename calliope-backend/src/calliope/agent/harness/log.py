@@ -335,7 +335,11 @@ def project_user_content(
 
 # Images are downscaled before reaching the LLM context — a full-res PNG can
 # be multiple MB of base64, which bloats every subsequent request in the turn.
+# The gate is BYTES *and* DIMENSIONS: cloud vision APIs tile by pixels, so a
+# 4K image that happens to compress under the byte budget (WebP, hard-squeezed
+# JPEG) still costs ~8-20x the vision tokens of a 1024px one if sent as-is.
 _MAX_VISION_IMAGE_BYTES = 512_000
+_MAX_VISION_EDGE_PX = 1280
 _VISION_MIME_BY_EXT = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -343,6 +347,14 @@ _VISION_MIME_BY_EXT = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+
+# Encoded data URLs cached per (path, mtime_ns, size). History is re-derived
+# before EVERY step of an agent turn, and the H3 rewrite can re-attach the
+# same references — without this each of those calls re-reads the full-res
+# file, re-decodes 8 megapixels, and re-encodes. Keyed on mtime/size so an
+# edited file invalidates itself; bounded LRU (each entry ≤ ~700KB base64).
+_VISION_CACHE: dict[tuple[str, int, int], str] = {}
+_VISION_CACHE_CAP = 32
 
 
 def _image_attachment_data_url(path: str) -> str | None:
@@ -363,13 +375,29 @@ def _image_attachment_data_url(path: str) -> str | None:
     mime = _VISION_MIME_BY_EXT.get(target.suffix.lower())
     if mime is None or not target.is_file():
         return None
+    try:
+        stat = target.stat()
+    except OSError:
+        return None
+    key = (str(target), stat.st_mtime_ns, stat.st_size)
+    cached = _VISION_CACHE.get(key)
+    if cached is not None:
+        # Refresh insertion order — plain dicts are insertion-ordered, so
+        # re-inserting makes this the newest entry (LRU behavior).
+        _VISION_CACHE.pop(key, None)
+        _VISION_CACHE[key] = cached
+        return cached
     data = _downscale_image(target, mime)
     if data is None:
         return None
     data, mime = data
     if not data or len(data) > _MAX_VISION_IMAGE_BYTES:
         return None
-    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+    url = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+    _VISION_CACHE[key] = url
+    while len(_VISION_CACHE) > _VISION_CACHE_CAP:
+        _VISION_CACHE.pop(next(iter(_VISION_CACHE)))
+    return url
 
 
 # Video attachments are "seen" as evenly-spaced frames (user choice: frame
@@ -544,15 +572,33 @@ def _document_attachment_text(path: str, name: str = "") -> str | None:
 
 
 def _downscale_image(target: Path, mime: str) -> tuple[bytes, str] | None:
-    """Re-encode large images at reduced width; passes small ones through.
+    """Re-encode oversized images; passes small ones through.
 
-    Returns (data, mime) — the mime is the source extension's for pass-through
-    and ``image/jpeg`` for re-encoded output (the caller must not keep
-    labeling JPEG bytes as image/png). None when the image cannot be read or
-    re-encoded small enough.
+    "Oversized" is bytes > _MAX_VISION_IMAGE_BYTES OR a long edge beyond
+    _MAX_VISION_EDGE_PX — a small-file 4K image must still shrink, because
+    vision APIs price tiles by pixels, not bytes. Returns (data, mime) — the
+    mime is the source extension's for pass-through and ``image/jpeg`` for
+    re-encoded output (the caller must not keep labeling JPEG bytes as
+    image/png). None when the image cannot be read or re-encoded small
+    enough.
     """
     data = target.read_bytes()
-    if len(data) <= _MAX_VISION_IMAGE_BYTES:
+    over_bytes = len(data) > _MAX_VISION_IMAGE_BYTES
+    over_edge = False
+    if not over_bytes:
+        # Lazy probe: Image.open reads only the header for .width/.height —
+        # no pixel decode. (Cheap here; the data-URL cache in
+        # _image_attachment_data_url means this runs once per file anyway.)
+        try:
+            from PIL import Image
+
+            with Image.open(target) as probe:
+                over_edge = (
+                    probe.width > _MAX_VISION_EDGE_PX or probe.height > _MAX_VISION_EDGE_PX
+                )
+        except Exception:
+            over_edge = False
+    if not over_bytes and not over_edge:
         return data, mime
     try:
         from PIL import Image
@@ -569,14 +615,19 @@ def _downscale_image(target: Path, mime: str) -> tuple[bytes, str] | None:
     try:
         with Image.open(target) as img:
             img = img.convert("RGB")
-            # Adaptive ladder: step quality down, then width, until the
-            # re-encode fits the budget — dense screenshots can exceed it
-            # even at q82/1024px.
+            # Adaptive ladder: step quality down, then the LONG edge, until
+            # the re-encode fits the budget — dense screenshots can exceed it
+            # even at q82/1024px. Scaling the long edge (never upscaling)
+            # keeps portrait 4K at ~576x1024 instead of blowing height back
+            # out past the cap the way width-first scaling did.
             import io
 
-            for width, quality in ((1024, 82), (1024, 60), (768, 50), (640, 40)):
-                height = max(1, round(img.height * width / img.width))
-                resized = img.resize((width, height))
+            for edge, quality in ((1024, 82), (1024, 60), (768, 50), (640, 40)):
+                longest = max(img.width, img.height)
+                scale = min(1.0, edge / longest)
+                resized = img.resize(
+                    (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+                )
                 buf = io.BytesIO()
                 resized.save(buf, format="JPEG", quality=quality)
                 if len(buf.getvalue()) <= _MAX_VISION_IMAGE_BYTES:

@@ -8,7 +8,7 @@ import type { ComfyDynamicInput } from "./types";
  * finish workflow's `3: 2, 4: 2, 5: "ultra"` as a 2×2 frame with seed "ultra", which the
  * video model rejects, and auto-save persisted it on the clip.
  */
-export type WorkflowValues = Record<string, string | number>;
+export type WorkflowValues = Record<string, string | number | boolean>;
 
 /** No video workflow renders this small; a width/height under it is a stale non-dimension value. */
 export const MIN_DIMENSION_PX = 64;
@@ -39,7 +39,7 @@ export function carryValuesAcrossWorkflows(
   return out;
 }
 
-function isInvalidFor(inp: ComfyDynamicInput, v: string | number): boolean {
+function isInvalidFor(inp: ComfyDynamicInput, v: string | number | boolean): boolean {
   if (inp.kind !== "number" || v === "") return false;
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return true;

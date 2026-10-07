@@ -476,6 +476,17 @@ async def _llm_plan(board: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def stored_continuity_plan(project_id: int) -> dict[str, Any] | None:
+    """The persisted plan, loaded without any LLM refresh — cheap read.
+
+    Used by the instant compile paths (preview/enqueue) that only need the
+    plan's ``based_on`` for draft-hash stability. Use ``ensure_continuity_plan``
+    when a refresh is actually wanted (explicit Regenerate / the agent tool).
+    """
+    board = load_board(project_id)
+    return _parse_stored(board["project"].get("continuity_json"))
+
+
 async def ensure_continuity_plan(
     project_id: int,
     *,
@@ -538,7 +549,7 @@ def continuity_lock_text(plan: dict[str, Any] | None, clip_id: int) -> str:
         "These lines are binding.",
         "Phrase them into the six H3 sections.",
         "Do not recast a subject, move a dialogue line to another speaker, or change lighting or screen direction.",
-        "Reference images and the reference video remain the identity and motion source.",
+        "Reference images remain the identity source.",
     ]
     overview = plan.get("overview") if isinstance(plan.get("overview"), dict) else {}
     for key in OVERVIEW_KEYS:

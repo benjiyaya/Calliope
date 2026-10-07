@@ -344,6 +344,14 @@ def test_sub_agent_loop_drains_steering():
                 return {"role": "assistant", "content": None, "tool_calls": [_tc("get_workspace", "a")]}
             return {"role": "assistant", "content": "adjusted", "tool_calls": []}
 
+        async def chat_stream(self, messages, temperature=0.4, tools=None, **kwargs):
+            self.seen.append(list(messages))
+            if len(self.seen) == 1:
+                yield {"type": "tool_call", "tool_call": _tc("get_workspace", "a")}
+            else:
+                yield {"type": "delta", "content": "adjusted"}
+            yield {"type": "done"}
+
         async def close(self):
             pass
 

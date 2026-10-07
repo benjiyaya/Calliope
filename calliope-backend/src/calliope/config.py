@@ -240,6 +240,12 @@ class Settings(BaseSettings):
     # by default — never sent unless set, since strict servers reject unknown
     # fields.
     h3_rewrite_extra_body: dict[str, Any] = Field(default_factory=dict)
+    # Attach reference images + reference-video frames to the H3 rewrite as
+    # vision parts. Grounding quality goes up, but a local endpoint must
+    # prompt-process every image (llama.cpp mmproj can take minutes for the
+    # subject roster + video frames), so this is OFF by default — the rewrite
+    # grounds on the asset text descriptions instead (the fast 1.5.7 path).
+    h3_rewrite_vision: bool = False
     dry_run: bool = False  # off by default — real ComfyUI jobs
 
     @property
@@ -533,6 +539,7 @@ class Settings(BaseSettings):
             "context_window_tokens": self.context_window_tokens(),
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
+            "h3_rewrite_vision": bool(self.h3_rewrite_vision),
             "dry_run": bool(self.dry_run),
         }
 
@@ -650,6 +657,7 @@ class Settings(BaseSettings):
             # setattrs blindly.
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
+            "h3_rewrite_vision": bool(self.h3_rewrite_vision),
             "dry_run": bool(self.dry_run),
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")

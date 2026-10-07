@@ -143,9 +143,9 @@ def test_enqueue_merges_stored_input_values(client, monkeypatch):
     finally:
         conn.close()
 
-    # Skip the LLM rewrite — the fallback template is deterministic
+    # Enqueue compiles deterministically — patch to prove the LLM is never called
     async def fake_rewrite(self_, scene_, subjects, **kwargs):
-        return "fallback"
+        raise AssertionError("enqueue must not call the LLM")
 
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
@@ -160,13 +160,13 @@ def test_enqueue_merges_stored_input_values(client, monkeypatch):
         raw = json.loads(jobs[0]["payload_json"])
         values = raw["input_values"]
         assert values["20"] == 10  # stored setup applied
-        assert raw["prompt"] == "fallback"
+        assert raw["prompt"].startswith("subject_definitions:")
     finally:
         queue_manager.paused = False
 
 
 def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
-    """Preview resolves the H3 rewrite without enqueueing anything."""
+    """Preview resolves the H3 prompt instantly (deterministic compile)."""
     from calliope.queue.manager import queue_manager
 
     pid = _mk_project(client, "Preview H3")
@@ -184,7 +184,7 @@ def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
         conn.close()
 
     async def fake_rewrite(self_, scene_, subjects, **kwargs):
-        return "H3 REWRITE"
+        raise AssertionError("default preview must not call the LLM")
 
     monkeypatch.setattr("calliope.agent.video_agent._H3Compiler.rewrite", fake_rewrite)
 
@@ -196,7 +196,7 @@ def test_preview_prompt_endpoint_h3_profile(client, monkeypatch):
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["prompt"] == "H3 REWRITE"
+        assert body["prompt"].startswith("subject_definitions:")
         assert body["profile"] == "minimax_h3_ref"
         assert body["from_draft"] is False
         assert body["based_on"]
@@ -349,6 +349,49 @@ def test_enqueue_prompts_override(client, monkeypatch):
         queue_manager.paused = False
 
 
+def test_enqueue_user_typed_prompt_wins_verbatim(client, monkeypatch):
+    """A prompt typed on the clip form is sent exactly as written.
+
+    The composer's prompt textarea is the user's prompt — the H3 compile must
+    never replace it (the '<video 1>~ to extend video continue' report).
+    """
+    from calliope.agent import video_agent
+    from calliope.queue.manager import queue_manager
+
+    pid = _mk_project(client, "Typed prompt")
+    scene = _add_scene(client, pid, 1)
+    clip_id = _scene_default_clip(pid, scene["id"])
+
+    conn = get_db(settings.db_path)
+    try:
+        wf_id = _insert_h3_workflow(conn, "H3 typed")
+        conn.execute(
+            "UPDATE clips SET workflow_id = ? WHERE id = ?", (wf_id, clip_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def no_llm(self_, scene_, subjects, **kwargs):
+        raise AssertionError("enqueue must not call the LLM")
+
+    monkeypatch.setattr(video_agent._H3Compiler, "rewrite", no_llm)
+
+    typed = "<video 1>~ to extend video continue :\nThe camera drifts down."
+    queue_manager.paused = True
+    try:
+        jobs = asyncio_run(
+            enqueue_video_jobs(
+                pid, scene_ids=[scene["id"]], input_values_override={"10": typed}
+            )
+        )
+        raw = json.loads(jobs[0]["payload_json"])
+        assert raw["prompt"] == typed
+        assert raw["input_values"]["10"] == typed
+    finally:
+        queue_manager.paused = False
+
+
 def test_preview_prompt_prose_profile(client):
     """Prose workflows return the deterministic scene_video_prompt."""
     pid = _mk_project(client, "Preview prose")
@@ -464,7 +507,6 @@ def test_preview_prompt_uses_form_references_not_story_cast(client, monkeypatch)
 
     async def fake_rewrite(self_, scene_, subjects, **kwargs):
         seen["subjects"] = subjects
-        seen["videos"] = kwargs.get("videos")
         seen["calls"] = seen.get("calls", 0) + 1
         return "REWRITE FROM REFS"
 
@@ -481,13 +523,15 @@ def test_preview_prompt_uses_form_references_not_story_cast(client, monkeypatch)
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["prompt"] == "REWRITE FROM REFS"
+    # The default resolve is the instant deterministic compile — the rewrite
+    # has not run yet, and the template's subjects are the FORM files, not the
+    # story cast.
     assert body["from_draft"] is False
-    names = [s["name"] for s in seen["subjects"]]
-    assert names == ["hero", "mercs"]
-    assert all(s["kind"] == "reference" for s in seen["subjects"])
-    assert seen["videos"][0]["path"].endswith("fight.mp4")
-    assert "Metro" not in names
+    assert body["prompt"].startswith("subject_definitions:")
+    assert '"hero"' in body["prompt"] and '"mercs"' in body["prompt"]
+    assert "Maya" not in body["prompt"]
+    assert "Metro" not in body["prompt"]
+    assert seen.get("calls", 0) == 0
 
     conn = get_db(settings.db_path)
     try:
@@ -513,7 +557,7 @@ def test_preview_prompt_uses_form_references_not_story_cast(client, monkeypatch)
     ).json()
     assert cached["from_draft"] is True
     assert cached["prompt"] == "STALE STORY DRAFT"
-    assert seen["calls"] == 1
+    assert seen.get("calls", 0) == 0
 
     forced = client.post(
         f"/api/jobs/projects/{pid}/preview-prompt",
@@ -521,7 +565,11 @@ def test_preview_prompt_uses_form_references_not_story_cast(client, monkeypatch)
     ).json()
     assert forced["from_draft"] is False
     assert forced["prompt"] == "REWRITE FROM REFS"
-    assert seen["calls"] == 2
+    assert seen["calls"] == 1
+    # Regenerate grounds on the form's files, not the story cast.
+    names = [s["name"] for s in seen["subjects"]]
+    assert names == ["hero", "mercs"]
+    assert all(s["kind"] == "reference" for s in seen["subjects"])
 
 
 def test_preview_prompt_missing_scene_400(client):

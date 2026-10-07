@@ -15,10 +15,8 @@
 		type Workflow,
 	} from '$lib/api';
 	import { compactInputValues } from '$lib/comfy/promptInput';
-	import { createUploadManager } from '$lib/comfy/useUpload.svelte';
 	import { normalizeInputRole } from '$lib/comfy/parser';
 	import { carryValuesAcrossWorkflows, sanitizeWorkflowValues } from '$lib/comfy/carryValues';
-	import type { ComfyDynamicInput } from '$lib/comfy/types';
 	import type { AssetOption } from '$lib/assetPicker';
 	import { shotApi } from '$lib/shot/api';
 	import { progressFor } from '$lib/jobProgress';
@@ -48,25 +46,6 @@
 	// clip ids; hydrated from clip.workflow_id / saved video_settings.
 	let selectedWorkflow = $state<Record<number, number>>({});
 	let lastFormScene = $state<number | null>(null);
-	// Clip source for continue scenes, keyed per scene: 'auto' | 'upload' | scene id.
-	let clipSource = $state<Record<number, string>>({});
-	// Hidden file input backing "Upload file" in the video source modal.
-	let videoFileInput = $state<HTMLInputElement | null>(null);
-	const videoUploadMgr = createUploadManager();
-
-	async function onVideoFileChosen(e: Event) {
-		const el = e.currentTarget as HTMLInputElement;
-		const file = el.files?.[0];
-		el.value = '';
-		const node = videoInputNodeFor(
-			selectedEntry ? workflowForClip(selectedEntry.clip, selectedEntry.scene) : undefined,
-		);
-		if (!file || !selectedEntry || !node) return;
-		const path = await videoUploadMgr.uploadSafe(node.nodeId, file);
-		if (path) {
-			formValues = { ...formValues, [node.nodeId]: path };
-		}
-	}
 
 	// Per-scene input cache — switching scenes no longer wipes the form.
 	const formCache = new Map<number, Record<string, string | number>>();
@@ -287,8 +266,6 @@
 		// display hydration; the clips.workflow_id column is written alongside.
 		const wfId = selectedWorkflow[selectedEntry.clip.id];
 		if (wfId) out.form_workflow_id = wfId;
-		const src = clipSource[selectedEntry.scene.id];
-		if (src) out.clip_source = src;
 		const draft = selectedEntry.clip.video_settings?.prompt_draft;
 		const meta = selectedEntry.clip.video_settings?.prompt_draft_meta;
 		if (draft) {
@@ -304,7 +281,7 @@
 
 	$effect(() => {
 		// Track the pieces that make up the persisted settings.
-		const _unused = [formValues, selectedWorkflow, clipSource, selectedEntry?.clip.id];
+		const _unused = [formValues, selectedWorkflow, selectedEntry?.clip.id];
 		void _unused;
 		if (!selectedEntry || saveTimer) return;
 		saveTimer = setTimeout(() => {
@@ -351,40 +328,7 @@
 		return seed;
 	}
 
-	function workflowHasVideoInput(wf: Workflow | undefined): boolean {
-		return Boolean(
-			wf?.input_schema?.some((inp) => normalizeInputRole(inp.role ?? null) === 'video'),
-		);
-	}
-
-	function videoInputNodeFor(wf: Workflow | undefined): ComfyDynamicInput | undefined {
-		return wf?.input_schema?.find((inp) => normalizeInputRole(inp.role ?? null) === 'video');
-	}
-
-	// Timeline source options for a continue clip: any other rendered clip
-	// (clips first, then legacy scene-level paths), ordered by timeline position.
-	function timelineClipOptions(
-		current: Scene | null,
-	): Array<{ label: string; path: string }> {
-		if (!current) return [];
-		const out: Array<{ label: string; path: string }> = [];
-		for (const s of scenes) {
-			if (s.id === current.id) continue;
-			for (const [i, c] of (s.clips ?? []).entries()) {
-				if (!c.clip_path) continue;
-				out.push({
-					label: `${s.clips.length > 1 ? `#${s.order_index}.${i + 1}` : `#${s.order_index}`} · ${s.heading || t('queue.sceneLabel')}`,
-					path: c.clip_path,
-				});
-			}
-			if ((s.clips?.length ?? 0) === 0 && s.video_path) {
-				out.push({ label: `#${s.order_index} · ${s.heading || t('queue.sceneLabel')}`, path: s.video_path });
-			}
-		}
-		return out;
-	}
-
-const generateOne = createMutation({
+	const generateOne = createMutation({
 	mutationFn: (vars: { clipId: number; sceneId: number; prompt?: string }) => {
 		const { clipId, sceneId, prompt } = vars;
 		const scene = scenes.find((s) => s.id === sceneId);
@@ -946,20 +890,6 @@ const generateOne = createMutation({
 		{@const selWf = selClip ? workflowForClip(selClip, selected) : undefined}
 		{@const selStatus = selClip ? statusOfClip(selClip.id) : sceneStatus(selected)}
 		{@const selPreview = selClip ? previewPathForClip(selClip.id) : null}
-		{@const selHasVideoInput = workflowHasVideoInput(selWf)}
-		{@const selVideoNode = videoInputNodeFor(selWf)}
-		{@const selClips = timelineClipOptions(selected)}
-		{@const selChain = Boolean(selClip?.chain_from_prev ?? selected.chain_from_prev)}
-		{@const selSource = clipSource[selected.id] ?? 'auto'}
-		{@const selSourceValid = selSource === 'auto' || selSource === 'upload' || selClips.some((o) => o.path === selSource)}
-		{@const selBlocked = selChain && !selHasVideoInput}
-		<input
-			bind:this={videoFileInput}
-			type="file"
-			class="sr-only-video-file"
-			accept="video/*,.mp4,.webm,.mov,.mkv"
-			onchange={onVideoFileChosen}
-		/>
 		<VideoEditWorkspace
 			{scenes}
 			{filmClips}
@@ -986,36 +916,6 @@ const generateOne = createMutation({
 			{formatClock}
 			onApplyToClip={(j, path) => applyJobToClip(j, path)}
 			applying={applyingJob}
-			generateDisabled={selBlocked}
-			generateDisabledReason={selBlocked
-				? t('queue.chainDisabledReason')
-				: ''}
-			clipSource={{
-				enabled: selChain && selHasVideoInput && Boolean(selVideoNode),
-				value: selSourceValid ? selSource : 'auto',
-				options: selClips.map((o) => ({
-					id: o.path,
-					label: o.label,
-					path: o.path,
-				})),
-			}}
-			onClipSourceChange={(val) => {
-				if (val === 'auto') {
-					// Back to Auto: send nothing — the backend resolves the previous clip.
-					const next = { ...clipSource };
-					delete next[selected.id];
-					clipSource = next;
-					if (selVideoNode) formValues = { ...formValues, [selVideoNode.nodeId]: '' };
-				} else if (val === 'upload') {
-					clipSource = { ...clipSource, [selected.id]: 'upload' };
-				} else {
-					clipSource = { ...clipSource, [selected.id]: val };
-					if (selVideoNode) {
-						formValues = { ...formValues, [selVideoNode.nodeId]: val };
-					}
-				}
-			}}
-			onClipSourceUpload={() => videoFileInput?.click()}
 			onSelectClip={selectClip}
 			onStep={step}
 		onWorkflowChange={(id) => {
@@ -1198,18 +1098,6 @@ const generateOne = createMutation({
 </div>
 
 <style>
-	.sr-only-video-file {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0 0 0 0);
-		white-space: nowrap;
-		border: 0;
-	}
-
 	.queue-root {
 		display: flex;
 		flex-direction: column;

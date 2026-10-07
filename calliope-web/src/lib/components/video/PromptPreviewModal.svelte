@@ -131,6 +131,13 @@
 		const key = `${clip?.id ?? -(scene?.id ?? 0)}|${mediaSlotKey()}`;
 		if (attemptedFor === key) return;
 		attemptedFor = key;
+		// Seed the editor with the scene prose so there is ALWAYS something
+		// editable while the resolve runs — a slow rewrite must not hold the
+		// modal hostage on a bare "Resolving prompt…" spinner. The enhanced
+		// prompt replaces this seed when it lands.
+		if (!text.trim() && scene) {
+			text = proseFallback(scene, clip);
+		}
 		$preview.mutate({});
 	});
 
@@ -224,7 +231,7 @@
 <Modal bind:open {onclose} title={t('promptPreview.title')} size="lg">
 	{#if !clip && !scene}
 		<p class="muted">{t('promptPreview.noClip')}</p>
-	{:else if $preview.isPending}
+	{:else if $preview.isPending && !text}
 		<div class="loading">
 			<Spinner size="md" />
 			<span>{t('promptPreview.resolving', { suffix: workflow?.prompt_profile === 'minimax_h3_ref' ? t('promptPreview.h3Rewrite') : '' })}</span>
@@ -246,6 +253,13 @@
 			</span>
 			<span class="meta">{workflow?.name ?? t('promptPreview.defaultWorkflow')}</span>
 		</div>
+
+		{#if $preview.isPending}
+			<div class="loading resolving-chip" role="status">
+				<Spinner size="sm" />
+				<span>{t('promptPreview.resolving', { suffix: workflow?.prompt_profile === 'minimax_h3_ref' ? t('promptPreview.h3Rewrite') : '' })}</span>
+			</div>
+		{/if}
 
 		{#if stale}
 			<div class="stale-hint" role="status">
@@ -327,6 +341,12 @@
 		padding: 24px 0;
 		font-size: 13px;
 		color: var(--text-secondary);
+	}
+
+	/* Compact inline variant shown above the editor while a regenerate runs. */
+	.loading.resolving-chip {
+		padding: 0 0 10px;
+		font-size: 12px;
 	}
 
 	.head-row {

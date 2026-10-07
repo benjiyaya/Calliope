@@ -256,7 +256,6 @@ def register(registry: ToolRegistry) -> None:
                     },
                     "duration_sec": {"type": "number"},
                     "workflow_id": {"type": "integer"},
-                    "chain_from_prev": {"type": "boolean"},
                 },
             },
             executor=t_add_clip,
@@ -268,7 +267,7 @@ def register(registry: ToolRegistry) -> None:
             name="update_clip",
             description=(
                 "Edit one clip (description / shot_size / dialog_lines_covered / "
-                "duration_sec / workflow_id / chain_from_prev). Address it by "
+                "duration_sec / workflow_id). Address it by "
                 "clip_id (from list_clips) or ref '#3.2'."
             ),
             parameters={
@@ -287,7 +286,6 @@ def register(registry: ToolRegistry) -> None:
                     },
                     "duration_sec": {"type": "number"},
                     "workflow_id": {"type": "integer"},
-                    "chain_from_prev": {"type": "boolean"},
                 },
             },
             executor=t_update_clip,
@@ -875,8 +873,8 @@ async def t_add_clip(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
             """
             INSERT INTO clips (scene_id, project_id, order_index, description,
                                shot_size, dialog_lines_covered, duration_sec,
-                               workflow_id, chain_from_prev)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               workflow_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scene_id,
@@ -887,7 +885,6 @@ async def t_add_clip(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
                 covered_json,
                 args.get("duration_sec"),
                 args.get("workflow_id"),
-                1 if args.get("chain_from_prev") else 0,
             ),
         )
         conn.execute(
@@ -912,7 +909,7 @@ async def t_update_clip(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
         )
         if err:
             return {"ok": False, "error": err}
-        cols = ("description", "shot_size", "duration_sec", "workflow_id", "chain_from_prev")
+        cols = ("description", "shot_size", "duration_sec", "workflow_id")
         data = {k: v for k, v in args.items() if k in cols and v is not None}
         if "dialog_lines_covered" in args and args["dialog_lines_covered"] is not None:
             data["dialog_lines_covered"] = json.dumps(

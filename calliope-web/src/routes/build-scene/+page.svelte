@@ -415,7 +415,9 @@ function toggleChat() {
 							streamingReasoning += aname ? `${aname}: ` : '';
 							thinkingAgent = aname;
 						}
-						streamingReasoning += String(ev.data?.content ?? '');
+						// Sub-agents stream their reasoning now — keep only the tail
+						// so a whole swarm's thinking can't grow without bound.
+						streamingReasoning = (streamingReasoning + String(ev.data?.content ?? '')).slice(-24000);
 					}
 					break;
 				case 'agent.tool': {
