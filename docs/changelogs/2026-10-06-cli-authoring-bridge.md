@@ -139,12 +139,22 @@ characters and reported success. It overrides now.
 
 - **The CLI cannot delete a project.** No `delete` verb, no flag that enables
   one. The web UI deletes, and that is also what removes the project's audit
-  rows, snapshots, and on-disk mirrors.
+  rows and on-disk mirrors.
+
+  **Correction (2026-10-07).** The previous sentence was not fully true as
+  shipped. `cli_txn` wrote the JSONL mirror from its own `project_id`
+  argument, which `project create` opens as `None` — the row does not exist
+  yet. The line landed in `global.jsonl` with `project_id` null while
+  `cli_audit` recorded the real id, and `delete_project` only ever unlinks
+  `project-{id}.jsonl`, so a CLI-created project left its create line behind
+  when deleted through the web UI. The mirror now follows `entry.project_id`
+  like the row, so the line is filed under the project it created and goes
+  away with it. Found on the real database during acceptance: one such line
+  for a long-deleted probe project, since removed.
 - **The CLI never calls a model.** Nothing under `cli/` can reach
   `llm.generate` or `ensure_continuity_plan`.
 - **No images, no video.** Those columns are read-only here.
-- **No raw SQL, no shell, no filesystem writes** outside the audit and snapshot
-  directories.
+- **No raw SQL, no shell, no filesystem writes** outside the audit directory.
 - **Unknown fields are hard errors.** A typo'd key that was silently dropped
   would look like a successful write that did nothing.
 
