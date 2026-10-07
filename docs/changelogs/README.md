@@ -2,6 +2,7 @@
 
 Dated notes for GitHub releases. Newest first.
 
+- [2026-10-06 CLI authoring bridge](./2026-10-06-cli-authoring-bridge.md) — `calliope-cli`: 32 commands across 10 groups to write project content (beats, cast, scenes, clips, continuity) straight into a project from a tool, with append-only audit + per-row before-images, `--expect-hash` drift detection, and no delete / no model / no images-or-video guarantees; ships an opencode skill (1.6)
 - [2026-10-05 deterministic prompts + agent workspace + vision speed](./2026-10-05-deterministic-prompts-workspace-vision.md) — H3 prompts compile instantly (LLM only on Regenerate); your typed prompt wins verbatim; chain/continue + Video source picker removed (video input is workflow-owned); per-session agent scratch file tools for main + sub-agents; 4K vision images resized + cached; sub-agent reasoning streams live; includes PR #83 (1.5.9)
 - [2026-09-27 story continuity plans](./2026-09-27-story-continuity.md) — one film plan per project shared by the Video tab and project-linked AI Canvas; H3 compiles a clip from that slice; the prompt modal shows continuity notes and Generate stays available (1.5.8)
 - [2026-09-24 clip workflow + runtime budget](./2026-09-24-clip-workflow-runtime-budget.md) — workflow per clip (not per scene); target runtime is a budget that can shrink; media inputs that are directories fail fast with a node-naming error; attachment turns no longer crash the orchestrator, `ask_user` closes its tool batch (1.5.7)

@@ -165,7 +165,7 @@
 				{project.title}
 				<span class="open-arrow">→</span>
 			</div>
-			<p class="card-desc">{project.idea || t('projectCard.noIdea')}</p>
+			<p class="card-desc">{project.idea_preview || t('projectCard.noIdea')}</p>
 			<div class="card-meta">
 				<div class="card-stats">
 					<span class="card-stat">

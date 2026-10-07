@@ -44,12 +44,21 @@ class ProjectStats(BaseModel):
 class Project(BaseModel):
     id: int
     title: str
-    idea: str | None
+    # `idea` is the full source text and is present only on the single-project
+    # response. It defaults to None so the *list* response can omit it -- a list
+    # of projects must not ship every novel to the browser on each page load.
+    idea: str | None = None
+    idea_preview: str | None = None
     genre: str | None
     tone: str | None
     target_duration: str | None
     cover_path: str | None = None
     status: str
+    # "builtin" = the in-app generators own the content. "external" = it was
+    # authored outside Calliope (calliope-cli), so the web UI hides the buttons
+    # that would overwrite it. Defaults to the column's own default so a
+    # response that forgot to select it is still valid.
+    ingest_mode: str = "builtin"
     created_at: datetime
     updated_at: datetime
     stats: ProjectStats | None = None

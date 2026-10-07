@@ -1,12 +1,34 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
+from calliope.authoring.projects import idea_preview
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.models.schemas import Project, ProjectCreate, ProjectUpdate
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _cli_project_files(project_id: int) -> list[Path]:
+    """On-disk CLI artifacts belonging to one project.
+
+    Exactly one file: the JSONL audit mirror. The ``cli_audit`` rows themselves
+    are removed by ``ON DELETE CASCADE`` on ``cli_audit.project_id`` (``db.py``),
+    inside the same transaction as the project delete.
+
+    The mirror is returned whether or not it exists -- ``delete`` must not care,
+    since a project that never used the CLI has no mirror, and that is not an
+    error. The caller's post-commit loop tolerates a missing file.
+    """
+    return [
+        settings.data_dir / "audit" / f"project-{int(project_id)}.jsonl",
+    ]
 
 
 def _project_stats(project_id: int, conn) -> dict[str, int]:
@@ -53,6 +75,14 @@ async def list_projects():
         out = []
         for row in rows:
             project = row_to_dict(row)
+            # Hand out a preview, not the novel. This response is the one that
+            # grows with (projects x novel length) and it reloads on every visit
+            # to the project list, so a handful of long-form projects is already
+            # hundreds of KB of JSON for a description the card clamps to two
+            # lines. `GET /api/projects/{id}` still returns the full text, which
+            # is the one place an editor genuinely needs it.
+            project["idea_preview"] = idea_preview(project.get("idea"))
+            project["idea"] = None
             project["stats"] = _project_stats(row["id"], conn)
             out.append(project)
         return out
@@ -68,6 +98,11 @@ async def get_project(project_id: int):
         if not row:
             raise HTTPException(status_code=404, detail="Project not found")
         project = row_to_dict(row)
+        # The full text stays here -- this is the response an editor loads and
+        # edits, so truncating it would destroy a novel on the first save. The
+        # preview comes along for free so the `Project` shape is the same
+        # whichever endpoint produced it.
+        project["idea_preview"] = idea_preview(project.get("idea"))
         project["stats"] = _project_stats(project_id, conn)
         return project
     finally:
@@ -130,8 +165,25 @@ async def delete_project(project_id: int):
                     f"({', '.join(map(str, running))}). Cancel or wait for them first."
                 ),
             )
+        # The CLI's audit mirror lives on disk, not under the project_id FK, so
+        # ON DELETE CASCADE does not reach it. Collect the path BEFORE the
+        # delete (it is named by project_id, so it must be listed while the row
+        # still exists) and unlink it only AFTER the commit. Doing it the other
+        # way round would leave a log for a project that came back on rollback,
+        # or keep one for a project that is gone.
+        #
+        # The CLI has no delete verb at all -- this endpoint is the only way a
+        # project and its log are ever removed together.
+        log_paths = _cli_project_files(project_id)
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
+        for path in log_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # A leftover file must not fail the delete: the project row is
+                # already gone, which is what the user asked for.
+                logger.warning("Could not remove CLI audit mirror %s", path)
         return {"ok": True}
     finally:
         conn.close()

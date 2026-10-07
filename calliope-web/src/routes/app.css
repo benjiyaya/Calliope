@@ -104,6 +104,24 @@ code,
 	color: var(--text-muted);
 }
 
+/* The character count rides along in the hint rather than getting its own row:
+   it is a fact about the field, not an instruction. */
+.idea-count {
+	opacity: 0.75;
+	margin-inline-start: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* A limit the form can see before submit, stated as a consequence rather than a
+   red border -- the project is still perfectly valid, it just cannot be written
+   by the built-in generators. */
+.field-warn {
+	margin-top: 6px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--warning);
+}
+
 /* Dark theme scrollbars (Firefox + Chromium) */
 * {
 	scrollbar-width: thin;
