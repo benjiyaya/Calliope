@@ -31,6 +31,8 @@ calliope-backend/src/calliope/static/
 .playwright-mcp/
 .cursor/
 *.log
+# Local service/run logs (backend, eval, llm, web) — never tracked.
+/logs/
 
 # --- Local-only files (not part of the public repo) ---
 # Electron shell was dropped — keep ignoring so a leftover folder cannot be committed.
