@@ -1,9 +1,14 @@
 """Prompts for Calliope story / script / asset generation."""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+from calliope.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 STORY_GENERATION_SYSTEM = (
@@ -125,6 +130,8 @@ Tone: {tone or "cinematic, atmospheric"}
 4. For ~{secs}s (~{secs // 60} min), beats are fine-grained plot steps (~12 seconds of story weight each) so Script can later expand into many short video clips.
 5. Cover full arc across all {beat_n} beats: setup, rising complications, midpoint turn, escalation, climax, resolution — spread across the whole list, not compressed into the first few items.
 6. If you are unsure, add more concrete incident beats rather than fewer abstract ones.
+7. Every beat must CHANGE something (a discovery, decision, reversal, or loss) —
+   if a beat ends the way it began, merge it into a neighbor beat.
 
 === OUTPUT SCHEMA (JSON only) ===
 {{
@@ -212,6 +219,8 @@ Tone: {tone or "cinematic, atmospheric"}
 4. For ~{secs}s (~{secs // 60} min), beats are fine-grained plot steps (~12 seconds
    of story weight each).
 5. Introduce the recurring characters, locations, and items the whole story needs.
+6. Every beat must CHANGE something (a discovery, decision, reversal, or loss) —
+   if a beat ends the way it began, merge it into a neighbor beat.
 
 === OUTPUT SCHEMA (JSON only) ===
 {{
@@ -278,6 +287,10 @@ THIS CHUNK: exactly {chunk_beats} beats, order_index {chunk_start} through {last
 Established cast/locations:
 {cast_summary or '(none)'}
 
+These anchors are BINDING — writing ANY later beat must reuse the exact cast names,
+roles, and appearance wording above. Never re-describe a character's look differently;
+reuse it verbatim so later steps generate identical faces.
+
 Beats already written (CONTINUE from here — same characters, escalating, no reset):
 {prior_lines or '(this is the first chunk)'}
 
@@ -287,6 +300,8 @@ Beats already written (CONTINUE from here — same characters, escalating, no re
 3. Do NOT repeat or contradict the beats already written; advance the plot.
 4. Fine-grained concrete incidents (~12 seconds of story weight each), visual and
    cinematic. Reuse the established characters and locations.
+5. Every beat must CHANGE something (a discovery, decision, reversal, or loss) —
+   if a beat ends the way it began, merge it into a neighbor beat.
 
 Respond ONLY with JSON:
 {{
@@ -320,6 +335,11 @@ def build_script_messages(
     per_scene_secs = max(3, round(secs / scene_n))
     char_lines = "\n".join(
         f"- id={c['id']} {c['name']} ({c.get('role') or ''}): {c.get('appearance') or ''}"
+        + (
+            f" [binding consistency prompt: {c['consistency_prompt']}]"
+            if c.get("consistency_prompt")
+            else ""
+        )
         for c in characters
     )
     loc_lines = "\n".join(
@@ -344,6 +364,11 @@ Story beats:
 Characters:
 {char_lines or '(none)'}
 
+The character descriptions above (including any "[binding consistency prompt: ...]")
+are BINDING ANCHORS. Reuse each character's exact appearance wording on their first
+appearance in EVERY scene — never invent alternative hair, wardrobe, or distinguishing
+features in later scenes.
+
 Locations:
 {loc_lines or '(none)'}
 
@@ -356,6 +381,10 @@ Locations:
    and the NUMBER of dialogue lines to that per-scene budget; do not write 2 minutes of
    material into a {secs}s film. Never drop lines the story needs — write fewer instead.
 5. Pace the total toward ~{secs} seconds overall — scenes with lots of dialogue run longer.
+   Dialogue volume is a physical limit, not a style choice: speech runs ~4.5 Chinese
+   characters or ~2.5 English words per second, so a {per_scene_secs}s scene carries at
+   most ~(that speech rate × {per_scene_secs}s) of lines. Size every scene's "dialog" to
+   its own budget (lines ÷ rate + 1–3s breathing room ≈ its duration).
 
 === ACTION (full visible action prose — the fidelity contract) ===
 Each scene's "action" is the complete on-screen action for that scene, present tense,
@@ -375,6 +404,9 @@ where. Rules:
 3. ENVIRONMENT & CONTINUITY. Concrete set details, props, weather, time-of-day — consistent
    with the location description and with earlier scenes set in the same location.
 4. LIGHTING & MOOD. Named light sources, color palette, emotional tone of the moment.
+5. ENTER LATE, LEAVE EARLY: start the scene at the first conflict beat and end
+   before it fully resolves. Cut greetings, goodbyes, travel, and small talk that
+   change nothing — spend the runtime budget only on plot-advancing visible action.
 Describe only what is VISIBLE (no inner thoughts; no sounds or music — dialogue covers audio).
 
 === DIALOGUE (verbatim fidelity) ===
@@ -382,6 +414,9 @@ Every line the scene needs MUST appear in "dialog", formatted 'SPEAKER: line', o
 line, in play order. NEVER paraphrase, summarize, or drop lines ("they argue about the
 money" is a FAILURE — write the actual lines). When delivery matters for performance,
 add a brief cue in parentheses after the speaker name, e.g. "MIA (whispering): line".
+NO INFO-DUMP: never let one character tell another something both already know
+("As you know, Bob…"). Exposition must arrive as conflict, question, revelation, or
+action — not mutual catch-up.
 
 Respond ONLY with JSON:
 {{
@@ -433,6 +468,11 @@ def build_script_chunk_messages(
     per_scene_secs = max(3, round(secs / scene_count))
     char_lines = "\n".join(
         f"- id={c['id']} {c['name']} ({c.get('role') or ''}): {c.get('appearance') or ''}"
+        + (
+            f" [binding consistency prompt: {c['consistency_prompt']}]"
+            if c.get("consistency_prompt")
+            else ""
+        )
         for c in characters
     )
     loc_lines = "\n".join(
@@ -472,6 +512,11 @@ Story beats:
 Characters:
 {char_lines or '(none)'}
 
+The character descriptions above (including any "[binding consistency prompt: ...]")
+are BINDING ANCHORS. Reuse each character's exact appearance wording on their first
+appearance in EVERY scene — never invent alternative hair, wardrobe, or distinguishing
+features in later scenes.
+
 Locations:
 {loc_lines or '(none)'}{tail_block}
 
@@ -485,6 +530,10 @@ Locations:
    clips, so never compress what a scene needs to SAY.
 4. Advance the beat arc across the whole {scene_count}-scene story; this chunk covers
    the part that falls at scenes {chunk_start}–{last}.
+   Dialogue volume is a physical limit, not a style choice: speech runs ~4.5 Chinese
+   characters or ~2.5 English words per second, so a {per_scene_secs}s scene carries at
+   most ~(that speech rate × {per_scene_secs}s) of lines. Size every scene's "dialog" to
+   its own budget (lines ÷ rate + 1–3s breathing room ≈ its duration).
 5. If earlier scenes are listed above, continue them naturally — same characters,
    consistent location, no abrupt reset{'' if previous_tail else ' (this is the first chunk)'}.
 
@@ -506,6 +555,9 @@ where. Rules:
 3. ENVIRONMENT & CONTINUITY. Concrete set details, props, weather, time-of-day — consistent
    with the location description and with earlier scenes set in the same location.
 4. LIGHTING & MOOD. Named light sources, color palette, emotional tone of the moment.
+5. ENTER LATE, LEAVE EARLY: start the scene at the first conflict beat and end
+   before it fully resolves. Cut greetings, goodbyes, travel, and small talk that
+   change nothing — spend the runtime budget only on plot-advancing visible action.
 Describe only what is VISIBLE (no inner thoughts; no sounds or music — dialogue covers audio).
 
 === DIALOGUE (verbatim fidelity) ===
@@ -513,6 +565,9 @@ Every line the scene needs MUST appear in "dialog", formatted 'SPEAKER: line', o
 line, in play order. NEVER paraphrase, summarize, or drop lines ("they argue about the
 money" is a FAILURE — write the actual lines). When delivery matters for performance,
 add a brief cue in parentheses after the speaker name, e.g. "MIA (whispering): line".
+NO INFO-DUMP: never let one character tell another something both already know
+("As you know, Bob…"). Exposition must arrive as conflict, question, revelation, or
+action — not mutual catch-up.
 
 Respond ONLY with JSON:
 {{
@@ -685,7 +740,9 @@ MINIMAX_H3_REF_SYSTEM = (
     "fully_preserved - <which defined features are retained>.' Every line uses one of "
     "H3's fixed visual markers — fully_preserved, partially_preserved, attribute_transfer, "
     "weak_reference — and no other word.\n"
-    "4. detailed_description: the main body, 150–350 words. Open with one or two style "
+    "4. detailed_description: the main body, normally 350–500 English words "
+    "(dialogue-dense content follows the complete spoken timeline instead of "
+    "chasing the count). Open with one or two style "
     "sentences (lighting, palette, medium) BEFORE '[Shot 1]'. '[Shot 1]' has no timestamp; "
     "later cuts use '[Shot N] At MM:SS.mmm, …'. For clips under ~8 seconds prefer a single "
     "shot. Introduce each <Subject N> at its first visible appearance with the features "
@@ -695,10 +752,103 @@ MINIMAX_H3_REF_SYSTEM = (
     "says, <d>[English] …</d>'. A speaker with no defined subject uses a stable voice "
     "description, e.g. 'A narrator (S2) says, <d>[English] …</d>'. Keep the original "
     "language of every line inside <d> and tag it, e.g. [English], [Chinese].\n"
-    "6. overall_soundscape: ambience and physical sounds across the clip, or 'N/A'. "
+    "6. overall_soundscape: 1–3 sentences of concrete ambience and physical sounds for "
+    "THIS scene (room tone, wind, traffic, footsteps, impacts) — never leave it vague, "
+    "because an undescribed soundscape lets the model invent one (crowd laughter, a studio "
+    "audience). Use 'N/A' only when the clip needs no audio at all. "
     "non_diegetic_music: audience-only score (instrumentation, tempo), or 'N/A'.\n"
     "Write everything in English except dialogue/lyrics inside <d> and visible on-screen text."
 )
+
+
+# --- MiniMax official spec injection (1.1) --------------------------------
+# The full official full-reference guide (official/ref-en.txt, ~24k chars) is
+# loaded lazily and cached; it is injected into the system prompt only when
+# the token budget fits, otherwise the rewrite keeps the summary above.
+
+_OFFICIAL_SPEC_NAME = "ref-en.txt"
+
+_OFFICIAL_SPEC_HEADER = (
+    "\n\n=== OFFICIAL MiniMax H3 full-reference format specification (authoritative) ===\n"
+    "Everything below is the official spec. Follow it for section structure, "
+    "retention markers, word count, and detail rules. The Calliope rules above "
+    "override the spec where they differ:\n"
+    "- subject roster and <Subject N> indices come from the user message, not "
+    "from the spec's examples;\n"
+    "- <Picture N> is only ever cited inside a <Subject N> line (never as a "
+    "standalone frame anchor);\n"
+    "- reference videos/audio are workflow wiring in this pipeline — never "
+    "write <Video N> or <Audio N> tags;\n"
+    "- output is a single plain-text prompt: no markdown fences, no commentary.\n"
+)
+
+_official_spec_cache: dict[str, str] = {}
+
+
+def _load_official_spec() -> str:
+    """Full text of MiniMax's official full-reference guide, cached.
+
+    Reads the seeded data copy first (user-editable), falling back to the
+    bundled skills_builtin copy. Returns "" when the file is missing, which
+    leaves the summary-only system prompt in place.
+    """
+    if _OFFICIAL_SPEC_NAME in _official_spec_cache:
+        return _official_spec_cache[_OFFICIAL_SPEC_NAME]
+    roots = [
+        Path(settings.data_dir) / "skills" / "h3-video-prompt-enhancer" / "references" / "official",
+        Path(__file__).resolve().parents[3] / "skills_builtin" / "h3-video-prompt-enhancer" / "references" / "official",
+    ]
+    text = ""
+    for root in roots:
+        try:
+            path = root / _OFFICIAL_SPEC_NAME
+            if path.is_file():
+                text = path.read_text(encoding="utf-8", errors="replace")
+                break
+        except OSError:
+            continue
+    _official_spec_cache[_OFFICIAL_SPEC_NAME] = text
+    return text
+
+
+def _official_spec_system(system: str, user_content: Any) -> str:
+    """system prompt with the official spec appended when the budget fits.
+
+    Budget: estimated prompt tokens + llm_max_output_tokens + 1024 reserve
+    must fit the model's context window. Over budget (or flag off / file
+    missing) → the summary-only system prompt is returned unchanged.
+    """
+    if not settings.h3_rewrite_official_spec:
+        return system
+    spec = _load_official_spec()
+    if not spec:
+        return system
+    candidate = system + _OFFICIAL_SPEC_HEADER + spec
+    try:
+        # Lazy import: prompts.py is imported by modules llm.py does not
+        # depend on; keeping it local avoids any import-order coupling.
+        from calliope.agent.llm import estimate_prompt_tokens
+
+        messages = [
+            {"role": "system", "content": candidate},
+            {"role": "user", "content": user_content},
+        ]
+        needed = (
+            estimate_prompt_tokens(messages)
+            + int(settings.llm_max_output_tokens or 0)
+            + 1024
+        )
+    except Exception:  # noqa: BLE001 — a probe failure must not kill the rewrite
+        return system
+    window = int(settings.context_window_tokens())
+    if needed > window:
+        logger.info(
+            "H3 official spec skipped (over budget): need %d > window %d",
+            needed,
+            window,
+        )
+        return system
+    return candidate
 
 
 def _subject_roster_lines(subjects: list[dict[str, Any]]) -> str:
@@ -769,7 +919,7 @@ Referenced images (keep these exact <Subject N> indices; Picture N is image N):
     if media_parts:
         content = [{"type": "text", "text": user}, *media_parts]
     return [
-        {"role": "system", "content": MINIMAX_H3_REF_SYSTEM},
+        {"role": "system", "content": _official_spec_system(MINIMAX_H3_REF_SYSTEM, content)},
         {"role": "user", "content": content},
     ]
 

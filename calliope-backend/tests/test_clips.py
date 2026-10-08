@@ -601,3 +601,116 @@ def test_enqueue_video_jobs_tool_bulk_guard(client, video_workflow):
     # scene_ids expands to 6 clips (>3) without explicit user prose — blocked.
     assert result["ok"] is False
     assert "bulk" in result["error"]
+
+
+def test_coverage_rejects_incomplete_clips_and_rewrites(client, monkeypatch):
+    """Uncovered dialogue lines / empty descriptions are rejected, then rewritten."""
+    pid = _mk_project(client)
+    scene = _add_scene(client, pid, 1, dialog="ANNA\nHello.\nBOB\nHi.", duration_sec=12)
+    scene_id = scene["id"]
+
+    broken = {
+        "clips": [
+            {
+                "order_index": 1,
+                "description": "",
+                "dialog_lines_covered": [1],
+                "shot_size": "wide",
+                "duration_sec": 6,
+            }
+        ]
+    }
+    fixed = {
+        "clips": [
+            {
+                "order_index": 1,
+                "description": "Establishing wide",
+                "dialog_lines_covered": [1, 2],
+                "shot_size": "wide",
+                "duration_sec": 6,
+            },
+            {
+                "order_index": 2,
+                "description": "Reverse on BOB",
+                "dialog_lines_covered": [3, 4],
+                "shot_size": "medium",
+                "duration_sec": 6,
+            },
+        ]
+    }
+    seen: list[tuple[float, str]] = []
+
+    async def fake_llm(messages, temperature=0.5):
+        seen.append((temperature, messages[1]["content"]))
+        return broken if len(seen) == 1 else fixed
+
+    monkeypatch.setattr("calliope.agent.coverage_agent.generate_structured", fake_llm)
+    result = asyncio.run(expand_scene_coverage(pid, [scene_id]))
+    assert result["scenes"][0]["clips"] == 2
+    assert len(seen) == 2
+    assert seen[0][0] == 0.5
+    assert seen[1][0] == 0.3
+    assert "PREVIOUS ATTEMPT REJECTED" in seen[1][1]
+    assert "not covered by any clip" in seen[1][1]
+
+
+def test_coverage_valid_first_pass_single_call(client, monkeypatch):
+    pid = _mk_project(client)
+    scene = _add_scene(client, pid, 1, action="A")
+
+    async def fake_llm(messages, temperature=0.5):
+        return {
+            "clips": [
+                {"description": "shot", "dialog_lines_covered": [], "duration_sec": 5}
+            ]
+        }
+
+    calls = []
+    orig = fake_llm
+
+    async def counting(messages, temperature=0.5):
+        calls.append(temperature)
+        return await orig(messages, temperature)
+
+    monkeypatch.setattr("calliope.agent.coverage_agent.generate_structured", counting)
+    asyncio.run(expand_scene_coverage(pid, [scene["id"]]))
+    assert calls == [0.5]
+
+
+def test_coverage_prompt_injects_neighbor_state_and_binding_anchors():
+    """1.4: the coverage prompt carries previous scene state + BINDING anchors."""
+    from calliope.agent.coverage_agent import _coverage_messages
+
+    messages = _coverage_messages(
+        scene={
+            "order_index": 2,
+            "heading": "INT. KITCHEN",
+            "action": "Mia enters with the keys.",
+            "duration_sec": 12,
+        },
+        characters=[
+            {
+                "id": 1,
+                "name": "MIA",
+                "appearance": "chestnut ponytail, yellow rain jacket",
+                "consistency_prompt": "reference sheet A",
+            }
+        ],
+        previous_scene={
+            "order_index": 1,
+            "heading": "INT. HALLWAY",
+            "action": "Mia unlocks the door, pocket the keys. END.",
+        },
+        next_scene=None,
+        clip_cap=8,
+    )
+    user = messages[1]["content"]
+    # Previous scene state enters the prompt so clips continue FROM it.
+    assert "INT. HALLWAY" in user
+    assert "continue FROM that state" in user
+    # BINDING anchor block with appearance + consistency prompt.
+    assert "Character consistency anchors (BINDING" in user
+    assert "chestnut ponytail" in user
+    assert "reference sheet A" in user
+    # Constraint 3 reuses the anchor wording.
+    assert "BINDING anchor wording" in user

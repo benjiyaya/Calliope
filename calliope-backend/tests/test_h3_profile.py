@@ -294,3 +294,54 @@ def test_h3_ref_prompt_uses_only_the_fixed_retention_markers():
     text = minimax_h3_ref_fallback({"heading": "INT. HALL", "action": "He runs."}, [])
     assert "attribute_transfer" not in text or "<Video" not in text
     assert "<Video" not in text
+
+
+def test_h3_official_spec_injected_when_enabled(monkeypatch):
+    """Default-on: the rewrite system prompt carries the official spec."""
+    from calliope.agent.prompts import _load_official_spec, build_minimax_h3_ref_messages
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "h3_rewrite_official_spec", True)
+    # Test config's window is small; give the spec room to fit.
+    monkeypatch.setattr(type(settings), "context_window_tokens", lambda self: 65536)
+    spec = _load_official_spec()
+    assert spec, "official ref-en.txt must be present for the injection test"
+    messages = build_minimax_h3_ref_messages(
+        {"heading": "INT. METRO", "action": "She rises."}, []
+    )
+    system = messages[0]["content"]
+    assert "OFFICIAL MiniMax H3 full-reference format specification" in system
+    assert "350-500 English words" in spec  # the official word-count rule
+    # The summary's own contract survives next to the injected spec.
+    assert "fully_preserved" in system and "motion_preserved" not in system
+
+
+def test_h3_official_spec_flag_off_keeps_summary(monkeypatch):
+    from calliope.agent.prompts import build_minimax_h3_ref_messages
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "h3_rewrite_official_spec", False)
+    messages = build_minimax_h3_ref_messages(
+        {"heading": "INT. METRO", "action": "She rises."}, []
+    )
+    assert messages[0]["content"] == MINIMAX_H3_REF_SYSTEM
+
+
+def test_h3_official_spec_degrades_when_over_budget(monkeypatch):
+    """Over budget → summary-only system prompt, no exception."""
+    from calliope.agent.prompts import build_minimax_h3_ref_messages
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "h3_rewrite_official_spec", True)
+    # An absurd output ceiling makes prompt+output+reserve exceed any window.
+    monkeypatch.setattr(settings, "llm_max_output_tokens", 10**7)
+    messages = build_minimax_h3_ref_messages(
+        {"heading": "INT. METRO", "action": "She rises."}, []
+    )
+    assert messages[0]["content"] == MINIMAX_H3_REF_SYSTEM
+
+
+def test_h3_word_count_rule_matches_official():
+    """The summary must not contradict the injected spec's 350-500 rule."""
+    assert "150–350" not in MINIMAX_H3_REF_SYSTEM
+    assert "350–500" in MINIMAX_H3_REF_SYSTEM

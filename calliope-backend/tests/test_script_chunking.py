@@ -300,3 +300,151 @@ def test_oversized_script_durations_shrink_to_target(monkeypatch):
     # The old code left 415s; the fix must pull meaningfully below it.
     assert total <= 220, f"scene durations did not shrink toward the 30s target: {total}s"
     assert all(r["duration_sec"] >= 3 for r in rows)
+
+
+def test_reject_rewrites_broken_chunk_with_error_feedback(monkeypatch):
+    """A structurally invalid chunk is rejected and rewritten at low temp."""
+    seen: list[tuple[int, str]] = []
+    broken = _scenes(4)
+    for s in broken["scenes"]:
+        s["action"] = ""  # hard violation
+    fixed = _scenes(4)
+
+    async def fake_structured(messages, temperature=0.7):
+        user = messages[1]["content"]
+        n = 0
+        for line in user.splitlines():
+            if line.startswith("THIS CHUNK:"):
+                n = int(line.split("exactly", 1)[1].split("scenes")[0].strip())
+        seen.append((temperature, user))
+        return broken if len(seen) == 1 else fixed
+
+    monkeypatch.setattr(sa, "generate_structured", fake_structured)
+    out = asyncio.run(
+        _generate_scenes_chunked(
+            project_id=1,
+            p={"title": "T", "idea": "i", "target_duration": "2 minutes"},
+            beats=[],
+            characters=[],
+            locations=[],
+            required_scenes=4,
+        )
+    )
+    assert len(out) == 4
+    assert len(seen) == 2
+    # First pass high temp, rewrite low temp with the violations echoed back.
+    assert seen[0][0] == 0.7
+    assert seen[1][0] == 0.4
+    assert "PREVIOUS ATTEMPT REJECTED" in seen[1][1]
+    assert "empty" in seen[1][1]
+
+
+def test_valid_chunk_is_not_rejected(monkeypatch):
+    calls: list[float] = []
+
+    async def fake_structured(messages, temperature=0.7):
+        calls.append(temperature)
+        n = 4
+        for line in messages[1]["content"].splitlines():
+            if line.startswith("THIS CHUNK:"):
+                n = int(line.split("exactly", 1)[1].split("scenes")[0].strip())
+        return _scenes(n)
+
+    monkeypatch.setattr(sa, "generate_structured", fake_structured)
+    out = asyncio.run(
+        _generate_scenes_chunked(
+            project_id=1,
+            p={"title": "T", "idea": "i", "target_duration": "2 minutes"},
+            beats=[],
+            characters=[],
+            locations=[],
+            required_scenes=4,
+        )
+    )
+    assert len(out) == 4
+    assert calls == [0.7]  # one call, no rewrite loop
+
+
+# 1.4 — consistency anchors injected every round
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_story_chunk_prompt_declares_cast_anchors_binding():
+    from calliope.agent.prompts import story_beats_chunk_prompt
+
+    user = story_beats_chunk_prompt(
+        title="T",
+        logline="l",
+        genre="g",
+        tone="t",
+        total_beats=8,
+        chunk_start=5,
+        chunk_beats=4,
+        previous_beats=[],
+        cast_summary="- MIA (hero): chestnut ponytail, yellow rain jacket",
+    )
+    assert "These anchors are BINDING" in user
+    assert "MIA (hero)" in user
+
+
+def test_script_chunk_prompt_injects_binding_character_anchors():
+    from calliope.agent.prompts import build_script_chunk_messages
+
+    messages = build_script_chunk_messages(
+        title="T",
+        idea="i",
+        beats=[],
+        characters=[
+            {"id": 1, "name": "MIA", "role": "hero", "appearance": "ponytail"},
+        ],
+        locations=[],
+        target_duration="30 seconds",
+        scene_count=3,
+        chunk_start=1,
+        chunk_scenes=3,
+    )
+    user = messages[1]["content"]
+    assert "BINDING ANCHORS" in user
+    assert "ponytail" in user
+
+
+def test_script_chunk_prompt_carries_consistency_prompt():
+    from calliope.agent.prompts import build_script_chunk_messages
+
+    messages = build_script_chunk_messages(
+        title="T",
+        idea="i",
+        beats=[],
+        characters=[
+            {
+                "id": 1,
+                "name": "MIA",
+                "role": "hero",
+                "appearance": "ponytail",
+                "consistency_prompt": "same face ref",
+            }
+        ],
+        locations=[],
+        target_duration="30 seconds",
+        scene_count=3,
+        chunk_start=1,
+        chunk_scenes=3,
+    )
+    user = messages[1]["content"]
+    assert "binding consistency prompt: same face ref" in user
+
+
+def test_script_prompt_single_call_declares_binding_anchors():
+    from calliope.agent.prompts import build_script_messages
+
+    messages = build_script_messages(
+        title="T",
+        idea="i",
+        beats=[],
+        characters=[{"id": 1, "name": "MIA", "role": "hero", "appearance": "ponytail"}],
+        locations=[],
+        target_duration="30 seconds",
+        scene_count=3,
+    )
+    user = messages[1]["content"]
+    assert "BINDING ANCHORS" in user

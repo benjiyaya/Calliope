@@ -22,6 +22,45 @@ from calliope.events.bus import event_bus
 SCRIPT_CHUNK = 4
 
 
+def _chunk_errors(scenes: list[dict[str, Any]], chunk_scenes: int) -> list[str]:
+    """Hard violations of the chunk contract, fed back verbatim for a rewrite.
+
+    Count-only checking let structurally broken scenes through (empty action,
+    dialogue not in 'SPEAKER: line' form) and the repair path silently patched
+    them — the user got a board that never matched the prompt."""
+    errors: list[str] = []
+    if len(scenes) != chunk_scenes:
+        errors.append(
+            f"the \"scenes\" array has {len(scenes)} objects; it must have EXACTLY "
+            f"{chunk_scenes}"
+        )
+    for i, scene in enumerate(scenes, start=1):
+        if not isinstance(scene, dict):
+            errors.append(f"scene {i} is not a JSON object")
+            continue
+        if not str(scene.get("heading") or "").strip():
+            errors.append(f"scene {i} has an empty \"heading\" (expected 'INT. LOCATION - TIME')")
+        if not str(scene.get("action") or "").strip():
+            errors.append(
+                f"scene {i} has an empty \"action\" (expected the full visible action "
+                "as one flowing paragraph)"
+            )
+        for line in str(scene.get("dialog") or "").splitlines():
+            if line.strip() and ":" not in line:
+                errors.append(
+                    f"scene {i} has a dialogue line not in 'SPEAKER: line' form: "
+                    f"{line.strip()[:60]!r}"
+                )
+                break
+    return errors
+
+
+def _rejection_block(errors: list[str]) -> str:
+    return "\n\nPREVIOUS ATTEMPT REJECTED — fix EVERY problem below:\n" + "\n".join(
+        f"- {e}" for e in errors
+    )
+
+
 async def _request_chunk(
     *,
     p: dict[str, Any],
@@ -47,21 +86,22 @@ async def _request_chunk(
     )
     result = await generate_structured(messages, temperature=0.7)
     scenes = result.get("scenes") or []
-    if len(scenes) < chunk_scenes:
-        # Retry only this chunk — the old code retried the ENTIRE script.
+    errors = _chunk_errors(scenes, chunk_scenes)
+    if errors:
+        # Reject-and-rewrite: the tool layer refuses the output and hands the
+        # exact violations back for a low-temperature rewrite, instead of
+        # silently patching a board the model never validated.
         retry_messages = [
             messages[0],
-            {
-                "role": "user",
-                "content": messages[1]["content"]
-                + (
-                    f"\n\nPREVIOUS ATTEMPT FAILED: it only had {len(scenes)} scenes. "
-                    f"You MUST return exactly {chunk_scenes} scenes this time."
-                ),
-            },
+            {"role": "user", "content": messages[1]["content"] + _rejection_block(errors)},
         ]
-        result = await generate_structured(retry_messages, temperature=0.5)
+        result = await generate_structured(retry_messages, temperature=0.4)
         scenes = result.get("scenes") or []
+        remaining = _chunk_errors(scenes, chunk_scenes)
+        if remaining:
+            # One rewrite is the budget; anything still short is raised by
+            # _iter_scene_chunks' length check, so never return MORE than asked.
+            scenes = [s for s in scenes if isinstance(s, dict)][:chunk_scenes]
     return scenes[:chunk_scenes]
 
 

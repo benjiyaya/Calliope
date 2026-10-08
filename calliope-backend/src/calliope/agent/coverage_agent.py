@@ -29,12 +29,65 @@ def _dialog_lines(dialog: str | None) -> list[str]:
     return [ln for ln in (dialog or "").splitlines() if ln.strip()]
 
 
+def _coverage_errors(
+    raw_clips: Any,
+    *,
+    n_dialog_lines: int,
+    clip_cap: int,
+) -> list[str]:
+    """Hard violations of the coverage contract, fed back for a rewrite.
+
+    The old path only rejected an empty array; everything else (clips with no
+    description, dialogue covered twice or not at all, clips over the cap) was
+    silently patched by `_normalize_clips`, hiding a bad pass from the model
+    that produced it."""
+    errors: list[str] = []
+    if not isinstance(raw_clips, list) or not raw_clips:
+        return ['the "clips" JSON array is missing or empty — return at least one clip']
+    seen: set[int] = set()
+    for i, c in enumerate(raw_clips, start=1):
+        if not isinstance(c, dict):
+            errors.append(f"clip {i} is not a JSON object")
+            continue
+        if not str(c.get("description") or "").strip():
+            errors.append(
+                f'clip {i} has an empty "description" (framing + subject + motion + setting, '
+                "1–4 sentences, with an explicit camera move)"
+            )
+        covered = c.get("dialog_lines_covered")
+        if covered is not None and not isinstance(covered, list):
+            errors.append(f'clip {i} "dialog_lines_covered" must be an array of line numbers')
+            covered = []
+        for n in covered or []:
+            if not isinstance(n, int) or not (1 <= n <= n_dialog_lines):
+                errors.append(f"clip {i} covers dialog line {n!r}, which is not 1..{n_dialog_lines}")
+            elif n in seen:
+                errors.append(f"dialog line {n} is covered by more than one clip")
+            else:
+                seen.add(n)
+        try:
+            duration = int(c.get("duration_sec"))
+        except (TypeError, ValueError):
+            duration = 0
+        if not (1 <= duration <= clip_cap):
+            errors.append(
+                f"clip {i} duration_sec is {c.get('duration_sec')!r}; it must be 1–{clip_cap} seconds"
+            )
+    missing = [n for n in range(1, n_dialog_lines + 1) if n not in seen]
+    if missing:
+        errors.append(
+            f"dialog lines {missing} are not covered by any clip — every line must be "
+            "covered by EXACTLY ONE clip"
+        )
+    return errors
+
+
 def _coverage_messages(
     *,
     scene: dict[str, Any],
     characters: list[dict[str, Any]],
-    previous_heading: str | None,
-    next_heading: str | None,
+    previous_scene: dict[str, Any] | None,
+    next_scene: dict[str, Any] | None,
     clip_cap: int,
 ) -> list[dict[str, str]]:
     """LLM messages that split one scene into shot clips."""
@@ -50,12 +103,28 @@ def _coverage_messages(
     scene_secs = estimate_scene_duration_sec(scene) or scene.get("duration_sec") or clip_cap
     n_clips_hint = max(1, round(scene_secs / clip_cap))
     context = ""
-    if previous_heading or next_heading:
+    if previous_scene or next_scene:
+        prev_line = "(none)"
+        if previous_scene:
+            prev_state = (previous_scene.get("action") or "").strip()
+            prev_line = (
+                f"{previous_scene.get('heading') or '(no heading)'} — "
+                f"ends with: {prev_state[-220:]}"
+            )
+        next_line = (next_scene or {}).get("heading") or "(none)" if next_scene else "(none)"
         context = (
             f"\nNeighbor scenes (for continuity, do NOT rewrite them):\n"
-            f"  Before: {previous_heading or '(none)'}\n"
-            f"  After: {next_heading or '(none)'}\n"
+            f"  Before: {prev_line}\n"
+            f"  After: {next_line}\n"
+            f"  Clips 1..N must continue FROM that state — same positions, props in hand,\n"
+            f"  lighting and screen direction as the previous scene leaves them.\n"
         )
+    anchors = "\n".join(
+        f"- {c['name']}: {(c.get('appearance') or '').strip()} "
+        f"(consistency prompt: {(c.get('consistency_prompt') or '').strip() or 'n/a'})"
+        for c in characters
+        if (c.get("appearance") or c.get("consistency_prompt"))
+    )
     user = f"""Break this script scene into AI-video shot clips (coverage).
 
 Scene {scene.get('order_index')}: {scene.get('heading') or '(no heading)'}
@@ -65,6 +134,9 @@ Suggested clip count: ~{n_clips_hint} (adjust to the material)
 {context}
 Characters in this scene:
 {char_lines or '(none)'}
+
+Character consistency anchors (BINDING — a clip description must never contradict these):
+{anchors or '(none)'}
 
 Full action (cover ALL of it across the clips):
 {scene.get('action') or '(none)'}
@@ -78,10 +150,20 @@ Dialogue lines (verbatim, numbered):
    no skipped beats, no duplicated dialogue.
 2. Order: clip 1 plays first, then 2, ... matching the action's chronology.
 3. Each clip's description is a self-contained video prompt: framing + subject + motion +
-   setting, present tense, 1–4 sentences. Include a character anchor (hair/outfit feature)
-   the first time a character appears in a clip.
+   setting, present tense, 1–4 sentences. The first time a character appears in a clip,
+   reuse their BINDING anchor wording from "Character consistency anchors" above (hair,
+   outfit, distinguishing feature) — never invent or change appearance across clips.
+3b. Every clip's description names an explicit camera move (push-in, pan, tilt, tracking,
+   orbit, handheld) — no "camera holds" during action beats; without camera direction the
+   video comes out static.
 4. duration_sec per clip: 3–{clip_cap}; the SUM should be approximately the scene budget.
-5. shot_size is one of: wide, medium, closeUp, insert, overShoulder.
+   Fit the dialogue to the duration, never the other way round: speech runs ~4.5 Chinese
+   characters or ~2.5 English words per second, so a clip's lines need
+   (their length ÷ speech rate) + 1–3s of breathing room; a clip whose lines do not fit
+   must shed them to the next clip (or split a long speech across consecutive clips).
+5. shot_size is one of: wide, medium, closeUp, insert, overShoulder. Vary framing across
+   the scene's clips (progress wide → medium → close-up as tension rises); do not give
+   every clip the same shot_size.
 
 Respond ONLY with JSON:
 {{
@@ -206,7 +288,8 @@ async def expand_scene_coverage(
             raise ValueError("No scenes to expand — generate a script first")
 
         char_rows = conn.execute(
-            "SELECT id, name, appearance FROM characters WHERE project_id = ?",
+            "SELECT id, name, appearance, consistency_prompt FROM characters "
+            "WHERE project_id = ?",
             (project_id,),
         ).fetchall()
         characters = [row_to_dict(r) for r in char_rows]
@@ -214,12 +297,12 @@ async def expand_scene_coverage(
         results: list[dict[str, Any]] = []
         total = len(scenes)
         for idx, scene in enumerate(scenes, start=1):
-            prev_heading = next(
-                (s["heading"] for s in all_scenes if s["order_index"] < scene["order_index"]),
+            prev_row = next(
+                (s for s in all_scenes if s["order_index"] < scene["order_index"]),
                 None,
             )
-            next_heading = next(
-                (s["heading"] for s in all_scenes if s["order_index"] > scene["order_index"]),
+            next_row = next(
+                (s for s in all_scenes if s["order_index"] > scene["order_index"]),
                 None,
             )
             await event_bus.publish(
@@ -233,31 +316,45 @@ async def expand_scene_coverage(
             messages = _coverage_messages(
                 scene=scene,
                 characters=characters,
-                previous_heading=prev_heading,
-                next_heading=next_heading,
+                previous_scene=prev_row,
+                next_scene=next_row,
                 clip_cap=cap,
             )
             if guidance:
                 messages[1]["content"] += f"\n\nExtra direction from the user: {guidance}"
+            dialog_lines = _dialog_lines(scene.get("dialog"))
             result = await generate_structured(messages, temperature=0.5)
-            raw_clips = result.get("clips") or []
-            if not raw_clips:
+            raw_clips = result.get("clips")
+            errors = _coverage_errors(
+                raw_clips, n_dialog_lines=len(dialog_lines), clip_cap=cap
+            )
+            if errors:
+                # Reject-and-rewrite: hand the exact violations back for a
+                # low-temperature rewrite instead of silently patching them.
                 retry = [
                     messages[0],
                     {
                         "role": "user",
                         "content": messages[1]["content"]
-                        + "\n\nPREVIOUS ATTEMPT FAILED: no clips array. You MUST return a "
-                        "\"clips\" JSON array with at least one clip.",
+                        + "\n\nPREVIOUS ATTEMPT REJECTED — fix EVERY problem below:\n"
+                        + "\n".join(f"- {e}" for e in errors),
                     },
                 ]
                 result = await generate_structured(retry, temperature=0.3)
-                raw_clips = result.get("clips") or []
+                raw_clips = result.get("clips")
+                errors = _coverage_errors(
+                    raw_clips, n_dialog_lines=len(dialog_lines), clip_cap=cap
+                )
+                if errors:
+                    logger.warning(
+                        "scene %s: coverage rewrite still invalid (%s); normalizing",
+                        scene["order_index"],
+                        "; ".join(errors),
+                    )
             if not raw_clips:
                 raise ValueError(
                     f"Scene {scene['order_index']}: coverage pass returned no clips"
                 )
-            dialog_lines = _dialog_lines(scene.get("dialog"))
             budget = scene.get("duration_sec") or estimate_scene_duration_sec(scene)
             clips = _normalize_clips(
                 raw_clips, n_dialog_lines=len(dialog_lines), scene_budget=budget, clip_cap=cap

@@ -198,6 +198,8 @@ export interface Settings {
 	agent_shell_enabled: boolean;
 	/** Attach reference images/frames to the H3 prompt rewrite (slow on local vision models). */
 	h3_rewrite_vision: boolean;
+	/** Inject MiniMax's official full-reference spec into the rewrite system prompt (budget-gated). */
+	h3_rewrite_official_spec: boolean;
 	dry_run: boolean;
 }
 

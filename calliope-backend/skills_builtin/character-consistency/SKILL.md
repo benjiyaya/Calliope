@@ -40,6 +40,16 @@ decided here, not at video time.
    people, text, watermark"), not style preferences you haven't stated
    positively.
 
+## Photoreal identity sheet
+
+For photoreal characters, prompt for "the same person photographed across
+multiple angles" in one controlled session: preserve natural facial asymmetry,
+skin texture and age cues; even soft lighting, neutral backdrop, relaxed
+posture. Avoid airbrushed skin, mannequin symmetry, and dramatic key/rim
+light. Expression rows (neutral / smiling / surprised / angry), when wanted,
+use distinct emotions with the mouth open on at least one — a row of near-
+identical smiles gives the video model nothing to interpolate.
+
 ## When Drift Happens
 
 - Compare the drifted artifact with the sheet: if the *sheet* is ambiguous

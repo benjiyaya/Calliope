@@ -246,6 +246,14 @@ class Settings(BaseSettings):
     # subject roster + video frames), so this is OFF by default — the rewrite
     # grounds on the asset text descriptions instead (the fast 1.5.7 path).
     h3_rewrite_vision: bool = False
+    # Inject MiniMax's official full-reference spec
+    # (skills_builtin/h3-video-prompt-enhancer/references/official/ref-en.txt)
+    # into the rewrite's system prompt instead of relying on the short
+    # built-in summary. The spec is ~15k tokens, so it is only injected when
+    # the token budget fits (prompt + max output + reserve <= context window);
+    # otherwise the rewrite degrades to the summary. Turning this off forces
+    # the summary-only path.
+    h3_rewrite_official_spec: bool = True
     dry_run: bool = False  # off by default — real ComfyUI jobs
 
     @property
@@ -540,6 +548,7 @@ class Settings(BaseSettings):
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "h3_rewrite_vision": bool(self.h3_rewrite_vision),
+            "h3_rewrite_official_spec": bool(self.h3_rewrite_official_spec),
             "dry_run": bool(self.dry_run),
         }
 
@@ -658,6 +667,7 @@ class Settings(BaseSettings):
             "agent_shell_enabled": bool(self.agent_shell_enabled),
             "h3_rewrite_extra_body": dict(self.h3_rewrite_extra_body or {}),
             "h3_rewrite_vision": bool(self.h3_rewrite_vision),
+            "h3_rewrite_official_spec": bool(self.h3_rewrite_official_spec),
             "dry_run": bool(self.dry_run),
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
