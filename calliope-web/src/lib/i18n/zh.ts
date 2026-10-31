@@ -497,6 +497,7 @@ export const zh: Dict = {
 	'assets.appearance': '外貌',
 	'assets.personality': '性格',
 	'assets.role': '角色',
+	'assets.roleSuggestions': '显示角色建议',
 	'assets.age': '年龄',
 	'assets.consistencyPrompt': '一致性提示词',
 	'assets.cover': '封面',

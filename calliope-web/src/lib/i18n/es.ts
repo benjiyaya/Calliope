@@ -497,6 +497,7 @@ export const es: Dict = {
 	'assets.appearance': 'Apariencia',
 	'assets.personality': 'Personalidad',
 	'assets.role': 'Rol',
+	'assets.roleSuggestions': 'Mostrar sugerencias de roles',
 	'assets.age': 'Edad',
 	'assets.consistencyPrompt': 'Prompt de consistencia',
 	'assets.cover': 'Portada',

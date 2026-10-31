@@ -497,6 +497,7 @@ export const ko: Dict = {
 	'assets.appearance': '외모',
 	'assets.personality': '성격',
 	'assets.role': '역할',
+	'assets.roleSuggestions': '역할 제안 표시',
 	'assets.age': '나이',
 	'assets.consistencyPrompt': '일관성 프롬프트',
 	'assets.cover': '커버',

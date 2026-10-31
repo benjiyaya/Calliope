@@ -497,6 +497,7 @@ export const en = {
 	'assets.appearance': 'Appearance',
 	'assets.personality': 'Personality',
 	'assets.role': 'Role',
+	'assets.roleSuggestions': 'Show role suggestions',
 	'assets.age': 'Age',
 	'assets.consistencyPrompt': 'Consistency prompt',
 	'assets.cover': 'Cover',

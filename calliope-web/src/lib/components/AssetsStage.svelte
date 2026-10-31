@@ -90,10 +90,27 @@
 	let editAssetName = $state('');
 	let editAssetDescription = $state('');
 	let editAssetRole = $state('');
+	let roleSuggestionsOpen = $state(false);
 	let editAssetAge = $state('');
 	let editAssetPersonality = $state('');
 	let editAssetImagePath = $state<string | null>(null);
 	let editAssetImageChanged = $state(false);
+	const roleSuggestions = [
+		'Protagonist',
+		'Deuteragonist',
+		'Supporting Character',
+		'Antagonist',
+		'Mentor',
+		'Sidekick',
+		'Love Interest',
+		'Rival',
+		'Comic Relief',
+		'Villain',
+		'Henchman',
+		'Narrator',
+		'Background Character',
+		'Cameo Character',
+	];
 
 	type DeleteTarget = { kind: 'character' | 'location' | 'item'; id: number; name: string };
 	let deleteTarget = $state<DeleteTarget | null>(null);
@@ -533,6 +550,7 @@
 
 	function openEditCharacter(char: Character) {
 		editAssetKind = 'character';
+		roleSuggestionsOpen = false;
 		editAssetId = char.id;
 		editAssetName = char.name;
 		editAssetRole = char.role ?? '';
@@ -574,6 +592,7 @@
 		const name = editAssetName.trim();
 		if (!name || editAssetId === null || $updateEntityMutation.isPending || uploadingCreateAssetImage)
 			return;
+		roleSuggestionsOpen = false;
 		$updateEntityMutation.mutate({
 			kind: editAssetKind,
 			id: editAssetId,
@@ -1809,6 +1828,7 @@
 	onclose={() => {
 		editAssetId = null;
 		editAssetImageChanged = false;
+		roleSuggestionsOpen = false;
 	}}
 >
 	<form
@@ -1830,7 +1850,44 @@
 			<div class="create-character-details">
 				<label class="field">
 					<span class="field-label">{t('assets.role')}</span>
-					<input class="field-input" bind:value={editAssetRole} disabled={$updateEntityMutation.isPending} />
+					<div class="role-field-control">
+						<div class="role-input-wrap">
+							<input
+								class="field-input"
+								bind:value={editAssetRole}
+								disabled={$updateEntityMutation.isPending}
+							/>
+							<button
+								type="button"
+								class="role-suggestions-toggle"
+								aria-label={t('assets.roleSuggestions')}
+								aria-expanded={roleSuggestionsOpen}
+								aria-controls={roleSuggestionsOpen ? 'edit-role-suggestions' : undefined}
+								title={t('assets.roleSuggestions')}
+								disabled={$updateEntityMutation.isPending}
+								onclick={() => (roleSuggestionsOpen = !roleSuggestionsOpen)}
+							>
+								<Icon name="lightbulb" size={16} />
+							</button>
+						</div>
+						{#if roleSuggestionsOpen}
+							<div id="edit-role-suggestions" class="role-suggestions" role="group" aria-label={t('assets.roleSuggestions')}>
+								{#each roleSuggestions as role (role)}
+									<button
+										type="button"
+										class:selected={editAssetRole === role}
+										aria-pressed={editAssetRole === role}
+										onclick={() => {
+											editAssetRole = role;
+											roleSuggestionsOpen = false;
+										}}
+									>
+										{role}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				</label>
 				<label class="field">
 					<span class="field-label">{t('assets.age')}</span>
@@ -2171,6 +2228,76 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 120px;
 		gap: 12px;
+	}
+	.role-field-control {
+		position: relative;
+	}
+	.role-input-wrap {
+		position: relative;
+	}
+	.role-input-wrap .field-input {
+		padding-right: 40px;
+	}
+	.role-suggestions-toggle {
+		position: absolute;
+		top: 50%;
+		right: 6px;
+		display: grid;
+		width: 28px;
+		height: 28px;
+		place-items: center;
+		transform: translateY(-50%);
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+	.role-suggestions-toggle:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.06);
+		color: var(--accent);
+	}
+	.role-suggestions-toggle:focus-visible,
+	.role-suggestions button:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.role-suggestions-toggle:disabled {
+		cursor: not-allowed;
+		opacity: 0.45;
+	}
+	.role-suggestions {
+		position: absolute;
+		top: calc(100% + 6px);
+		right: 0;
+		left: 0;
+		z-index: 2;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 4px;
+		max-height: 220px;
+		overflow-y: auto;
+		padding: 6px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-surface);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	}
+	.role-suggestions button {
+		padding: 7px 8px;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-secondary);
+		font: inherit;
+		font-size: 12px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.role-suggestions button:hover,
+	.role-suggestions button.selected {
+		background: rgba(255, 255, 255, 0.07);
+		color: var(--text-primary);
 	}
 	.create-image-actions {
 		display: flex;

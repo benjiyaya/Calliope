@@ -497,6 +497,7 @@ export const ja: Dict = {
 	'assets.appearance': '外見',
 	'assets.personality': '性格',
 	'assets.role': '役割',
+	'assets.roleSuggestions': '役割の候補を表示',
 	'assets.age': '年齢',
 	'assets.consistencyPrompt': '一貫性プロンプト',
 	'assets.cover': 'カバー',
