@@ -536,7 +536,7 @@
 		editAssetId = char.id;
 		editAssetName = char.name;
 		editAssetRole = char.role ?? '';
-		editAssetAge = (char.age ?? '').replace(/\D/g, '').slice(0, 6);
+		editAssetAge = char.age ?? '';
 		editAssetDescription = char.appearance ?? '';
 		editAssetPersonality = char.personality ?? '';
 		editAssetImagePath = char.sheet_path;
@@ -1714,12 +1714,8 @@
 					<span class="field-label">{t('assets.age')}</span>
 					<input
 						class="field-input"
-						inputmode="numeric"
-						maxlength="6"
-						value={createAssetAge}
-						oninput={(event) => {
-							createAssetAge = event.currentTarget.value.replace(/\D/g, '').slice(0, 6);
-						}}
+						maxlength="15"
+						bind:value={createAssetAge}
 					/>
 				</label>
 			</div>
@@ -1840,13 +1836,9 @@
 					<span class="field-label">{t('assets.age')}</span>
 					<input
 						class="field-input"
-						inputmode="numeric"
-						maxlength="6"
-						value={editAssetAge}
+						maxlength="15"
+						bind:value={editAssetAge}
 						disabled={$updateEntityMutation.isPending}
-						oninput={(event) => {
-							editAssetAge = event.currentTarget.value.replace(/\D/g, '').slice(0, 6);
-						}}
 					/>
 				</label>
 			</div>
