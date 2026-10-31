@@ -617,7 +617,7 @@ async def update_character(
         ).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Character not found")
-        data = {k: v for k, v in payload.model_dump().items() if v is not None}
+        data = payload.model_dump(exclude_unset=True)
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
             data["id"] = character_id
@@ -685,7 +685,7 @@ async def update_location(
         ).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Location not found")
-        data = {k: v for k, v in payload.model_dump().items() if v is not None}
+        data = payload.model_dump(exclude_unset=True)
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
             data["id"] = location_id
@@ -753,7 +753,7 @@ async def update_item(
         ).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Item not found")
-        data = {k: v for k, v in payload.model_dump().items() if v is not None}
+        data = payload.model_dump(exclude_unset=True)
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
             data["id"] = item_id
