@@ -5,6 +5,7 @@
 	import {
 		assetUrl,
 		jobsApi,
+		libraryApi,
 		playgroundApi,
 		projects,
 		settings as settingsApi,
@@ -20,6 +21,7 @@
 	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
+	import Modal from '$lib/components/ui/Modal.svelte';
 	import ProgressBar from '$lib/components/ui/ProgressBar.svelte';
 	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -72,6 +74,43 @@
 	let lastEnvWf = $state<number | string | null>(null);
 	let lastItemWf = $state<number | string | null>(null);
 	let bulkPending = $state(false);
+	let createAssetOpen = $state(false);
+	let createAssetKind = $state<'character' | 'location' | 'item'>('character');
+	let createAssetName = $state('');
+	let createAssetDescription = $state('');
+	let createAssetRole = $state('');
+	let createAssetAge = $state('');
+	let createAssetPersonality = $state('');
+	let createAssetImagePath = $state<string | null>(null);
+	let uploadingCreateAssetImage = $state(false);
+	let createAssetFileInput: HTMLInputElement | null = $state(null);
+	let editAssetOpen = $state(false);
+	let editAssetKind = $state<'character' | 'location' | 'item'>('character');
+	let editAssetId = $state<number | null>(null);
+	let editAssetName = $state('');
+	let editAssetDescription = $state('');
+	let editAssetRole = $state('');
+	let roleSuggestionsOpen = $state(false);
+	let editAssetAge = $state('');
+	let editAssetPersonality = $state('');
+	let editAssetImagePath = $state<string | null>(null);
+	let editAssetImageChanged = $state(false);
+	const roleSuggestions = [
+		'Protagonist',
+		'Deuteragonist',
+		'Supporting Character',
+		'Antagonist',
+		'Mentor',
+		'Sidekick',
+		'Love Interest',
+		'Rival',
+		'Comic Relief',
+		'Villain',
+		'Henchman',
+		'Narrator',
+		'Background Character',
+		'Cameo Character',
+	];
 
 	type DeleteTarget = { kind: 'character' | 'location' | 'item'; id: number; name: string };
 	let deleteTarget = $state<DeleteTarget | null>(null);
@@ -84,6 +123,14 @@
 		toStore(() => ({
 			queryKey: ['assets', projectId],
 			queryFn: () => projects.getAssets(projectId),
+		})),
+	);
+
+	const libraryMediaQuery = createQuery(
+		toStore(() => ({
+			queryKey: ['library-media'],
+			queryFn: libraryApi.list,
+			enabled: createAssetOpen || editAssetOpen,
 		})),
 	);
 
@@ -278,6 +325,133 @@
 		},
 	});
 
+	const createEntityMutation = createMutation({
+		mutationFn: async ({
+			kind,
+			name,
+			description,
+			role,
+			age,
+			personality,
+		}: {
+			kind: 'character' | 'location' | 'item';
+			name: string;
+			description: string;
+			imagePath: string | null;
+			role: string;
+			age: string;
+			personality: string;
+		}) => {
+			if (kind === 'character')
+				return projects.createCharacter(projectId, {
+					name,
+					role: role || undefined,
+					age: age || undefined,
+					appearance: description || undefined,
+					personality: personality || undefined,
+				});
+			if (kind === 'location')
+				return projects.createLocation(projectId, { name, description: description || undefined });
+			return projects.createItem(projectId, { name, description: description || undefined });
+		},
+		onSuccess: async (asset, { kind, name, imagePath }) => {
+			let imageError: unknown = null;
+			if (imagePath) {
+				try {
+					if (kind === 'character') {
+						await projects.updateCharacter(projectId, asset.id, { sheet_path: imagePath });
+					} else if (kind === 'location') {
+						await projects.updateLocation(projectId, asset.id, {
+							reference_image_path: imagePath,
+						});
+					} else {
+						await projects.updateItem(projectId, asset.id, {
+							reference_image_path: imagePath,
+						});
+					}
+				} catch (err) {
+					imageError = err;
+				}
+			}
+			createAssetOpen = false;
+			createAssetName = '';
+			createAssetDescription = '';
+			createAssetRole = '';
+			createAssetAge = '';
+			createAssetPersonality = '';
+			createAssetImagePath = null;
+			await client.invalidateQueries({ queryKey: ['assets', projectId] });
+			await client.invalidateQueries({ queryKey: ['story', projectId] });
+			await client.invalidateQueries({ queryKey: ['scenes', projectId] });
+			if (imageError) {
+				toast.error(
+					t('assets.toast.imageAttachFailed', {
+						error: imageError instanceof Error ? imageError.message : String(imageError),
+					}),
+				);
+			} else {
+				toast.success(t('assets.toast.created', { kind: kindNoun(kind), name }));
+			}
+		},
+		onError: (err) => {
+			toast.error(err instanceof Error ? err.message : t('assets.toast.createFailed'));
+		},
+	});
+
+	const updateEntityMutation = createMutation({
+		mutationFn: async ({
+			kind,
+			id,
+			name,
+			description,
+			role,
+			age,
+			personality,
+			imagePath,
+			imageChanged,
+		}: {
+			kind: 'character' | 'location' | 'item';
+			id: number;
+			name: string;
+			description: string;
+			role: string;
+			age: string;
+			personality: string;
+			imagePath: string | null;
+			imageChanged: boolean;
+		}) => {
+			if (kind === 'character') {
+				return projects.updateCharacter(projectId, id, {
+					name,
+					role: role || null,
+					age: age || null,
+					appearance: description || null,
+					personality: personality || null,
+					...(imageChanged ? { sheet_path: imagePath } : {}),
+				});
+			}
+			const payload = {
+				name,
+				description: description || null,
+				...(imageChanged ? { reference_image_path: imagePath } : {}),
+			};
+			return kind === 'location'
+				? projects.updateLocation(projectId, id, payload)
+				: projects.updateItem(projectId, id, payload);
+		},
+		onSuccess: async () => {
+			editAssetOpen = false;
+			editAssetId = null;
+			await client.invalidateQueries({ queryKey: ['assets', projectId] });
+			await client.invalidateQueries({ queryKey: ['story', projectId] });
+			await client.invalidateQueries({ queryKey: ['scenes', projectId] });
+			toast.success(t('assets.toast.updated'));
+		},
+		onError: (err) => {
+			toast.error(err instanceof Error ? err.message : t('assets.toast.updateFailed'));
+		},
+	});
+
 	const busy = $derived(bulkPending || $generateMutation.isPending);
 
 	/** Latest image job for one entity — drives the on-card generation state. */
@@ -361,6 +535,119 @@
 			: kind === 'location'
 				? t('assets.kind.environment')
 				: t('assets.kind.item');
+	}
+
+	function openCreateAsset() {
+		createAssetKind = tab === 'characters' ? 'character' : tab === 'locations' ? 'location' : 'item';
+		createAssetName = '';
+		createAssetDescription = '';
+		createAssetRole = '';
+		createAssetAge = '';
+		createAssetPersonality = '';
+		createAssetImagePath = null;
+		createAssetOpen = true;
+	}
+
+	function openEditCharacter(char: Character) {
+		editAssetKind = 'character';
+		roleSuggestionsOpen = false;
+		editAssetId = char.id;
+		editAssetName = char.name;
+		editAssetRole = char.role ?? '';
+		editAssetAge = char.age ?? '';
+		editAssetDescription = char.appearance ?? '';
+		editAssetPersonality = char.personality ?? '';
+		editAssetImagePath = char.sheet_path;
+		editAssetImageChanged = false;
+		editAssetOpen = true;
+	}
+
+	function openEditLocation(loc: Location) {
+		editAssetKind = 'location';
+		editAssetId = loc.id;
+		editAssetName = loc.name;
+		editAssetDescription = loc.description ?? '';
+		editAssetRole = '';
+		editAssetAge = '';
+		editAssetPersonality = '';
+		editAssetImagePath = loc.reference_image_path;
+		editAssetImageChanged = false;
+		editAssetOpen = true;
+	}
+
+	function openEditItem(item: Item) {
+		editAssetKind = 'item';
+		editAssetId = item.id;
+		editAssetName = item.name;
+		editAssetDescription = item.description ?? '';
+		editAssetRole = '';
+		editAssetAge = '';
+		editAssetPersonality = '';
+		editAssetImagePath = item.reference_image_path;
+		editAssetImageChanged = false;
+		editAssetOpen = true;
+	}
+
+	function saveEditedAsset() {
+		const name = editAssetName.trim();
+		if (!name || editAssetId === null || $updateEntityMutation.isPending || uploadingCreateAssetImage)
+			return;
+		roleSuggestionsOpen = false;
+		$updateEntityMutation.mutate({
+			kind: editAssetKind,
+			id: editAssetId,
+			name,
+			description: editAssetDescription.trim(),
+			role: editAssetRole.trim(),
+			age: editAssetAge.trim(),
+			personality: editAssetPersonality.trim(),
+			imagePath: editAssetImagePath,
+			imageChanged: editAssetImageChanged,
+		});
+	}
+
+	function createAsset() {
+		const name = createAssetName.trim();
+		if (!name || $createEntityMutation.isPending || uploadingCreateAssetImage) return;
+		$createEntityMutation.mutate({
+			kind: createAssetKind,
+			name,
+			description: createAssetDescription.trim(),
+			role: createAssetRole.trim(),
+			age: createAssetAge.trim(),
+			personality: createAssetPersonality.trim(),
+			imagePath: createAssetImagePath,
+		});
+	}
+
+	async function uploadCreateAssetImage(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (!file.type.startsWith('image/')) {
+			toast.error(t('assets.toast.chooseImage'));
+			return;
+		}
+		uploadingCreateAssetImage = true;
+		try {
+			const uploaded = await playgroundApi.upload(file);
+			if (uploaded.kind !== 'image') {
+				toast.error(t('assets.toast.notImage'));
+				return;
+			}
+			if (editAssetOpen) {
+				editAssetImagePath = uploaded.path;
+				editAssetImageChanged = true;
+			} else {
+				createAssetImagePath = uploaded.path;
+			}
+			await client.invalidateQueries({ queryKey: ['library-media'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('assets.toast.addImageFailed'));
+		} finally {
+			uploadingCreateAssetImage = false;
+		}
 	}
 
 	function requestDelete(target: DeleteTarget) {
@@ -641,6 +928,13 @@
 	accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
 	onchange={onOwnImageChosen}
 />
+<input
+	bind:this={createAssetFileInput}
+	type="file"
+	class="sr-only"
+	accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+	onchange={uploadCreateAssetImage}
+/>
 
 <header class="stage-header">
 	<div>
@@ -648,6 +942,9 @@
 		<p class="lead">{t('assets.lead')}</p>
 	</div>
 	<div class="stage-actions">
+		<Button variant="secondary" onclick={openCreateAsset}>
+			<Icon name="plus" size={14} /> {t('assets.addAsset')}
+		</Button>
 		<Button
 			variant="primary"
 			disabled={busy}
@@ -896,6 +1193,14 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title={t('common.edit')}
+									onclick={() => openEditCharacter(char)}
+								>
+									<Icon name="edit" size={14} /><span class="sr-only">{t('common.edit')} {char.name}</span>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title={t('assets.deleteCharacter')}
 									onclick={() =>
 										requestDelete({ kind: 'character', id: char.id, name: char.name })}
@@ -1086,6 +1391,14 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title={t('common.edit')}
+									onclick={() => openEditLocation(loc)}
+								>
+									<Icon name="edit" size={14} /><span class="sr-only">{t('common.edit')} {loc.name}</span>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title={t('assets.deleteEnvironment')}
 									onclick={() =>
 										requestDelete({ kind: 'location', id: loc.id, name: loc.name })}
@@ -1262,6 +1575,14 @@
 								<Button
 									variant="secondary"
 									size="sm"
+									title={t('common.edit')}
+									onclick={() => openEditItem(item)}
+								>
+									<Icon name="edit" size={14} /><span class="sr-only">{t('common.edit')} {item.name}</span>
+								</Button>
+								<Button
+									variant="secondary"
+									size="sm"
 									title={t('assets.deleteItem')}
 									onclick={() =>
 										requestDelete({ kind: 'item', id: item.id, name: item.name })}
@@ -1378,6 +1699,308 @@
 		previewAlt = '';
 	}}
 />
+
+<Modal
+	bind:open={createAssetOpen}
+	title={t('assets.addTitle', { kind: kindNoun(createAssetKind) })}
+	resizable
+	closeOnBackdrop={false}
+	onclose={() => {
+		createAssetName = '';
+		createAssetDescription = '';
+		createAssetRole = '';
+		createAssetAge = '';
+		createAssetPersonality = '';
+	}}
+>
+	<form
+		onsubmit={(event) => {
+			event.preventDefault();
+			createAsset();
+		}}
+	>
+		<label class="field">
+			<span class="field-label">{t('common.name')}</span>
+			<input class="field-input" bind:value={createAssetName} required />
+		</label>
+		{#if createAssetKind === 'character'}
+			<div class="create-character-details">
+				<label class="field">
+					<span class="field-label">{t('assets.role')}</span>
+					<input class="field-input" bind:value={createAssetRole} />
+				</label>
+				<label class="field">
+					<span class="field-label">{t('assets.age')}</span>
+					<input
+						class="field-input"
+						maxlength="15"
+						bind:value={createAssetAge}
+					/>
+				</label>
+			</div>
+			<label class="field">
+				<span class="field-label">{t('assets.appearance')}</span>
+				<textarea class="field-textarea" rows="3" bind:value={createAssetDescription}></textarea>
+			</label>
+			<label class="field">
+				<span class="field-label">{t('assets.personality')}</span>
+				<textarea class="field-textarea" rows="3" bind:value={createAssetPersonality}></textarea>
+			</label>
+		{:else}
+			<label class="field">
+				<span class="field-label">{t('assets.description')}</span>
+				<textarea class="field-textarea" rows="3" bind:value={createAssetDescription}></textarea>
+			</label>
+		{/if}
+		<div class="field">
+			<span class="field-label">{t('assets.addImage')}</span>
+			<div class="create-image-actions">
+				<Button
+					variant="secondary"
+					size="sm"
+					loading={uploadingCreateAssetImage}
+					disabled={$createEntityMutation.isPending}
+					onclick={() => createAssetFileInput?.click()}
+				>
+					<Icon name="upload" size={13} /> {t('assets.uploadImage')}
+				</Button>
+				{#if createAssetImagePath}
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={$createEntityMutation.isPending}
+						onclick={() => (createAssetImagePath = null)}
+					>
+						{t('assets.removeSelectedImage')}
+					</Button>
+				{/if}
+			</div>
+			{#if $libraryMediaQuery.isLoading}
+				<p class="muted small">{t('common.loading')}</p>
+			{:else if $libraryMediaQuery.isError}
+				<p class="err-line">
+					{$libraryMediaQuery.error instanceof Error
+						? $libraryMediaQuery.error.message
+						: t('assets.libraryLoadFailed')}
+				</p>
+			{:else if ($libraryMediaQuery.data ?? []).filter((media) => media.kind === 'image').length > 0}
+				<p class="field-label">{t('assets.chooseLibraryImage')}</p>
+				<div class="create-image-grid" aria-label={t('assets.chooseLibraryImage')}>
+					{#each ($libraryMediaQuery.data ?? []).filter((media) => media.kind === 'image') as media (media.path)}
+						{@const src = assetUrl(media.path)}
+						<button
+							type="button"
+							class="create-image-option"
+							class:selected={createAssetImagePath === media.path}
+							aria-pressed={createAssetImagePath === media.path}
+							title={media.name}
+							disabled={$createEntityMutation.isPending}
+							onclick={() => (createAssetImagePath = media.path)}
+						>
+							{#if src}<img src={src} alt="" loading="lazy" />{/if}
+							<span>{media.name}</span>
+						</button>
+					{/each}
+				</div>
+			{:else}
+				<p class="muted small">{t('assets.noLibraryImages')}</p>
+			{/if}
+		</div>
+	</form>
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (createAssetOpen = false)}>{t('common.cancel')}</Button>
+		<Button
+			variant="primary"
+			loading={$createEntityMutation.isPending}
+			disabled={!createAssetName.trim() || uploadingCreateAssetImage}
+			onclick={createAsset}
+		>
+			{t('assets.addAsset')}
+		</Button>
+	{/snippet}
+</Modal>
+
+<Modal
+	bind:open={editAssetOpen}
+	title={t('assets.editTitle', { kind: kindNoun(editAssetKind) })}
+	resizable
+	closeOnBackdrop={false}
+	onclose={() => {
+		editAssetId = null;
+		editAssetImageChanged = false;
+		roleSuggestionsOpen = false;
+	}}
+>
+	<form
+		onsubmit={(event) => {
+			event.preventDefault();
+			saveEditedAsset();
+		}}
+	>
+		<label class="field">
+			<span class="field-label">{t('common.name')}</span>
+			<input
+				class="field-input"
+				bind:value={editAssetName}
+				required
+				disabled={$updateEntityMutation.isPending}
+			/>
+		</label>
+		{#if editAssetKind === 'character'}
+			<div class="create-character-details">
+				<label class="field">
+					<span class="field-label">{t('assets.role')}</span>
+					<div class="role-field-control">
+						<div class="role-input-wrap">
+							<input
+								class="field-input"
+								bind:value={editAssetRole}
+								disabled={$updateEntityMutation.isPending}
+							/>
+							<button
+								type="button"
+								class="role-suggestions-toggle"
+								aria-label={t('assets.roleSuggestions')}
+								aria-expanded={roleSuggestionsOpen}
+								aria-controls={roleSuggestionsOpen ? 'edit-role-suggestions' : undefined}
+								title={t('assets.roleSuggestions')}
+								disabled={$updateEntityMutation.isPending}
+								onclick={() => (roleSuggestionsOpen = !roleSuggestionsOpen)}
+							>
+								<Icon name="lightbulb" size={16} />
+							</button>
+						</div>
+						{#if roleSuggestionsOpen}
+							<div id="edit-role-suggestions" class="role-suggestions" role="group" aria-label={t('assets.roleSuggestions')}>
+								{#each roleSuggestions as role (role)}
+									<button
+										type="button"
+										class:selected={editAssetRole === role}
+										aria-pressed={editAssetRole === role}
+										onclick={() => {
+											editAssetRole = role;
+											roleSuggestionsOpen = false;
+										}}
+									>
+										{role}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</label>
+				<label class="field">
+					<span class="field-label">{t('assets.age')}</span>
+					<input
+						class="field-input"
+						maxlength="15"
+						bind:value={editAssetAge}
+						disabled={$updateEntityMutation.isPending}
+					/>
+				</label>
+			</div>
+			<label class="field">
+				<span class="field-label">{t('assets.appearance')}</span>
+				<textarea
+					class="field-textarea"
+					rows="3"
+					bind:value={editAssetDescription}
+					disabled={$updateEntityMutation.isPending}
+				></textarea>
+			</label>
+			<label class="field">
+				<span class="field-label">{t('assets.personality')}</span>
+				<textarea
+					class="field-textarea"
+					rows="3"
+					bind:value={editAssetPersonality}
+					disabled={$updateEntityMutation.isPending}
+				></textarea>
+			</label>
+		{:else}
+			<label class="field">
+				<span class="field-label">{t('assets.description')}</span>
+				<textarea
+					class="field-textarea"
+					rows="3"
+					bind:value={editAssetDescription}
+					disabled={$updateEntityMutation.isPending}
+				></textarea>
+			</label>
+		{/if}
+		<div class="field">
+			<span class="field-label">{t('assets.addImage')}</span>
+			<div class="create-image-actions">
+				<Button
+					variant="secondary"
+					size="sm"
+					loading={uploadingCreateAssetImage}
+					disabled={$updateEntityMutation.isPending}
+					onclick={() => createAssetFileInput?.click()}
+				>
+					<Icon name="upload" size={13} /> {t('assets.uploadImage')}
+				</Button>
+				{#if editAssetImagePath}
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={$updateEntityMutation.isPending}
+						onclick={() => {
+							editAssetImagePath = null;
+							editAssetImageChanged = true;
+						}}
+					>
+						{t('assets.removeSelectedImage')}
+					</Button>
+				{/if}
+			</div>
+			{#if $libraryMediaQuery.isLoading}
+				<p class="muted small">{t('common.loading')}</p>
+			{:else if $libraryMediaQuery.isError}
+				<p class="err-line">
+					{$libraryMediaQuery.error instanceof Error
+						? $libraryMediaQuery.error.message
+						: t('assets.libraryLoadFailed')}
+				</p>
+			{:else if ($libraryMediaQuery.data ?? []).filter((media) => media.kind === 'image').length > 0}
+				<p class="field-label">{t('assets.chooseLibraryImage')}</p>
+				<div class="create-image-grid" aria-label={t('assets.chooseLibraryImage')}>
+					{#each ($libraryMediaQuery.data ?? []).filter((media) => media.kind === 'image') as media (media.path)}
+						{@const src = assetUrl(media.path)}
+						<button
+							type="button"
+							class="create-image-option"
+							class:selected={editAssetImagePath === media.path}
+							aria-pressed={editAssetImagePath === media.path}
+							title={media.name}
+							disabled={$updateEntityMutation.isPending}
+							onclick={() => {
+								editAssetImagePath = media.path;
+								editAssetImageChanged = true;
+							}}
+						>
+							{#if src}<img src={src} alt="" loading="lazy" />{/if}
+							<span>{media.name}</span>
+						</button>
+					{/each}
+				</div>
+			{:else}
+				<p class="muted small">{t('assets.noLibraryImages')}</p>
+			{/if}
+		</div>
+	</form>
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (editAssetOpen = false)}>{t('common.cancel')}</Button>
+		<Button
+			variant="primary"
+			loading={$updateEntityMutation.isPending}
+			disabled={!editAssetName.trim() || uploadingCreateAssetImage}
+			onclick={saveEditedAsset}
+		>
+			{t('common.save')}
+		</Button>
+	{/snippet}
+</Modal>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
@@ -1600,6 +2223,126 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	.create-character-details {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 120px;
+		gap: 12px;
+	}
+	.role-field-control {
+		position: relative;
+	}
+	.role-input-wrap {
+		position: relative;
+	}
+	.role-input-wrap .field-input {
+		padding-right: 40px;
+	}
+	.role-suggestions-toggle {
+		position: absolute;
+		top: 50%;
+		right: 6px;
+		display: grid;
+		width: 28px;
+		height: 28px;
+		place-items: center;
+		transform: translateY(-50%);
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+	.role-suggestions-toggle:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.06);
+		color: var(--accent);
+	}
+	.role-suggestions-toggle:focus-visible,
+	.role-suggestions button:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.role-suggestions-toggle:disabled {
+		cursor: not-allowed;
+		opacity: 0.45;
+	}
+	.role-suggestions {
+		position: absolute;
+		top: calc(100% + 6px);
+		right: 0;
+		left: 0;
+		z-index: 2;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 4px;
+		max-height: 220px;
+		overflow-y: auto;
+		padding: 6px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-surface);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	}
+	.role-suggestions button {
+		padding: 7px 8px;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-secondary);
+		font: inherit;
+		font-size: 12px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.role-suggestions button:hover,
+	.role-suggestions button.selected {
+		background: rgba(255, 255, 255, 0.07);
+		color: var(--text-primary);
+	}
+	.create-image-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-bottom: 10px;
+	}
+	.create-image-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+		gap: 8px;
+		max-height: 220px;
+		overflow-y: auto;
+		padding: 2px;
+	}
+	.create-image-option {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		min-width: 0;
+		padding: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		font: inherit;
+		font-size: 11px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.create-image-option:hover,
+	.create-image-option.selected {
+		border-color: var(--accent);
+		color: var(--text-primary);
+	}
+	.create-image-option img {
+		width: 100%;
+		aspect-ratio: 1;
+		object-fit: cover;
+		border-radius: calc(var(--radius-sm) - 2px);
+	}
+	.create-image-option span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.row {
 		display: flex;

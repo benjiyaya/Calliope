@@ -94,6 +94,14 @@ export interface Scene {
 	video_path: string | null;
 	video_settings?: SceneVideoSettings | null;
 	character_ids: number[];
+	item_ids?: number[];
+	items?: Array<{
+		id: number;
+		name: string;
+		description: string | null;
+		reference_image_path: string | null;
+		consistency_prompt: string | null;
+	}>;
 	characters: Array<{
 		id: number;
 		name: string;

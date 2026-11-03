@@ -70,6 +70,17 @@ def _scene_with_chars(conn, scene_row, *, with_clips: bool = True) -> dict[str, 
     ).fetchall()
     scene["characters"] = [row_to_dict(c) for c in chars]
     scene["character_ids"] = [c["id"] for c in scene["characters"]]
+    items = conn.execute(
+        """
+        SELECT i.id, i.name, i.description, i.reference_image_path, i.consistency_prompt
+        FROM items i
+        JOIN scene_items si ON si.item_id = i.id
+        WHERE si.scene_id = ?
+        """,
+        (scene["id"],),
+    ).fetchall()
+    scene["items"] = [row_to_dict(item) for item in items]
+    scene["item_ids"] = [item["id"] for item in scene["items"]]
     raw_settings = scene.pop("video_settings_json", None)
     if raw_settings:
         try:
@@ -210,6 +221,11 @@ async def create_scene(project_id: int, payload: SceneCreate) -> dict[str, Any]:
                 "INSERT OR IGNORE INTO scene_characters (scene_id, character_id) VALUES (?, ?)",
                 (scene_id, cid),
             )
+        for item_id in payload.item_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO scene_items (scene_id, item_id) VALUES (?, ?)",
+                (scene_id, item_id),
+            )
         _ensure_default_clip(conn, scene_id, project_id)
         conn.commit()
         row = conn.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
@@ -230,10 +246,11 @@ async def update_scene(project_id: int, scene_id: int, payload: SceneUpdate) -> 
             raise HTTPException(status_code=404, detail="Scene not found")
         data = payload.model_dump(exclude_unset=True)
         char_ids = data.pop("character_ids", None)
+        item_ids = data.pop("item_ids", None)
         # video_settings arrives as a dict — the generic UPDATE path below only
         # handles scalars, so serialize it into its JSON column (or NULL it).
         video_settings = data.pop("video_settings", None)
-        data = {k: v for k, v in data.items() if v is not None}
+        data = {k: v for k, v in data.items() if v is not None or k == "location_id"}
         if data:
             fields = ", ".join(f"{k} = :{k}" for k in data)
             data["id"] = scene_id
@@ -252,6 +269,13 @@ async def update_scene(project_id: int, scene_id: int, payload: SceneUpdate) -> 
                 conn.execute(
                     "INSERT OR IGNORE INTO scene_characters (scene_id, character_id) VALUES (?, ?)",
                     (scene_id, cid),
+                )
+        if item_ids is not None:
+            conn.execute("DELETE FROM scene_items WHERE scene_id = ?", (scene_id,))
+            for item_id in item_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO scene_items (scene_id, item_id) VALUES (?, ?)",
+                    (scene_id, item_id),
                 )
         _ensure_default_clip(conn, scene_id, project_id)
         conn.commit()

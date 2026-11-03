@@ -256,6 +256,31 @@ export const projects = {
 		api<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	delete: (id: number) => api<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
 	getStory: (id: number) => api<StoryData>(`/api/projects/${id}/story`),
+	createCharacter: (
+		projectId: number,
+		payload: {
+			name: string;
+			role?: string;
+			age?: string;
+			appearance?: string;
+			personality?: string;
+			consistency_prompt?: string;
+		},
+	) =>
+		api<Character>(`/api/projects/${projectId}/characters`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	createLocation: (projectId: number, payload: { name: string; description?: string }) =>
+		api<Location>(`/api/projects/${projectId}/locations`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
+	createItem: (projectId: number, payload: { name: string; description?: string }) =>
+		api<Item>(`/api/projects/${projectId}/items`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
 	updateBeat: (projectId: number, beatId: number, payload: Partial<Beat>) =>
 		api<Beat>(`/api/projects/${projectId}/beats/${beatId}`, {
 			method: 'PATCH',

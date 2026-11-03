@@ -146,6 +146,7 @@ class SceneCreate(BaseModel):
     beat_id: int | None = None
     character_ids: list[int] = Field(default_factory=list)
     location_id: int | None = None
+    item_ids: list[int] = Field(default_factory=list)
 
 
 class SceneUpdate(BaseModel):
@@ -159,6 +160,7 @@ class SceneUpdate(BaseModel):
     beat_id: int | None = None
     character_ids: list[int] | None = None
     location_id: int | None = None
+    item_ids: list[int] | None = None
     video_path: str | None = None
     # Persisted video-stage setup: form input_values, prompt draft + metadata.
     # Serialized into scenes.video_settings_json.

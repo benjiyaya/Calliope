@@ -6,8 +6,10 @@
 	interface Props {
 		open?: boolean;
 		title?: string;
-		size?: 'md' | 'lg' | 'xl';
+		size?: 'md' | 'lg' | 'xl' | 'wide';
 		dismissible?: boolean;
+		closeOnBackdrop?: boolean;
+		resizable?: boolean;
 		onclose?: () => void;
 		footer?: Snippet;
 		children: Snippet;
@@ -18,6 +20,8 @@
 		title,
 		size = 'md',
 		dismissible = true,
+		closeOnBackdrop = true,
+		resizable = false,
 		onclose,
 		footer,
 		children,
@@ -68,6 +72,7 @@
 	}
 
 	function handleBackdropClick(event: MouseEvent) {
+		if (!closeOnBackdrop) return;
 		if (event.target === event.currentTarget) requestClose();
 	}
 
@@ -100,6 +105,7 @@
 		<div
 			bind:this={panel}
 			class="modal-panel size-{size}"
+			class:resizable
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={title ? titleId : undefined}
@@ -166,6 +172,25 @@
 	}
 	.modal-panel.size-xl {
 		width: min(1180px, 100%);
+	}
+	.modal-panel.size-wide {
+		width: min(1040px, 100%);
+		min-height: min(560px, calc(100vh - 96px));
+	}
+	.modal-panel.resizable {
+		resize: both;
+		overflow: hidden;
+		min-width: min(520px, 100%);
+		min-height: 420px;
+		max-width: calc(100vw - 48px);
+		max-height: calc(100vh - 48px);
+	}
+	.modal-panel.size-wide.resizable {
+		min-height: min(560px, calc(100vh - 96px));
+	}
+	.modal-panel.resizable .modal-body {
+		flex: 1;
+		min-height: 0;
 	}
 	.modal-header {
 		display: flex;
