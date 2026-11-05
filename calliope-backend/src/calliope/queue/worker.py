@@ -359,9 +359,11 @@ class QueueWorker:
                 if not paths:
                     raise RuntimeError(f"ComfyUI job {sdk_job.id} finished with no output files")
 
-            self._apply_outputs_to_entities(job, payload, paths)
-            if job.get("clip_id") and kind == "video" and paths:
-                await self._collect_latent(classic, job, plan, files)
+                self._apply_outputs_to_entities(job, payload, paths)
+                # Inside the SDK block: the latent's output handle downloads
+                # through this client, which closes when the block exits.
+                if job.get("clip_id") and kind == "video" and paths:
+                    await self._collect_latent(classic, job, plan, files)
             return paths
         finally:
             if classic is not None:
