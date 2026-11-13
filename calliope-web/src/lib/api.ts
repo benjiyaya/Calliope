@@ -866,6 +866,11 @@ export const canvasApi = {
 		),
 	tidy: (canvasId: number) =>
 		api<{ ok: boolean; moved: number }>(`/api/canvas/${canvasId}/tidy`, { method: 'POST' }),
+	runNode: (canvasId: number, nodeId: number) =>
+		api<{ ok: boolean; job: { id: number } }>(
+			`/api/canvas/${canvasId}/nodes/${nodeId}/run`,
+			{ method: 'POST' },
+		),
 	regenerate: (canvasId: number, nodeId: number, prompt: string) =>
 		api<{ ok: boolean; job: { id: number } }>(
 			`/api/canvas/${canvasId}/nodes/${nodeId}/regenerate`,

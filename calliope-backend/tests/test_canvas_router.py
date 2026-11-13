@@ -1,6 +1,8 @@
 """Canvas v2.1 Phase 1 — CRUD router, get-or-create scoping, entity auto-seed."""
 from __future__ import annotations
 
+import json
+
 import calliope.config as config_module
 from calliope.db import get_db
 
@@ -561,3 +563,133 @@ def test_job_completed_event_carries_clip_id(client):
         ["C:/out.png"],
     )
     assert image["clip_id"] is None
+
+
+def _ref_workflow(conn) -> int:
+    """Image workflow with a prompt node, a character ref, and a width node."""
+    wf_json = json.dumps(
+        {
+            "10": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": ""},
+                "_meta": {"title": "Main Prompt (Input:prompt)"},
+            },
+            "11": {
+                "class_type": "LoadImage",
+                "inputs": {"image": ""},
+                "_meta": {"title": "Char Ref (Input:character)"},
+            },
+        }
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO workflows (name, kind, workflow_json, input_schema, output_schema, is_enabled)
+        VALUES ('refs', 'image', ?, '[]', '[]', 1)
+        """,
+        (wf_json,),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def test_run_workflow_node_resolves_data_edges(client):
+    """The run path merges data-edge media onto the workflow's role slots."""
+    pid = client.post("/api/projects", json={"title": "RunPath", "idea": "x"}).json()["id"]
+    canvas_id = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+    _seed_story_entities(client, pid)
+    conn = get_db(config_module.settings.db_path)
+    try:
+        workflow_id = _ref_workflow(conn)
+        char = conn.execute(
+            "SELECT id FROM characters WHERE project_id = ? ORDER BY id LIMIT 1",
+            (pid,),
+        ).fetchone()
+        char_sheet = f"{config_module.settings.assets_dir}/sheets/char_{char['id']}.png"
+        conn.execute(
+            "UPDATE characters SET sheet_path = ? WHERE id = ?", (char_sheet, char["id"])
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    seed_entities = client.get(f"/api/canvas/{canvas_id}").json()
+    char_node = next(
+        n for n in seed_entities["nodes"]
+        if n["type"] == "entity" and n["entity_type"] == "character"
+    )
+    wf_node = client.post(
+        f"/api/canvas/{canvas_id}/nodes",
+        json={
+            "type": "workflow",
+            "workflow_id": workflow_id,
+            "x": 900,
+            "y": 80,
+            "input_values_json": json.dumps({"10": "a rider at dawn"}),
+        },
+    ).json()
+    client.post(
+        f"/api/canvas/{canvas_id}/edges",
+        json={
+            "src_node_id": char_node["id"],
+            "dst_node_id": wf_node["id"],
+            "kind": "data",
+            "dst_role": "character",
+        },
+    )
+    res = client.post(f"/api/canvas/{canvas_id}/nodes/{wf_node['id']}/run")
+    assert res.status_code == 200, res.text
+    job_id = res.json()["job"]["id"]
+    conn = get_db(config_module.settings.db_path)
+    try:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        node = conn.execute(
+            "SELECT job_id, status FROM canvas_node WHERE id = ?", (wf_node["id"],)
+        ).fetchone()
+    finally:
+        conn.close()
+    payload = json.loads(job["payload_json"])
+    # Stored prompt value untouched; the data edge fed the character role slot.
+    assert payload["input_values"]["10"] == "a rider at dawn"
+    assert payload["input_values"]["11"] == char_sheet
+    assert payload["prompt"] == "a rider at dawn"
+    assert payload["source"] == "canvas"
+    assert payload["canvas_id"] == canvas_id
+    assert node["job_id"] == job_id
+    assert node["status"] == "pending"
+
+
+def test_run_workflow_node_refuses_unknown_role(client):
+    """A data edge whose role has no (Input:...) node fails BEFORE queueing."""
+    pid = client.post("/api/projects", json={"title": "RunBad", "idea": "x"}).json()["id"]
+    canvas_id = client.post("/api/canvas", json={"project_id": pid}).json()["canvas"]["id"]
+    _seed_story_entities(client, pid)
+    conn = get_db(config_module.settings.db_path)
+    try:
+        workflow_id = _ref_workflow(conn)
+    finally:
+        conn.close()
+    graph = client.get(f"/api/canvas/{canvas_id}").json()
+    loc_node = next(
+        n for n in graph["nodes"] if n["type"] == "entity" and n["entity_type"] == "location"
+    )
+    wf_node = client.post(
+        f"/api/canvas/{canvas_id}/nodes",
+        json={"type": "workflow", "workflow_id": workflow_id, "x": 900, "y": 80},
+    ).json()
+    client.post(
+        f"/api/canvas/{canvas_id}/edges",
+        json={
+            "src_node_id": loc_node["id"],
+            "dst_node_id": wf_node["id"],
+            "kind": "data",
+            "dst_role": "width",
+        },
+    )
+    res = client.post(f"/api/canvas/{canvas_id}/nodes/{wf_node['id']}/run")
+    assert res.status_code == 422
+    assert "width" in res.json()["detail"]
+    conn = get_db(config_module.settings.db_path)
+    try:
+        jobs = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()
+    finally:
+        conn.close()
+    assert jobs["c"] == 0, "no job may queue when role resolution fails"

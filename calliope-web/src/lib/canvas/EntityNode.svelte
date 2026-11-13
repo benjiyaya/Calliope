@@ -69,8 +69,10 @@
 </script>
 
 {#snippet card()}
-	{#if data.entityType === 'character' || data.entityType === 'location'}
-		<Handle type="source" position={Position.Right} id="asset" isConnectable={false} />
+	{#if data.entityType === 'character' || data.entityType === 'location' || data.entityType === 'item'}
+		<!-- Connectable: drag onto a workflow node to wire this reference in
+			(the canvas page's onconnect opens the role chooser). -->
+		<Handle type="source" position={Position.Right} id="asset" />
 	{/if}
 	{#if data.entityType === 'clip'}
 		<Handle type="target" position={Position.Left} id="clip" isConnectable={false} />

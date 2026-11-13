@@ -24,6 +24,7 @@
 	import AgentPlanPanel from '$lib/components/agent/AgentPlanPanel.svelte';
 	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import EntityNode from '$lib/canvas/EntityNode.svelte';
+	import WorkflowNode from '$lib/canvas/WorkflowNode.svelte';
 	import type { ComposerReference } from '$lib/canvas/NodeComposer.svelte';
 	import ArtifactNodeComp from '$lib/canvas/ArtifactNode.svelte';
 	import { clipPresentation, currentClipPaths, storyEdges } from '$lib/canvas/storyEdges';
@@ -43,6 +44,7 @@
 		type AgentPlan,
 		type AgentSession,
 		type AgentTask,
+		type CanvasEdge,
 		type Character,
 		type Item,
 		type Job,
@@ -134,6 +136,7 @@
 		entity: EntityNode,
 		image: ArtifactNodeComp,
 		video: ArtifactNodeComp,
+		workflow: WorkflowNode,
 	};
 
 	// $state.raw: Svelte Flow v1 treats node arrays as immutable — it mutates
@@ -213,6 +216,153 @@
 	// dragged cards back. The rebuild is deferred until drag stop.
 	let dragInProgress = $state(false);
 	let rebuildPending = $state(false);
+
+	/** Stored canvas edges (data + link) as renderable xyflow edges, on top of
+	 * the derived story edges. Edge ids carry the DB id for deletion. */
+	function storedFlowEdges(rows: CanvasEdge[]): Edge[] {
+		return rows.map((e) => ({
+			id: `stored-${e.id}`,
+			source: `cn-${e.src_node_id}`,
+			target: `cn-${e.dst_node_id}`,
+			sourceHandle: 'asset',
+			targetHandle: 'in',
+			type: 'smoothstep',
+			label: e.kind === 'link' ? (e.label ?? 'link') : (e.dst_role ?? ''),
+			data: { storedEdgeId: e.id, edgeKind: e.kind },
+			deletable: true,
+			selectable: true,
+			style:
+				e.kind === 'link'
+					? 'stroke: #d4b46a; stroke-dasharray: 5 4; stroke-width: 1.5px'
+					: 'stroke: #7dd3fc; stroke-dasharray: 4 3; stroke-width: 1.5px',
+		}));
+	}
+
+	/** Run a workflow node — the manual queue path (not the agent review gate). */
+	async function runWorkflowNode(nodeId: number) {
+		try {
+			await canvasApi.runNode(canvasId, nodeId);
+			toast.success(t('canvas.runQueued'));
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+			await client.invalidateQueries({ queryKey: ['agent-project-jobs'] });
+			await client.invalidateQueries({ queryKey: ['playground-jobs'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.runFailed'));
+		}
+	}
+
+	// ---- wiring (data + link edges) ------------------------------------------
+	// Drag from a media card's asset handle onto a workflow node → the chooser
+	// picks a data role (stored, then resolved onto the workflow's role slots
+	// at run time) or a labeled link annotation.
+
+	const EDGE_ROLES = ['prompt', 'character', 'location', 'image', 'negative', 'audio', 'video'] as const;
+	let edgeChooser = $state<{
+		source: number;
+		target: number;
+		sourceTitle: string;
+		targetTitle: string;
+	} | null>(null);
+	let linkLabel = $state('');
+
+	function flowNodeId(id: string): number | null {
+		const n = Number(id.replace(/^cn-/, ''));
+		return Number.isFinite(n) && n > 0 ? n : null;
+	}
+
+	function nodeTitle(id: number): string {
+		const n = nodes.find((x) => (x.data as { canvasNodeId?: number }).canvasNodeId === id);
+		const title = (n?.data as { title?: string } | undefined)?.title;
+		return title ?? String(id);
+	}
+
+	function onFlowConnect(connection: { source: string | null; target: string | null }) {
+		const src = connection.source != null ? flowNodeId(connection.source) : null;
+		const dst = connection.target != null ? flowNodeId(connection.target) : null;
+		if (src == null || dst == null) return;
+		if (src === dst) {
+			toast.error(t('canvas.selfLoopBlocked'));
+			return;
+		}
+		edgeChooser = {
+			source: src,
+			target: dst,
+			sourceTitle: nodeTitle(src),
+			targetTitle: nodeTitle(dst),
+		};
+		linkLabel = '';
+	}
+
+	/** Only workflow nodes accept wires — media cards are always sources. */
+	function validFlowConnection(connection: { target: string | null }) {
+		const dst = connection.target != null ? flowNodeId(connection.target) : null;
+		if (dst == null) return false;
+		const dstNode = nodes.find((x) => (x.data as { canvasNodeId?: number }).canvasNodeId === dst);
+		return dstNode?.type === 'workflow';
+	}
+
+	async function createDataEdge(role: string) {
+		const c = edgeChooser;
+		if (!c) return;
+		try {
+			await canvasApi.createEdge(canvasId, {
+				src_node_id: c.source,
+				dst_node_id: c.target,
+				kind: 'data',
+				dst_role: role,
+			});
+			edgeChooser = null;
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.edgeCreateFailed'));
+		}
+	}
+
+	async function createLinkEdge() {
+		const c = edgeChooser;
+		const label = linkLabel.trim();
+		if (!c || !label) return;
+		try {
+			await canvasApi.createEdge(canvasId, {
+				src_node_id: c.source,
+				dst_node_id: c.target,
+				kind: 'link',
+				label,
+			});
+			edgeChooser = null;
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.edgeCreateFailed'));
+		}
+	}
+
+	// ---- ＋ workflow node ------------------------------------------------------
+
+	let addWorkflowId = $state<string>('');
+	let addBusy = $state(false);
+
+	async function addWorkflowNode() {
+		const wid = Number(addWorkflowId);
+		if (!Number.isFinite(wid) || wid <= 0 || addBusy) return;
+		addBusy = true;
+		try {
+			// Stack new nodes slightly so they never land pixel-identical.
+			const offset = (nodes.length % 6) * 36;
+			await canvasApi.createNode(canvasId, {
+				type: 'workflow',
+				workflow_id: wid,
+				x: 120 + offset,
+				y: 120 + offset,
+			});
+			addWorkflowId = '';
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.nodeCreateFailed'));
+		} finally {
+			addBusy = false;
+		}
+	}
+
 	$effect(() => {
 		// Rebuild the Svelte Flow graph whenever the persisted graph or any
 		// media source changes; drag positions win until the next refetch.
@@ -245,9 +395,8 @@
 			);
 		}
 		const liveClipPaths = currentClipPaths(scenes);
-		edges = storyEdges(graph.nodes, scenes);
+		edges = [...storyEdges(graph.nodes, scenes), ...storedFlowEdges(graph.edges)];
 		nodes = graph.nodes
-			.filter((n) => n.type !== 'workflow')
 			.filter((n) => {
 				// The clip card already shows this file. An older artifact
 				// with the same path would be a second copy of the current take.
@@ -266,6 +415,29 @@
 					n.entity_type === 'clip' && n.entity_id != null
 						? clipPresentation(scenes, n.entity_id)
 						: null;
+				if (n.type === 'workflow') {
+					const workflowName =
+						($workflowsQuery.data ?? []).find((w) => w.id === n.workflow_id)?.name ??
+						n.title ??
+						'Workflow';
+					const roles = graph.edges
+						.filter((e) => e.dst_node_id === n.id && e.kind === 'data')
+						.map((e) => e.dst_role ?? '');
+					return {
+						id: `cn-${n.id}`,
+						type: 'workflow' as const,
+						position: { x: n.x, y: n.y },
+						data: {
+							canvasNodeId: n.id,
+							title: workflowName,
+							workflowId: n.workflow_id ?? 0,
+							status: nodeRunning.get(n.id) ? 'running' : n.status,
+							roles: roles.filter((r) => r.length > 0),
+							busy: nodeRunning.get(n.id) === true,
+							onRun: () => void runWorkflowNode(n.id),
+						},
+					};
+				}
 				if (n.type === 'image' || n.type === 'video') {
 					const job =
 						n.job_id != null ? jobs.find((row) => row.id === n.job_id) : undefined;
@@ -436,7 +608,21 @@
 		return true;
 	}
 
-	async function onDeleteCanvas({ nodes }: { nodes: Node[] }) {
+	async function onDeleteCanvas({ nodes, edges }: { nodes: Node[]; edges: Edge[] }) {
+		// Selected wires (data/link) delete server-side; entity tombstones and
+		// artifact cards keep their richer handling below.
+		const edgeIds = edges
+			.map((e) => (e.data as { storedEdgeId?: number } | undefined)?.storedEdgeId)
+			.filter((id): id is number => id != null);
+		if (edgeIds.length > 0) {
+			const results = await Promise.allSettled(
+				edgeIds.map((id) => canvasApi.deleteEdge(canvasId, id)),
+			);
+			await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+			const failed = results.filter((r) => r.status === 'rejected').length;
+			if (failed > 0) toast.error(t('canvas.edgeDeleteFailed', { count: failed }));
+			if (nodes.length === 0) return;
+		}
 		const ids = nodes
 			.map(nodeServerId)
 			.filter((id): id is number => id != null);
@@ -1237,7 +1423,9 @@ title={running
 					bind:edges
 					bind:viewport
 					{nodeTypes}
-					nodesConnectable={false}
+					nodesConnectable={true}
+					isValidConnection={validFlowConnection}
+					onconnect={onFlowConnect}
 					colorMode="dark"
 					minZoom={0.05}
 					maxZoom={4}
@@ -1257,6 +1445,25 @@ title={running
 					<Background variant={BackgroundVariant.Dots} gap={26} size={1} />
 					<Controls />
 					<MiniMap />
+					<Panel position="bottom-left">
+						<div class="add-workflow">
+							<select bind:value={addWorkflowId} aria-label={t('canvas.addWorkflow')}>
+								<option value="">{t('canvas.addWorkflow')}</option>
+								{#each enabledWorkflows as w (w.id)}
+									<option value={String(w.id)}>{w.name}</option>
+								{/each}
+							</select>
+							<button
+								type="button"
+								class="add-btn"
+								disabled={addBusy || !addWorkflowId}
+								onclick={addWorkflowNode}
+								title={t('canvas.addWorkflowTitle')}
+							>
+								＋
+							</button>
+						</div>
+					</Panel>
 					<Panel position="bottom-center">
 						<button
 							type="button"
@@ -1424,6 +1631,43 @@ title={running
 					{t('agentChat.revise')}
 				</button>
 			</div>
+		</div>
+	{/if}
+
+	{#if edgeChooser}
+		<div class="edge-chooser" role="dialog" aria-label={t('canvas.edgeChooserTitle')}>
+			<p class="generation-title">{t('canvas.edgeChooserTitle')}</p>
+			<p class="edge-src">{edgeChooser.sourceTitle} → {edgeChooser.targetTitle}</p>
+			<p class="edge-kind-label">{t('canvas.edgeDataRole')}</p>
+			<div class="edge-roles">
+				{#each EDGE_ROLES as role (role)}
+					<button type="button" class="role-pick" onclick={() => void createDataEdge(role)}>
+						{role}
+					</button>
+				{/each}
+			</div>
+			<p class="edge-kind-label">{t('canvas.edgeLinkLabel')}</p>
+			<input
+				class="edge-label-input"
+				type="text"
+				maxlength="80"
+				placeholder={t('canvas.edgeLinkPlaceholder')}
+				bind:value={linkLabel}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') void createLinkEdge();
+				}}
+			/>
+			<button
+				type="button"
+				class="link-go"
+				disabled={!linkLabel.trim()}
+				onclick={() => void createLinkEdge()}
+			>
+				{t('canvas.edgeLinkCreate')}
+			</button>
+			<button type="button" class="edge-cancel" onclick={() => (edgeChooser = null)}>
+				{t('common.cancel')}
+			</button>
 		</div>
 	{/if}
 </div>
@@ -1748,5 +1992,109 @@ title={running
 	}
 	.chat-expand:hover {
 		color: var(--accent);
+	}
+
+	.add-workflow {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+	}
+	.add-workflow select {
+		max-width: 220px;
+		font-size: 11.5px;
+		color: var(--text-primary);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 5px 8px;
+	}
+	.add-workflow .add-btn {
+		font-size: 14px;
+		line-height: 1;
+		color: #eaf6ff;
+		background: color-mix(in srgb, var(--accent) 26%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+		border-radius: 8px;
+		padding: 5px 10px;
+		cursor: pointer;
+	}
+	.add-workflow .add-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.edge-chooser {
+		position: fixed;
+		z-index: 42;
+		top: 72px;
+		left: 24px;
+		width: min(420px, calc(100vw - 40px));
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 16px;
+		background: var(--bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+		border-radius: 14px;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+	}
+	.edge-chooser .edge-src {
+		margin: 0;
+		font-size: 12px;
+		color: var(--text-secondary);
+	}
+	.edge-kind-label {
+		margin: 2px 0 0;
+		font-size: 10px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
+	.edge-roles {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.role-pick {
+		font-size: 11.5px;
+		color: #eaf6ff;
+		background: color-mix(in srgb, var(--accent) 22%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+		border-radius: 999px;
+		padding: 4px 12px;
+		cursor: pointer;
+	}
+	.role-pick:hover {
+		background: color-mix(in srgb, var(--accent) 36%, transparent);
+	}
+	.edge-label-input {
+		font-size: 12px;
+		color: var(--text-primary);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 6px 10px;
+	}
+	.link-go {
+		font-size: 12px;
+		font-weight: 600;
+		color: #f4ecd8;
+		background: rgba(212, 180, 106, 0.25);
+		border: 1px solid rgba(212, 180, 106, 0.5);
+		border-radius: 8px;
+		padding: 6px 0;
+		cursor: pointer;
+	}
+	.link-go:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.edge-cancel {
+		font-size: 12px;
+		color: var(--text-secondary);
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 5px 0;
+		cursor: pointer;
 	}
 </style>

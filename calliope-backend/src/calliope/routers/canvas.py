@@ -719,6 +719,158 @@ async def regenerate_node(
     return {"ok": True, "job": {"id": job_row["id"]}}
 
 
+@router.post("/{canvas_id}/nodes/{node_id}/run")
+async def run_workflow_node(canvas_id: int, node_id: int) -> dict[str, Any]:
+    """Run a workflow node — the manual UI queue path.
+
+    Data edges resolve their source's media onto the workflow's role slots
+    (merged over the node's stored input_values), then the job queues through
+    the same pipeline as Playground. This is NOT the agent review gate: the
+    button is the user's own Generate. The node tracks job_id + status; the
+    finished file materializes as an artifact card wired back to the node.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        canvas = conn.execute(
+            "SELECT id, project_id FROM canvas WHERE id = ?", (canvas_id,)
+        ).fetchone()
+        if not canvas:
+            raise HTTPException(status_code=404, detail="Canvas not found")
+        node = conn.execute(
+            "SELECT * FROM canvas_node WHERE id = ? AND canvas_id = ? AND deleted = 0",
+            (node_id, canvas_id),
+        ).fetchone()
+        if not node:
+            raise HTTPException(status_code=404, detail="Node not found")
+        node = row_to_dict(node)
+        if node.get("type") != "workflow" or node.get("workflow_id") is None:
+            raise HTTPException(status_code=422, detail="This node is not a workflow node")
+        workflow = conn.execute(
+            "SELECT id, kind, is_enabled, workflow_json FROM workflows WHERE id = ?",
+            (node["workflow_id"],),
+        ).fetchone()
+        if not workflow or not workflow["is_enabled"]:
+            raise HTTPException(status_code=422, detail="Workflow is missing or disabled")
+
+        # Role slots: each incoming data edge feeds its role the source's
+        # media. Explicit dst_comfy_node_id wins; otherwise resolve the role
+        # from the workflow's (Input:role) title tags.
+        inputs = parse_dynamic_inputs(json.loads(workflow["workflow_json"]))
+        role_to_node = {
+            str(item.get("role")): str(item["nodeId"])
+            for item in inputs
+            if item.get("role")
+        }
+        values = dict(_object_json(node.get("input_values_json")))
+        problems: list[str] = []
+        edges = conn.execute(
+            """
+            SELECT * FROM canvas_edge
+            WHERE canvas_id = ? AND dst_node_id = ? AND kind = 'data'
+            ORDER BY id
+            """,
+            (canvas_id, node_id),
+        ).fetchall()
+        for edge in edges:
+            role = (edge["dst_role"] or "").strip()
+            comfy_id = (edge["dst_comfy_node_id"] or "").strip() or role_to_node.get(role)
+            src_path = _edge_source_media(conn, canvas_id, edge["src_node_id"])
+            if comfy_id is None:
+                problems.append(f"role '{role or '?'}' has no input node in this workflow")
+                continue
+            if src_path is None:
+                problems.append(f"source node {edge['src_node_id']} has no media to feed '{role}'")
+                continue
+            values[str(comfy_id)] = src_path
+        if problems:
+            raise HTTPException(status_code=422, detail="; ".join(problems))
+
+        prompt_node = _prompt_node_id(workflow["workflow_json"])
+        prompt = str(values.get(prompt_node) or "") if prompt_node is not None else ""
+        project_id = canvas["project_id"]
+        if project_id is None:
+            project_id = ensure_playground_project(conn)
+        kind = workflow["kind"]
+        conn.execute(
+            "UPDATE canvas_node SET status = 'pending', job_id = NULL WHERE id = ?",
+            (node_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    job_row = queue_manager.enqueue(
+        project_id=int(project_id),
+        kind=kind,
+        workflow_id=int(workflow["id"]),
+        payload={
+            "input_values": values,
+            "prompt": prompt,
+            "canvas_id": canvas_id,
+            "source": "canvas",
+        },
+    )
+    conn = get_db(settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE canvas_node SET job_id = ? WHERE id = ?", (int(job_row["id"]), node_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    await event_bus.publish(
+        "job.created",
+        {
+            "job_id": job_row["id"],
+            "kind": kind,
+            "project_id": int(project_id),
+            "canvas_id": canvas_id,
+            "source": "canvas",
+        },
+    )
+    await event_bus.publish("canvas.updated", {"canvas_id": canvas_id, "reason": "node_running"})
+    return {"ok": True, "job": {"id": job_row["id"]}}
+
+
+def _edge_source_media(conn: sqlite3.Connection, canvas_id: int, src_node_id: int) -> str | None:
+    """The media path a data-edge source feeds: artifact path, or the entity's
+    reference image (characters sheet/portrait, locations/items reference)."""
+    node = conn.execute(
+        """
+        SELECT id, type, entity_type, entity_id, artifact_path
+        FROM canvas_node WHERE id = ? AND canvas_id = ? AND deleted = 0
+        """,
+        (src_node_id, canvas_id),
+    ).fetchone()
+    if node is None:
+        return None
+    if node["artifact_path"]:
+        return str(node["artifact_path"])
+    if node["type"] != "entity" or node["entity_id"] is None:
+        return None
+    entity_type = node["entity_type"]
+    table = {
+        "character": "characters",
+        "location": "locations",
+        "item": "items",
+        "scene": "scenes",
+    }.get(entity_type)
+    if table is None:
+        return None
+    columns = {
+        "character": "COALESCE(sheet_path, portrait_path)",
+        "location": "reference_image_path",
+        "item": "reference_image_path",
+        "scene": "env_image_path",
+    }[entity_type]
+    row = conn.execute(
+        f"SELECT {columns} AS media FROM {table} WHERE id = ?", (int(node["entity_id"]),)
+    ).fetchone()
+    if row is None or not row["media"]:
+        return None
+    return str(row["media"])
+
+
 @router.post("/{canvas_id}/tidy")
 async def tidy_canvas(canvas_id: int) -> dict[str, Any]:
     """Re-layout every node into clean columns/grids (repairs canvases whose

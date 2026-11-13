@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { type Node, type NodeProps } from '@xyflow/svelte';
+	import { Handle, Position, type Node, type NodeProps } from '@xyflow/svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import NodeComposer, { type ComposerReference } from '$lib/canvas/NodeComposer.svelte';
 	import { assetUrl } from '$lib/api';
@@ -38,6 +38,9 @@
 </script>
 
 <div class={['artifact-node', { running, wide: selected }]}>
+	<!-- Connectable: a finished artifact can wire into a workflow node's
+		(Input:role) slot via the canvas page's onconnect role chooser. -->
+	<Handle type="source" position={Position.Right} id="asset" />
 	<header>
 		<span class="type-chip">{data.kind}</span>
 		<span class="title" title={data.title}>{data.title}</span>
