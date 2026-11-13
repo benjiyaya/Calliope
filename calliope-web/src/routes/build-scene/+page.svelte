@@ -7,6 +7,7 @@
 	import AgentComposer from '$lib/components/agent/AgentComposer.svelte';
 	import { agentApi, playgroundApi, workflows, type AgentMessage, type AgentPlan, type AgentSession, type AgentTask } from '$lib/api';
 	import type { AgentComposerPayload, SkillOption, WorkflowOption } from '$lib/agentComposer';
+	import { AgentSessionRuntime } from '$lib/agent/agentSession.svelte';
 	import { connectEvents } from '$lib/events';
 	import { toast } from '$lib/toast';
 	import { t } from '$lib/i18n.svelte';
@@ -204,17 +205,21 @@ function toggleChat() {
 		}
 	}
 
-	// ---- chat (mirrors canvas page's SSE wiring, minus session rail) -------
+	// ---- chat (the shared AgentSessionRuntime; shot.* events handled below) --
 
-	let streaming = $state('');
-	let streamingReasoning = $state('');
-	// Tracks which agent produced the last reasoning delta so the name prefix
-	// is written once per transition, not per token.
-	let thinkingAgent: string | null = null;
-	let liveTools = $state<
-		{ tool: string; args?: Record<string, unknown> | null; result?: unknown; phase: 'running' | 'done' | 'error' }[]
-	>([]);
-	let livePlan = $state<AgentPlan | null>(null);
+	// The shared agent-chat live view (streaming buffers, tool cards, plan,
+	// and the agent.* SSE handling).
+	const agentRuntime = new AgentSessionRuntime({
+		sessionsKey: () => ['agent-sessions', 'scene'],
+		activeId: () => sessionId,
+		onToolFinish: (name, _result) => {
+			// A shot tool finished server-side: refetch promptly so the
+			// viewport follows even before shot.updated SSE lands.
+			if (POSE_TOOLS.has(name)) {
+				shotStore.handleShotUpdated({ shot_id: shotStore.compositionId ?? undefined, reason: 'tool' });
+			}
+		},
+	});
 	let composerDraft = $state('');
 	let composerNonce = $state(0);
 
@@ -274,11 +279,7 @@ function toggleChat() {
 			const s = sessions.find((x) => x.id === sessionId);
 			const steering = Boolean(s?.running || s?.status === 'running');
 			if (!steering) {
-				streaming = '';
-				streamingReasoning = '';
-				thinkingAgent = null;
-				liveTools = [];
-				livePlan = null;
+				agentRuntime.resetStream();
 			}
 		},
 		onSuccess: async () => {
@@ -313,24 +314,6 @@ function toggleChat() {
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : t('buildScene.cancelFailed'));
 		}
-	}
-
-	function upsertSession(s: AgentSession) {
-		client.setQueryData<AgentSession[]>(['agent-sessions', 'scene'], (old) => {
-			const list = Array.isArray(old) ? old : [];
-			return list.some((x) => x.id === s.id)
-				? list.map((x) => (x.id === s.id ? { ...x, ...s } : x))
-				: [...list, s];
-		});
-	}
-
-	function appendMessage(sid: number, msg: AgentMessage) {
-		if (sid !== sessionId) return;
-		client.setQueryData<AgentSession & { messages: AgentMessage[] }>(['agent-session', sid], (old) => {
-			if (!old || !Array.isArray(old.messages)) return old;
-			if (old.messages.some((m) => m.id === msg.id)) return old;
-			return { ...old, messages: [...old.messages, msg] };
-		});
 	}
 
 	// ---- agent tool live view: pose tools mutate server-side; SSE updates --
@@ -378,99 +361,18 @@ function toggleChat() {
 				case 'shot.capture.saved':
 					void refreshCaptures();
 					break;
-				case 'agent.session.updated': {
-					const s = ev.data?.session as AgentSession | undefined;
-					if (s) upsertSession(s);
-					break;
-				}
-				case 'agent.message': {
-					const msg = ev.data?.message as AgentMessage | undefined;
-					if (msg) {
-						appendMessage(msg.session_id, msg);
-						if (msg.session_id === sessionId) {
-						if (msg.role === 'tool') liveTools = [];
-						if (msg.role === 'assistant' && !msg.agent_name) {
-							streaming = '';
-							streamingReasoning = '';
-							thinkingAgent = null;
-						}
-						}
-					}
-					client.invalidateQueries({ queryKey: ['agent-sessions', 'scene'] });
-					break;
-				}
+				case 'agent.session.updated':
+				case 'agent.message':
 				case 'agent.token':
-					if (ev.data?.session_id === sessionId && !ev.data?.agent_name) {
-						streaming += String(ev.data?.content ?? '');
-					}
-					break;
 				case 'agent.thinking':
-					// Reasoning is auxiliary: stream it from ANY agent (incl.
-					// sub-agents) — the old `!agent_name` filter left
-					// delegated turns as a bare "working..." card. Prefix only
-					// on agent change; deltas arrive per token.
-					if (ev.data?.session_id === sessionId) {
-						const aname = (ev.data?.agent_name as string | undefined) ?? null;
-						if (aname !== thinkingAgent) {
-							streamingReasoning += aname ? `${aname}: ` : '';
-							thinkingAgent = aname;
-						}
-						// Sub-agents stream their reasoning now — keep only the tail
-						// so a whole swarm's thinking can't grow without bound.
-						streamingReasoning = (streamingReasoning + String(ev.data?.content ?? '')).slice(-24000);
-					}
+				case 'agent.tool':
+				case 'agent.plan':
+				case 'agent.task':
+					// The shared agent-loop handling (streaming buffers, tool
+					// cards, plan panel); shot-tool resyncs ride the runtime's
+					// onToolFinish hook above.
+					agentRuntime.handleAgentEvent(ev);
 					break;
-				case 'agent.tool': {
-					if (ev.data?.session_id !== sessionId) return;
-					const name = String(ev.data?.tool ?? '');
-					const phase = String(ev.data?.phase ?? '');
-					if (phase === 'start') {
-						liveTools.push({
-							tool: name,
-							args: (ev.data?.args as Record<string, unknown>) ?? null,
-							phase: 'running',
-						});
-					} else if (phase === 'finish') {
-						const idx = [...liveTools].reverse().findIndex((t) => t.tool === name && t.phase === 'running');
-						if (idx >= 0) {
-							const real = liveTools.length - 1 - idx;
-							liveTools[real] = {
-								...liveTools[real],
-								result: ev.data?.result,
-								phase: (ev.data?.result as { ok?: boolean } | undefined)?.ok === false ? 'error' : 'done',
-							};
-						}
-					}
-					// A shot tool finished server-side: refetch promptly so the
-					// viewport follows even before shot.updated SSE lands.
-					if (POSE_TOOLS.has(name) && phase === 'finish') {
-						shotStore.handleShotUpdated({ shot_id: shotStore.compositionId ?? undefined, reason: 'tool' });
-					}
-					break;
-				}
-				case 'agent.plan': {
-					if (ev.data?.session_id !== sessionId) return;
-					const tasks = (ev.data?.tasks as AgentTask[] | undefined) ?? [];
-					livePlan = {
-						tasks: tasks.map((t) => ({ ...t, status: t.status ?? 'pending' })),
-						note: (ev.data?.note as string | null) ?? null,
-					};
-					break;
-				}
-				case 'agent.task': {
-					if (ev.data?.session_id !== sessionId) return;
-					const index = ev.data?.index;
-					const status = ev.data?.status as AgentTask['status'] | undefined;
-					if (typeof index === 'number' && status) {
-						livePlan = livePlan
-							? {
-									...livePlan,
-									tasks: livePlan.tasks.map((t, i) => (i === index ? { ...t, status } : t)),
-								}
-							: livePlan;
-					}
-					break;
-				}
 			}
 		});
 		return stop;
@@ -534,9 +436,9 @@ function toggleChat() {
 			{#if !chatCollapsed}
 				<AgentChat
 					{messages}
-					{liveTools}
-					{streaming}
-					{streamingReasoning}
+					liveTools={agentRuntime.liveTools}
+					streaming={agentRuntime.streaming}
+					streamingReasoning={agentRuntime.streamingReasoning}
 					jobs={[]}
 					{running}
 					loading={sessionId != null && $sessionQuery.isLoading}

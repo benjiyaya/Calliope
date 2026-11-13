@@ -50,6 +50,8 @@
 		type Scene,
 	} from '$lib/api';
 	import type { AgentComposerPayload, SkillOption, WorkflowOption } from '$lib/agentComposer';
+	import { AgentSessionRuntime } from '$lib/agent/agentSession.svelte';
+	import { createCoalescedInvalidator } from '$lib/queryCoalesce';
 	import { connectEvents } from '$lib/events';
 	import { toast } from '$lib/toast';
 
@@ -550,18 +552,34 @@
 		if (initialViewport) viewport = initialViewport;
 	}
 
-	// ---- sessions + chat (mirrors agents/+page.svelte) --------------------
+	// ---- sessions + chat ----------------------------------------------------
 
 	let activeId = $state<number | null>(null);
-	let streaming = $state('');
-	let streamingReasoning = $state('');
-	// Tracks which agent produced the last reasoning delta so the name prefix
-	// is written once per transition, not per token.
-	let thinkingAgent: string | null = null;
-	let liveTools = $state<
-		{ tool: string; args?: Record<string, unknown> | null; result?: unknown; phase: 'running' | 'done' | 'error' }[]
-	>([]);
-	let livePlan = $state<AgentPlan | null>(null);
+	// Coalesced invalidation: a multi-tool turn or a job-event burst must not
+	// rebuild the node graph over and over — one refetch per key per window.
+	const invalidateLater = createCoalescedInvalidator(client);
+	// The shared agent-chat live view (streaming buffers, tool cards, plan,
+	// and the agent.* SSE handling). Canvas-specific events stay below.
+	const agentRuntime = new AgentSessionRuntime({
+		sessionsKey: () => ['agent-sessions'],
+		activeId: () => activeId,
+		onResetLive: () => {
+			composerDraft = '';
+			composerNonce = 0;
+		},
+		onToolFinish: (_name, result) => {
+			// Script and cast edits land as tool results. Refetch the board so
+			// new clip cards and story lines appear without a reload. A
+			// create_project result also leaves the sandbox.
+			invalidateLater(['canvas', canvasId]);
+			invalidateLater(['canvas-scenes']);
+			invalidateLater(['canvas-assets']);
+			const linked = Number((result as { project_id?: number } | undefined)?.project_id);
+			if (Number.isFinite(linked) && linked > 0 && activeId != null) {
+				void followProject(linked, activeId);
+			}
+		},
+	});
 	let composerDraft = $state('');
 	let composerNonce = $state(0);
 	let sessionScopeHandled = $state(false);
@@ -588,7 +606,7 @@
 		})),
 	);
 	const messages = $derived($sessionQuery.data?.messages ?? []);
-	const plan = $derived(livePlan ?? ($sessionQuery.data?.plan ?? null));
+	const plan = $derived(agentRuntime.livePlan ?? ($sessionQuery.data?.plan ?? null));
 
 	const jobsQuery = createQuery(
 		toStore(() => ({
@@ -724,7 +742,7 @@
 			(canvas.project_id != null && s.project_id === canvas.project_id);
 		if (sameScope) {
 			activeId = id;
-			resetLiveViews();
+			agentRuntime.resetLiveViews();
 			return;
 		}
 		try {
@@ -735,16 +753,6 @@
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : t('canvas.openThatFailed'));
 		}
-	}
-
-	function resetLiveViews() {
-		streaming = '';
-		streamingReasoning = '';
-		thinkingAgent = null;
-		liveTools = [];
-		livePlan = null;
-		composerDraft = '';
-		composerNonce = 0;
 	}
 
 	let generationReview = $state<{
@@ -787,7 +795,7 @@
 	}
 
 	async function newSandbox() {
-		resetLiveViews();
+		agentRuntime.resetLiveViews();
 		try {
 			const s = await agentApi.createSession({});
 			seedEmptySession(s);
@@ -800,7 +808,7 @@
 	}
 
 	async function newProjectChat(pid: number) {
-		resetLiveViews();
+		agentRuntime.resetLiveViews();
 		try {
 			const s = await agentApi.createSession({ project_id: pid });
 			seedEmptySession(s);
@@ -857,11 +865,7 @@
 				const s = sessions.find((x) => x.id === activeId);
 				const steering = Boolean(s?.running || s?.status === 'running');
 				if (!steering) {
-					streaming = '';
-					streamingReasoning = '';
-					thinkingAgent = null;
-					liveTools = [];
-					livePlan = null;
+					agentRuntime.resetStream();
 					client.setQueryData<AgentSession & { messages: AgentMessage[]; plan?: AgentPlan | null }>(
 						['agent-session', activeId],
 						(old) => (old ? { ...old, plan: null } : old),
@@ -915,27 +919,6 @@
 		handleSend({ content: option, mentions: [], attachments: [], answer_to: questionSeq });
 	}
 
-	function upsertSession(s: AgentSession) {
-		client.setQueryData<AgentSession[]>(['agent-sessions'], (old) => {
-			const list = Array.isArray(old) ? old : [];
-			return list.some((x) => x.id === s.id)
-				? list.map((x) => (x.id === s.id ? { ...x, ...s } : x))
-				: [...list, s];
-		});
-	}
-
-	function appendMessage(sid: number, msg: AgentMessage) {
-		if (sid !== activeId) return;
-		client.setQueryData<AgentSession & { messages: AgentMessage[] }>(
-			['agent-session', sid],
-			(old) => {
-				if (!old || !Array.isArray(old.messages)) return old;
-				if (old.messages.some((m) => m.id === msg.id)) return old;
-				return { ...old, messages: [...old.messages, msg] };
-			},
-		);
-	}
-
 	onMount(() => {
 		const stop = connectEvents((ev) => {
 			if (ev.type === 'events.resync') {
@@ -952,101 +935,9 @@
 				if ((ev.data?.canvas_id as number | undefined) === canvasId) {
 					client.invalidateQueries({ queryKey: ['canvas', canvasId] });
 				}
-			} else if (ev.type === 'agent.session.updated') {
-				const s = ev.data?.session as AgentSession | undefined;
-				if (s) upsertSession(s);
-			} else if (ev.type === 'agent.message') {
-				const msg = ev.data?.message as AgentMessage | undefined;
-				if (msg) {
-					appendMessage(msg.session_id, msg);
-					if (msg.session_id === activeId) {
-						if (msg.role === 'tool') liveTools = [];
-						if (msg.role === 'assistant' && !msg.agent_name) {
-							streaming = '';
-							streamingReasoning = '';
-							thinkingAgent = null;
-						}
-					}
-				}
-				client.invalidateQueries({ queryKey: ['agent-sessions'] });
-			} else if (ev.type === 'agent.token') {
-				if (ev.data?.session_id === activeId && !ev.data?.agent_name) {
-					streaming += String(ev.data?.content ?? '');
-				}
-			} else if (ev.type === 'agent.thinking') {
-				// Reasoning is auxiliary: stream it from ANY agent (incl.
-				// sub-agents) — the old `!agent_name` filter left delegated
-				// turns as a bare "working..." card. Prefix only on agent
-				// change; deltas arrive per token.
-				if (ev.data?.session_id === activeId) {
-					const name = (ev.data?.agent_name as string | undefined) ?? null;
-					if (name !== thinkingAgent) {
-						streamingReasoning += `${name ? `${name}: ` : ''}`;
-						thinkingAgent = name;
-					}
-					// Sub-agents stream their reasoning now — keep only the tail
-					// so a whole swarm's thinking can't grow without bound.
-					streamingReasoning = (streamingReasoning + String(ev.data?.content ?? '')).slice(-24000);
-				}
-			} else if (ev.type === 'agent.tool') {
-				if (ev.data?.session_id !== activeId) return;
-				const name = String(ev.data?.tool ?? '');
-				const phase = String(ev.data?.phase ?? '');
-				if (phase === 'start') {
-					liveTools.push({
-						tool: name,
-						args: (ev.data?.args as Record<string, unknown>) ?? null,
-						phase: 'running',
-					});
-				} else if (phase === 'finish') {
-					const idx = [...liveTools]
-						.reverse()
-						.findIndex((t) => t.tool === name && t.phase === 'running');
-					if (idx >= 0) {
-						const real = liveTools.length - 1 - idx;
-						liveTools[real] = {
-							...liveTools[real],
-							result: ev.data?.result,
-							phase:
-								(ev.data?.result as { ok?: boolean } | undefined)?.ok === false
-									? 'error'
-									: 'done',
-						};
-					}
-					// Script and cast edits land as tool results. Refetch the
-					// board so new clip cards and story lines appear without a
-					// reload. A create_project result also leaves the sandbox.
-					client.invalidateQueries({ queryKey: ['canvas', canvasId] });
-					client.invalidateQueries({ queryKey: ['canvas-scenes'] });
-					client.invalidateQueries({ queryKey: ['canvas-assets'] });
-					const linked = Number(
-						(ev.data?.result as { project_id?: number } | undefined)?.project_id,
-					);
-					if (Number.isFinite(linked) && linked > 0 && activeId != null) {
-						void followProject(linked, activeId);
-					}
-				}
-			} else if (ev.type === 'agent.plan') {
-				if (ev.data?.session_id !== activeId) return;
-				const tasks = (ev.data?.tasks as AgentTask[] | undefined) ?? [];
-				livePlan = {
-					tasks: tasks.map((t) => ({ ...t, status: t.status ?? 'pending' })),
-					note: (ev.data?.note as string | null) ?? null,
-				};
-			} else if (ev.type === 'agent.task') {
-				if (ev.data?.session_id !== activeId) return;
-				const index = ev.data?.index;
-				const status = ev.data?.status as AgentTask['status'] | undefined;
-				if (typeof index === 'number' && status) {
-					livePlan = livePlan
-						? {
-								...livePlan,
-								tasks: livePlan.tasks.map((t, i) =>
-									i === index ? { ...t, status } : t,
-								),
-							}
-						: livePlan;
-				}
+				return;
+			} else if (agentRuntime.handleAgentEvent(ev)) {
+				return;
 			} else if (
 				ev.type === 'story.ready' ||
 				ev.type === 'job.created' ||
@@ -1429,9 +1320,9 @@ title={running
 					</header>
 					<AgentChat
 						{messages}
-						{liveTools}
-						{streaming}
-						{streamingReasoning}
+						liveTools={agentRuntime.liveTools}
+						streaming={agentRuntime.streaming}
+						streamingReasoning={agentRuntime.streamingReasoning}
 						{jobs}
 						{running}
 						loading={activeId != null && $sessionQuery.isLoading}
