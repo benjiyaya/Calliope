@@ -10,6 +10,8 @@
 		onNewSandbox: () => void;
 		onNewProjectChat: (projectId: number) => void;
 		onDelete: (id: number) => void;
+		/** Commit an inline rename (the backend PATCH accepts title). */
+		onRename?: (id: number, title: string) => void;
 		/** Canvas rail mode: render a 48px icon rail instead of the full list. */
 		collapsed?: boolean;
 		onToggleCollapse?: () => void;
@@ -22,6 +24,7 @@
 		onNewSandbox,
 		onNewProjectChat,
 		onDelete,
+		onRename,
 		collapsed = false,
 		onToggleCollapse,
 	}: Props = $props();
@@ -39,6 +42,23 @@
 	});
 
 	const allSessions = $derived([...sandbox, ...grouped.flatMap((g) => g.items)]);
+
+	// Inline rename: the pencil swaps the row for an input; Enter/blur commits.
+	let renamingId = $state<number | null>(null);
+	let renameDraft = $state('');
+
+	function startRename(s: AgentSession) {
+		renamingId = s.id;
+		renameDraft = s.title;
+	}
+
+	function commitRename() {
+		const id = renamingId;
+		const title = renameDraft.trim();
+		renamingId = null;
+		if (id == null || !title) return;
+		onRename?.(id, title);
+	}
 </script>
 
 {#if collapsed}
@@ -76,6 +96,77 @@
 		</div>
 	</aside>
 {:else}
+	{#snippet itemRow(s: AgentSession)}
+		{#if renamingId === s.id}
+			<input
+				class="rename-input"
+				type="text"
+				maxlength="120"
+				bind:value={renameDraft}
+				onclick={(e) => e.stopPropagation()}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.stopPropagation();
+						commitRename();
+					} else if (e.key === 'Escape') {
+						e.stopPropagation();
+						renamingId = null;
+					}
+				}}
+				onblur={commitRename}
+			/>
+		{:else}
+			<button
+				type="button"
+				class="item"
+				class:active={s.id === activeId}
+				onclick={() => onSelect(s.id)}
+				ondblclick={() => startRename(s)}
+			>
+				<span class="dot" class:run={s.running || s.status === 'running'}></span>
+				<span class="title">{s.title}</span>
+				{#if onRename}
+					<span
+						class="del"
+						role="button"
+						tabindex="-1"
+						aria-label={t('sessionSidebar.renameSession')}
+						title={t('sessionSidebar.renameSession')}
+						onclick={(e) => {
+							e.stopPropagation();
+							startRename(s);
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								e.stopPropagation();
+								startRename(s);
+							}
+						}}
+					>
+						<Icon name="edit" size={12} />
+					</span>
+				{/if}
+				<span
+					class="del"
+					role="button"
+					tabindex="-1"
+					aria-label={t('sessionSidebar.deleteSession')}
+					onclick={(e) => {
+						e.stopPropagation();
+						onDelete(s.id);
+					}}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') {
+							e.stopPropagation();
+							onDelete(s.id);
+						}
+					}}
+				>
+					<Icon name="trash" size={12} />
+				</span>
+			</button>
+		{/if}
+	{/snippet}
 	<aside class="sidebar">
 		{#if onToggleCollapse}
 			<button
@@ -104,33 +195,7 @@
 					<span class="count">{sandbox.length}</span>
 				</div>
 				{#each sandbox as s (s.id)}
-					<button
-						type="button"
-						class="item"
-						class:active={s.id === activeId}
-						onclick={() => onSelect(s.id)}
-					>
-						<span class="dot" class:run={s.running || s.status === 'running'}></span>
-						<span class="title">{s.title}</span>
-<span
-						class="del"
-						role="button"
-						tabindex="-1"
-						aria-label={t('sessionSidebar.deleteSession')}
-						onclick={(e) => {
-							e.stopPropagation();
-							onDelete(s.id);
-						}}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') {
-								e.stopPropagation();
-								onDelete(s.id);
-							}
-						}}
-					>
-						<Icon name="trash" size={12} />
-					</span>
-				</button>
+				{@render itemRow(s)}
 			{/each}
 		</div>
 	{/if}
@@ -163,33 +228,7 @@
 				</span>
 			</div>
 				{#each g.items as s (s.id)}
-					<button
-						type="button"
-						class="item"
-						class:active={s.id === activeId}
-						onclick={() => onSelect(s.id)}
-					>
-						<span class="dot" class:run={s.running || s.status === 'running'}></span>
-						<span class="title">{s.title}</span>
-<span
-						class="del"
-						role="button"
-						tabindex="-1"
-						aria-label={t('sessionSidebar.deleteSession')}
-						onclick={(e) => {
-							e.stopPropagation();
-							onDelete(s.id);
-						}}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') {
-								e.stopPropagation();
-								onDelete(s.id);
-							}
-						}}
-					>
-						<Icon name="trash" size={12} />
-					</span>
-					</button>
+					{@render itemRow(s)}
 				{/each}
 			</div>
 		{/each}
@@ -432,5 +471,19 @@
 	.del:hover {
 		color: var(--error);
 		background: rgba(239, 68, 68, 0.12);
+	}
+	.rename-input {
+		flex: 1;
+		min-width: 0;
+		font-size: 12.5px;
+		color: var(--text-primary);
+		background: var(--bg-surface);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-sm);
+		padding: 4px 7px;
+		margin: 0 2px;
+	}
+	.rename-input:focus {
+		outline: none;
 	}
 </style>

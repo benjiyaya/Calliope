@@ -245,8 +245,8 @@ function toggleChat() {
 	});
 	const skillOptions = $derived<SkillOption[]>($skillsQuery.data ?? []);
 
-	// @workflow picker works here too: a tagged run_workflow from the builder
-	// chat follows the same render-approval rules as canvas.
+	// @workflow picker works here too: a tagged workflow follows the same
+	// review-card approval rules as canvas.
 	const workflowsQuery = createQuery({
 		queryKey: ['workflows'],
 		queryFn: workflows.list,

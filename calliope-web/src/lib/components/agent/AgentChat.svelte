@@ -62,7 +62,7 @@
 
 	// Tool results that enqueue render jobs expose their job ids — these render
 	// as inline artifact cards (Playground-style) that track live job status.
-	const ENQUEUE_TOOLS = new Set(['enqueue_asset_jobs', 'enqueue_video_jobs', 'run_workflow']);
+	const ENQUEUE_TOOLS = new Set(['enqueue_asset_jobs', 'enqueue_video_jobs']);
 	const jobsById = $derived(new Map((jobs ?? []).map((j) => [j.id, j])));
 
 	/** Later tool results (wait_for_jobs) often have the finished status + paths. */
@@ -333,12 +333,13 @@
 				{#if openReview && reviewSentFor !== openReview.messageId && m.id === openReview.messageId}
 					<div class="review-card">
 						<p class="question-text">{t('agentChat.reviewHint')}</p>
-						{#each openReview.items as item (reviewKey(item))}
+						{#each openReview.items as item, reviewIdx (reviewKey(item))}
 							<section class="review-item">
 								<p class="review-name">{item.name}</p>
 								<textarea
 									class="review-prompt"
 									rows="6"
+									id={reviewIdx === 0 ? 'review-prompt-first' : undefined}
 									value={reviewPrompt(item)}
 									aria-label={t('canvas.prompt')}
 									oninput={(event) =>
@@ -393,7 +394,12 @@
 								type="button"
 								class="question-option"
 								disabled={reviewBusy}
-								onclick={() => onSuggestion?.(t('agentChat.revisePrompt'))}
+								onclick={() => {
+									// "Revise" means edit the prompt: put the cursor in the
+									// card's first editable prompt (the composer prefill it
+									// used to type into was a static instruction sentence).
+									document.getElementById('review-prompt-first')?.focus();
+								}}
 							>
 								{t('agentChat.revise')}
 							</button>

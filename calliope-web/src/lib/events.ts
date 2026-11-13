@@ -69,7 +69,8 @@ export function connectEvents(
 			'shot.updated',
 			'shot.capture.saved',
 		].forEach((name) => es!.addEventListener(name, handler as EventListener));
-		es.onmessage = handler;
+		// (No onmessage: the backend names every event — named listeners above
+		// cover the contract; a new backend event must be added to this list.)
 		es.onerror = () => {
 			onState?.('reconnecting');
 			es?.close();

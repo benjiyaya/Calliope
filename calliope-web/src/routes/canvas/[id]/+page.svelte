@@ -848,6 +848,9 @@
 			// a DUPLICATE session (empty 905 vs working 906 signature). A truly
 			// gone session just 404s in the session query, which is recoverable.
 			activeId = pid;
+			// Remember the last open session — the /canvas and /agents redirects
+			// fall back to it so plain navigation lands where the user left off.
+			storageSet(SESSION_KEY, String(pid));
 			// Deep-link handoff (/agents?project=&task=) pre-fills the composer once.
 			const prefill = sessionStorage.getItem('calliope.canvas.composerPrefill');
 			if (prefill) {
@@ -923,6 +926,7 @@
 	async function selectSession(id: number) {
 		const s = sessions.find((x) => x.id === id);
 		if (!s || !canvas) return;
+		storageSet(SESSION_KEY, String(id));
 		const sameScope =
 			(s.project_id ?? null) === (canvas.project_id ?? null) ||
 			(canvas.project_id != null && s.project_id === canvas.project_id);
@@ -1019,6 +1023,42 @@
 			toast.success(t('canvas.sessionDeleted'));
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : t('canvas.sessionDeleteFailed'));
+		}
+	}
+
+	// Manual sandbox link: the agent can link via create_project/link_project,
+	// but a user picking a project from the composer side needs a direct path
+	// too (the orphaned listLinkableProjects client method finally gets a caller).
+	const linkableProjectsQuery = createQuery({
+		queryKey: ['agent-linkable-projects'],
+		queryFn: agentApi.listLinkableProjects,
+		enabled: activeSession?.project_id == null,
+	});
+	let linkProjectId = $state('');
+
+	async function linkActiveSession() {
+		const pid = Number(linkProjectId);
+		linkProjectId = '';
+		if (!Number.isFinite(pid) || pid <= 0 || !activeSession || running) return;
+		try {
+			await agentApi.patchSession(activeSession.id, { project_id: pid });
+			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
+			await client.invalidateQueries({ queryKey: ['agent-session', activeSession.id] });
+			// The followProject effect picks this up and moves to the project canvas.
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.linkFailed'));
+		}
+	}
+
+	async function renameSession(id: number, title: string) {
+		try {
+			await agentApi.patchSession(id, { title });
+			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
+			if (activeId === id) {
+				await client.invalidateQueries({ queryKey: ['agent-session', id] });
+			}
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.sessionRenameFailed'));
 		}
 	}
 
@@ -1361,6 +1401,7 @@
 				onNewSandbox={newSandbox}
 				onNewProjectChat={newProjectChat}
 				onDelete={removeSession}
+				onRename={renameSession}
 				collapsed={railCollapsed}
 				onToggleCollapse={toggleRail}
 			/>
@@ -1415,6 +1456,19 @@ title={running
 						<Icon name="sparkle" size={12} />
 						Sandbox
 					</span>
+					{#if activeSession && !running}
+						<select
+							class="link-project"
+							bind:value={linkProjectId}
+							onchange={() => void linkActiveSession()}
+							aria-label={t('canvas.linkToProject')}
+						>
+							<option value="">{t('canvas.linkToProject')}</option>
+							{#each $linkableProjectsQuery.data ?? [] as p (p.id)}
+								<option value={String(p.id)}>{p.title}</option>
+							{/each}
+						</select>
+					{/if}
 				{/if}
 				</div>
 
@@ -2096,5 +2150,14 @@ title={running
 		border-radius: 8px;
 		padding: 5px 0;
 		cursor: pointer;
+	}
+	.link-project {
+		max-width: 180px;
+		font-size: 11px;
+		color: var(--text-secondary);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 3px 8px;
 	}
 </style>
