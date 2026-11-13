@@ -56,8 +56,9 @@ def _trim_history(history: list[dict[str, Any]], max_chars: int) -> list[dict[st
 
     A transcript is [system?] + ReAct exchanges (assistant tool_calls + their
     tool rows) + the trailing recovery note. Never splits an assistant/tool
-    pair and never drops the trailing note; an over-budget single exchange
-    passes through rather than producing an empty request.
+    pair and never drops the trailing row (the loop stops one short of the
+    end); the output is therefore never empty even when a single exchange
+    exceeds the whole budget — that pair is dropped whole.
     """
 
     def _len(items: list[dict[str, Any]]) -> int:
