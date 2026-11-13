@@ -138,6 +138,7 @@ export const fr: Dict = {
 	'projectCard.deleteFailed': 'Impossible de supprimer le projet',
 	'projectCard.deleteMessage': 'Cela supprimera définitivement le projet et ses ressources. Cette action est irréversible.',
 	'projectCard.deleteTitle': 'Supprimer le projet',
+	'projectCard.openInCanvas': 'Ouvrir dans AI Canvas',
 	'projectCard.menuLabel': 'Menu du projet',
 	'projectCard.noIdea': "Pas encore d'idée d'histoire",
 	'projectCard.open': 'Ouvrir le projet',

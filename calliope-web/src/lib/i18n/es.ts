@@ -138,6 +138,7 @@ export const es: Dict = {
 	'projectCard.deleteFailed': 'No se pudo eliminar el proyecto',
 	'projectCard.deleteMessage': 'Esto eliminará permanentemente el proyecto y sus recursos. No se puede deshacer.',
 	'projectCard.deleteTitle': 'Eliminar proyecto',
+	'projectCard.openInCanvas': 'Abrir en AI Canvas',
 	'projectCard.menuLabel': 'Menú del proyecto',
 	'projectCard.noIdea': 'Aún no hay idea',
 	'projectCard.open': 'Abrir proyecto',

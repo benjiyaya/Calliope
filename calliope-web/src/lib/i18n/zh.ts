@@ -138,6 +138,7 @@ export const zh: Dict = {
 	'projectCard.deleteFailed': '无法删除项目',
 	'projectCard.deleteMessage': '这会永久删除该项目及其素材，且无法撤销。',
 	'projectCard.deleteTitle': '删除项目',
+	'projectCard.openInCanvas': '在 AI Canvas 中打开',
 	'projectCard.menuLabel': '项目菜单',
 	'projectCard.noIdea': '还没有故事创意',
 	'projectCard.open': '打开项目',

@@ -138,6 +138,7 @@ export const ko: Dict = {
 	'projectCard.deleteFailed': '프로젝트를 삭제하지 못했습니다',
 	'projectCard.deleteMessage': '프로젝트와 에셋이 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다.',
 	'projectCard.deleteTitle': '프로젝트 삭제',
+	'projectCard.openInCanvas': 'AI Canvas에서 열기',
 	'projectCard.menuLabel': '프로젝트 메뉴',
 	'projectCard.noIdea': '아직 스토리 아이디어 없음',
 	'projectCard.open': '프로젝트 열기',

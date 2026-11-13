@@ -138,6 +138,7 @@ export const ja: Dict = {
 	'projectCard.deleteFailed': 'プロジェクトを削除できませんでした',
 	'projectCard.deleteMessage': 'プロジェクトとそのアセットを完全に削除します。この操作は取り消せません。',
 	'projectCard.deleteTitle': 'プロジェクトを削除',
+	'projectCard.openInCanvas': 'AI Canvasで開く',
 	'projectCard.menuLabel': 'プロジェクトメニュー',
 	'projectCard.noIdea': 'ストーリーのアイデアはまだありません',
 	'projectCard.open': 'プロジェクトを開く',

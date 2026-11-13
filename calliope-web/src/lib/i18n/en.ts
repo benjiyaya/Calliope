@@ -138,6 +138,7 @@ export const en = {
 	'projectCard.deleteFailed': 'Could not delete project',
 	'projectCard.deleteMessage': 'This will permanently delete the project and its assets. This cannot be undone.',
 	'projectCard.deleteTitle': 'Delete project',
+	'projectCard.openInCanvas': 'Open in AI Canvas',
 	'projectCard.menuLabel': 'Project menu',
 	'projectCard.noIdea': 'No story idea yet',
 	'projectCard.open': 'Open project',

@@ -1,10 +1,11 @@
 /**
  * Canonical deep-link contract between the Project stages and the Agent chat.
  *
- * The Story ("Draft Storyline") and Script ("Regenerate Script") actions now
- * hand off to a fresh, project-linked agent session with the composer
- * pre-filled. Keeping the task → prompt mapping in one place means the stage
- * buttons stay dumb and the wording never drifts out of sync.
+ * The Story ("Draft Storyline") and Script ("Regenerate Script") actions hand
+ * off to the project's session for that task (reused across clicks — new only
+ * on first use) with the composer pre-filled. Keeping the task → prompt
+ * mapping in one place means the stage buttons stay dumb and the wording
+ * never drifts out of sync.
  */
 
 export type AgentTaskKind = 'story' | 'script';

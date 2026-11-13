@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { assetUrl, projects, type Project } from '$lib/api';
+	import { assetUrl, canvasApi, projects, type Project } from '$lib/api';
 	import { toast } from '$lib/toast';
 	import Button from '$lib/components/ui/Button.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -110,7 +110,18 @@
 		},
 	});
 
-	function openRename() {
+		// One board per project: the canvas is get-or-created, so this always
+	// lands on the project's story bible with its agent chats attached.
+	async function openInCanvas() {
+		try {
+			const graph = await canvasApi.ensureForProject(project.id);
+			await goto(`/canvas/${graph.canvas.id}`);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.openThatFailed'));
+		}
+	}
+
+function openRename() {
 		menuOpen = false;
 		renameValue = project.title;
 		renameOpen = true;
@@ -202,6 +213,18 @@
 		</button>
 		{#if menuOpen}
 			<div class="menu" role="menu" aria-label={t('projectCard.menuLabel')}>
+				<button
+					type="button"
+					role="menuitem"
+					class="menu-item"
+					onclick={() => {
+						menuOpen = false;
+						void openInCanvas();
+					}}
+				>
+					<Icon name="sparkle" size={14} />
+					{t('projectCard.openInCanvas')}
+				</button>
 				<button type="button" role="menuitem" class="menu-item" onclick={openRename}>
 					<Icon name="edit" size={14} />
 					{t('common.rename')}

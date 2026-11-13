@@ -16,14 +16,40 @@
 			let prefill = '';
 
 			if (projectParam != null || taskParam != null) {
-				// Deep-link contract from the Project stages: /agents?project=<id>&task=<story|script>
+				// Deep-link contract from the Project stages: /agents?project=<id>&task=<story|script>.
+				// Reuse the project's session for this task when one exists — every
+				// click used to create a fresh session and flooded the rail.
 				const pid = projectParam != null && projectParam !== '' ? Number(projectParam) : null;
 				const task = isAgentTaskKind(taskParam) ? taskParam : null;
-				const s = await agentApi.createSession({
-					...(pid != null && Number.isFinite(pid) ? { project_id: pid } : {}),
-					...(task ? { title: t(AGENT_TASK_TITLE_KEYS[task]) } : {}),
-				});
-				sessionId = s.id;
+				let reused: number | null = null;
+				if (task && pid != null && Number.isFinite(pid)) {
+					const mapKey = `calliope.agentTask.${pid}.${task}`;
+					const list = await agentApi.listSessions(pid);
+					const storedId = Number(localStorage.getItem(mapKey));
+					const wanted = t(AGENT_TASK_TITLE_KEYS[task]);
+					const found =
+						list.find((s) => s.id === storedId) ??
+						list.find((s) => s.title === wanted);
+					if (found) {
+						reused = found.id;
+					} else {
+						const s = await agentApi.createSession({
+							project_id: pid,
+							title: wanted,
+						});
+						localStorage.setItem(mapKey, String(s.id));
+						reused = s.id;
+					}
+				}
+				if (reused != null) {
+					sessionId = reused;
+				} else {
+					const s = await agentApi.createSession({
+						...(pid != null && Number.isFinite(pid) ? { project_id: pid } : {}),
+						...(task ? { title: t(AGENT_TASK_TITLE_KEYS[task]) } : {}),
+					});
+					sessionId = s.id;
+				}
 				prefill = task ? AGENT_TASK_PROMPTS[task] : '';
 			} else {
 				const sessions = await agentApi.listSessions();

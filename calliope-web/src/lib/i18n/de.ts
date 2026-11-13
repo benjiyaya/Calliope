@@ -138,6 +138,7 @@ export const de: Dict = {
 	'projectCard.deleteFailed': 'Projekt konnte nicht gelöscht werden',
 	'projectCard.deleteMessage': 'Damit werden das Projekt und seine Ressourcen dauerhaft gelöscht. Das kann nicht rückgängig gemacht werden.',
 	'projectCard.deleteTitle': 'Projekt löschen',
+	'projectCard.openInCanvas': 'In AI Canvas öffnen',
 	'projectCard.menuLabel': 'Projektmenü',
 	'projectCard.noIdea': 'Noch keine Story-Idee',
 	'projectCard.open': 'Projekt öffnen',
