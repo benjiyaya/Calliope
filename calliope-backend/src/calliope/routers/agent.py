@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from calliope.agent.harness import log as session_log
 from calliope.agent.harness.runner import runner
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
@@ -86,6 +87,8 @@ class MessageCreate(BaseModel):
     mentions: list[MessageMention] = Field(default_factory=list, max_length=1)
     attachments: list[MessageAttachment] = Field(default_factory=list, max_length=8)
     answer_to: int | None = None  # question/asked seq this message answers (card click)
+    # Composer effort. `default` and null keep the Settings profile.
+    thinking: Literal["default", "off", "low", "medium", "high", "xhigh"] | None = None
 
     @field_validator("content")
     @classmethod
@@ -342,6 +345,46 @@ async def delete_session(session_id: int) -> dict[str, bool]:
         conn.close()
 
 
+class ReviewItem(BaseModel):
+    id: int
+    entity: Literal["character", "location", "item", "clip", "canvas_node"]
+    prompt: str = Field(default="", max_length=20000)
+
+
+class ReviewConfirm(BaseModel):
+    kind: Literal["image", "video", "canvas"]
+    items: list[ReviewItem] = Field(min_length=1, max_length=40)
+
+
+@router.post("/sessions/{session_id}/reviews/confirm")
+async def confirm_review(session_id: int, payload: ReviewConfirm) -> dict[str, Any]:
+    """Queue the jobs the user just reviewed. The agent tool does not queue them."""
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT project_id FROM agent_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if row["project_id"] is None and payload.kind != "canvas":
+        raise HTTPException(status_code=422, detail="This chat is not linked to a project")
+    from calliope.agent.capabilities.review import commit_review
+
+    linked = row["project_id"]
+    result = await commit_review(
+        None if linked is None else int(linked),
+        session_id,
+        payload.kind,
+        [item.model_dump() for item in payload.items],
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("error") or "Nothing to generate")
+    return result
+
+
 @router.post("/sessions/{session_id}/messages")
 async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any]:
     content = payload.content.strip()
@@ -360,6 +403,15 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
             }
         )
     mentions = [m.model_dump() for m in payload.mentions]
+    if payload.answer_to is not None:
+        # Question-card answer: mark the ask/answer pair in the event log
+        # BEFORE the turn starts, so guards scanning for a structured
+        # approval (has_structured_approval) see the card was answered.
+        session_log.append_event(
+            session_id,
+            "question/answered",
+            {"question_seq": payload.answer_to, "answer": content},
+        )
     try:
         user_msg = await runner.start_turn(
             session_id,
@@ -367,6 +419,7 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
             mentions=mentions or None,
             attachments=attachments or None,
             answer_to=payload.answer_to,
+            thinking=payload.thinking,
         )
     except RuntimeError as exc:
         # Session mid-turn: the message becomes steering, not a rejection.
@@ -392,6 +445,7 @@ async def post_message(session_id: int, payload: MessageCreate) -> dict[str, Any
                     content,
                     mentions=mentions or None,
                     attachments=attachments or None,
+                    thinking=payload.thinking,
                 )
             except RuntimeError as re_exc:
                 raise HTTPException(status_code=409, detail=str(re_exc)) from re_exc

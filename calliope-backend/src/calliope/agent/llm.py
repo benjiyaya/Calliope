@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 
@@ -21,15 +22,30 @@ logger = logging.getLogger("calliope.llm")
 
 # Re-exported so callers can reach the whole thinking vocabulary from one place.
 __all__ = [
+    "ChatTurn",
     "LLMClient",
     "THINKING_CHOICES",
     "THINKING_DEFAULT",
     "THINKING_LEVELS",
     "THINKING_OFF",
+    "ToolCall",
     "extract_json",
     "normalize_thinking",
     "thinking_extra_body",
 ]
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
+class ChatTurn:
+    content: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 # Status codes that mean "this server does not do SSE streaming at all" —
 # chat()/chat_with_tools() then fall back to one plain blocking POST. Anything
@@ -532,19 +548,33 @@ class LLMClient:
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        on_token: Callable[[str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
+        on_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """One tool-call round, streamed internally. Returns the full assistant
         message dict: {"role": "assistant", "content": str|None, "tool_calls": [...]}.
 
+        The on_* callbacks observe the stream as it arrives (assistant text,
+        reasoning deltas, reported usage) — the agent loop publishes them to
+        SSE so the chat card streams like a chat, not a blocked pill. Callbacks
+        must not raise (a dead SSE listener must not kill the turn); callers
+        wrap them.
+
         Servers that reject the tools field get it dropped in-stream (the reply
         will have no tool_calls); servers that reject streaming itself get one
-        plain blocking call. Endpoints that reject image content parts get one
-        text-only retry and are remembered as text-only for the process.
+        plain blocking call (callbacks then never fire). Endpoints that reject
+        image content parts get one text-only retry and are remembered as
+        text-only for the process.
         """
         if self._text_only or not _has_image_parts(messages):
-            return await self._chat_with_tools_impl(messages, temperature, tools, tool_choice)
+            return await self._chat_with_tools_impl(
+                messages, temperature, tools, tool_choice, on_token, on_reasoning, on_usage
+            )
         try:
-            return await self._chat_with_tools_impl(messages, temperature, tools, tool_choice)
+            return await self._chat_with_tools_impl(
+                messages, temperature, tools, tool_choice, on_token, on_reasoning, on_usage
+            )
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:500] if exc.response is not None else ""
             if not _looks_like_image_rejection(exc.response.status_code, body):
@@ -553,7 +583,13 @@ class LLMClient:
             self._text_only = True
             _TEXT_ONLY_ENDPOINTS.add(self.base_url)
             return await self._chat_with_tools_impl(
-                _strip_image_parts(messages), temperature, tools, tool_choice
+                _strip_image_parts(messages),
+                temperature,
+                tools,
+                tool_choice,
+                on_token,
+                on_reasoning,
+                on_usage,
             )
 
     async def _chat_with_tools_impl(
@@ -562,6 +598,9 @@ class LLMClient:
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        on_token: Callable[[str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
+        on_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         try:
             parts: list[str] = []
@@ -571,6 +610,14 @@ class LLMClient:
             ):
                 if ev["type"] == "delta":
                     parts.append(ev["content"])
+                    if on_token is not None:
+                        on_token(ev["content"])
+                elif ev["type"] == "reasoning":
+                    if on_reasoning is not None:
+                        on_reasoning(ev["content"])
+                elif ev["type"] == "usage":
+                    if on_usage is not None:
+                        on_usage(ev["usage"])
                 elif ev["type"] == "tool_call":
                     tool_calls.append(ev["tool_call"])
         except httpx.HTTPStatusError as exc:

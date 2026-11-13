@@ -22,6 +22,34 @@ from calliope.events.bus import event_bus
 SCRIPT_CHUNK = 4
 
 
+def _beats_for_chunk(
+    beats: list[dict[str, Any]],
+    required_scenes: int,
+    chunk_start: int,
+    chunk_scenes: int,
+) -> tuple[list[dict[str, Any]], str]:
+    """Full descriptions only for the beats this scene range covers."""
+    if not beats:
+        return [], ""
+    count = max(1, required_scenes)
+    start_i = int((chunk_start - 1) * len(beats) / count)
+    end_i = int((chunk_start + chunk_scenes - 1) * len(beats) / count)
+    end_i = min(len(beats), max(start_i + 1, end_i))
+    window = beats[start_i:end_i]
+
+    def titles(rows: list[dict[str, Any]]) -> str:
+        return ", ".join(f"{row.get('order_index')}. {row.get('title')}" for row in rows)
+
+    parts: list[str] = []
+    earlier = beats[max(0, start_i - 3) : start_i]
+    nxt = beats[end_i : end_i + 3]
+    if earlier:
+        parts.append("Earlier: " + titles(earlier))
+    if nxt:
+        parts.append("Next: " + titles(nxt))
+    return window, " ".join(parts)
+
+
 async def _request_chunk(
     *,
     p: dict[str, Any],
@@ -32,11 +60,13 @@ async def _request_chunk(
     chunk_start: int,
     chunk_scenes: int,
     previous_tail: list[dict[str, Any]],
+    beat_arc: str = "",
 ) -> list[dict[str, Any]]:
     messages = build_script_chunk_messages(
         title=p["title"],
         idea=p.get("idea"),
         beats=beats,
+        beat_arc=beat_arc,
         characters=characters,
         locations=locations,
         target_duration=p.get("target_duration"),
@@ -99,15 +129,17 @@ async def _iter_scene_chunks(
                     "project_id": project_id,
                 },
             )
+        window, arc = _beats_for_chunk(beats, required_scenes, chunk_start, chunk_scenes)
         scenes = await _request_chunk(
             p=p,
-            beats=beats,
+            beats=window,
             characters=characters,
             locations=locations,
             required_scenes=required_scenes,
             chunk_start=chunk_start,
             chunk_scenes=chunk_scenes,
             previous_tail=collected[-2:],
+            beat_arc=arc,
         )
         # Models sometimes restart order_index per chunk; renumber by offset
         # so the persisted board is always 1..N in write order.
@@ -370,8 +402,16 @@ async def generate_script(
                 },
             )
 
+        await event_bus.publish(
+            "story.ready",
+            {
+                "project_id": project_id,
+                "message": f"Script written — {len(created)} scenes",
+            },
+        )
         return {
             "ok": True,
+            "project_id": project_id,
             "scenes": created,
             "clips": clips_summary,
             "generated": {"scenes": created},

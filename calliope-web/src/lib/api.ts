@@ -656,7 +656,7 @@ export interface AgentMessage {
 export interface AgentTask {
 	role: string;
 	goal: string;
-	status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+	status: 'pending' | 'running' | 'done' | 'verified' | 'failed' | 'skipped';
 	index?: number;
 }
 
@@ -704,6 +704,21 @@ export const agentApi = {
 	},
 	cancel: (id: number) =>
 		api<{ ok: boolean }>(`/api/agent/sessions/${id}/cancel`, { method: 'POST' }),
+	confirmReview: (
+		id: number,
+		payload: {
+			kind: 'image' | 'video' | 'canvas';
+			items: {
+				id: number;
+				entity: 'character' | 'location' | 'item' | 'clip' | 'canvas_node';
+				prompt: string;
+			}[];
+		},
+	) =>
+		api<{ ok: boolean; jobs: { id: number }[] }>(`/api/agent/sessions/${id}/reviews/confirm`, {
+			method: 'POST',
+			body: JSON.stringify(payload),
+		}),
 	listSkills: () =>
 		api<{ name: string; description: string; version: string; tags: string[]; dir: string }[]>(
 			'/api/agent/skills',
@@ -851,6 +866,11 @@ export const canvasApi = {
 		),
 	tidy: (canvasId: number) =>
 		api<{ ok: boolean; moved: number }>(`/api/canvas/${canvasId}/tidy`, { method: 'POST' }),
+	regenerate: (canvasId: number, nodeId: number, prompt: string) =>
+		api<{ ok: boolean; job: { id: number } }>(
+			`/api/canvas/${canvasId}/nodes/${nodeId}/regenerate`,
+			{ method: 'POST', body: JSON.stringify({ prompt }) },
+		),
 	createEdge: (
 		canvasId: number,
 		payload: {

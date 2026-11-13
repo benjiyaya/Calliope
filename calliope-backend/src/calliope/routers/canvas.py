@@ -16,10 +16,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
+from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.config import settings
 from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
-from calliope.routers.playground import PLAYGROUND_STATUS
+from calliope.queue.manager import queue_manager
+from calliope.routers.playground import PLAYGROUND_STATUS, ensure_playground_project
 
 router = APIRouter()
 
@@ -590,6 +592,131 @@ async def patch_node(canvas_id: int, node_id: int, payload: NodePatch) -> dict[s
         conn.close()
     await event_bus.publish("canvas.updated", {"canvas_id": canvas_id, "reason": "node_patched"})
     return out
+
+
+class RegenerateCard(BaseModel):
+    prompt: str
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_present(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Prompt is empty")
+        if len(text) > 20_000:
+            raise ValueError("Prompt is too long")
+        return text
+
+
+def _object_json(raw: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _prompt_node_id(workflow_json: str) -> str | None:
+    try:
+        nodes = json.loads(workflow_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(nodes, dict):
+        return None
+    for item in parse_dynamic_inputs(nodes):
+        if item.get("role") == "prompt":
+            return str(item["nodeId"])
+    return None
+
+
+@router.post("/{canvas_id}/nodes/{node_id}/regenerate")
+async def regenerate_node(
+    canvas_id: int, node_id: int, payload: RegenerateCard
+) -> dict[str, Any]:
+    """Queue a new render of this card. The finished file arrives as a new card."""
+    conn = get_db(settings.db_path)
+    try:
+        canvas = conn.execute(
+            "SELECT id, project_id FROM canvas WHERE id = ?", (canvas_id,)
+        ).fetchone()
+        if not canvas:
+            raise HTTPException(status_code=404, detail="Canvas not found")
+        node = conn.execute(
+            "SELECT * FROM canvas_node WHERE id = ? AND canvas_id = ? AND deleted = 0",
+            (node_id, canvas_id),
+        ).fetchone()
+        if not node:
+            raise HTTPException(status_code=404, detail="Node not found")
+        node = row_to_dict(node)
+        workflow_id = node.get("workflow_id")
+        values = _object_json(node.get("input_values_json"))
+        job = None
+        if node.get("job_id"):
+            job = conn.execute(
+                "SELECT workflow_id, payload_json FROM jobs WHERE id = ?",
+                (node["job_id"],),
+            ).fetchone()
+            if job is not None:
+                job = row_to_dict(job)
+                if workflow_id is None:
+                    workflow_id = job.get("workflow_id")
+                if not values:
+                    values = _object_json(job.get("payload_json")).get("input_values") or {}
+                    if not isinstance(values, dict):
+                        values = {}
+        if workflow_id is None and node.get("entity_type") == "clip" and node.get("entity_id"):
+            clip = conn.execute(
+                "SELECT workflow_id, video_settings_json FROM clips WHERE id = ?",
+                (node["entity_id"],),
+            ).fetchone()
+            if clip is not None:
+                workflow_id = clip["workflow_id"]
+                if not values:
+                    settings_json = _object_json(clip["video_settings_json"])
+                    raw_values = settings_json.get("input_values") or {}
+                    values = raw_values if isinstance(raw_values, dict) else {}
+        if workflow_id is None:
+            raise HTTPException(status_code=422, detail="This card has no workflow to run")
+        workflow = conn.execute(
+            "SELECT id, kind, is_enabled, workflow_json FROM workflows WHERE id = ?",
+            (workflow_id,),
+        ).fetchone()
+        if not workflow or not workflow["is_enabled"]:
+            raise HTTPException(status_code=422, detail="Workflow is missing or disabled")
+        prompt_node = _prompt_node_id(workflow["workflow_json"])
+        if prompt_node is None:
+            raise HTTPException(status_code=422, detail="Workflow has no prompt input")
+        values = dict(values)
+        values[prompt_node] = payload.prompt
+        project_id = canvas["project_id"]
+        if project_id is None:
+            project_id = ensure_playground_project(conn)
+        kind = workflow["kind"]
+    finally:
+        conn.close()
+
+    job_row = queue_manager.enqueue(
+        project_id=int(project_id),
+        kind=kind,
+        workflow_id=int(workflow_id),
+        payload={
+            "input_values": values,
+            "prompt": payload.prompt,
+            "canvas_id": canvas_id,
+            "source": "canvas",
+        },
+    )
+    await event_bus.publish(
+        "job.created",
+        {
+            "job_id": job_row["id"],
+            "kind": kind,
+            "project_id": int(project_id),
+            "canvas_id": canvas_id,
+            "source": "canvas",
+        },
+    )
+    return {"ok": True, "job": {"id": job_row["id"]}}
 
 
 @router.post("/{canvas_id}/tidy")

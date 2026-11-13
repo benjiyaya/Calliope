@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import io
 import json
 import logging
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +23,8 @@ from calliope.agent.continuity import (
 )
 from calliope.agent.harness.log import _image_attachment_data_url
 from calliope.agent.llm import LLMClient
-from calliope.agent.prompts import (
-    build_minimax_h3_ref_messages,
-    minimax_h3_ref_fallback,
-    scene_video_prompt,
-)
+from calliope.agent.prompts import minimax_h3_ref_fallback, scene_video_prompt
+from calliope.agent.skills_store import read_skill_file
 from calliope.comfyui.parser import parse_dynamic_inputs
 from calliope.comfyui.roles import input_has_role
 from calliope.comfyui.router_models import normalize_router_images, normalize_router_model
@@ -38,6 +40,10 @@ from calliope.events.bus import event_bus
 from calliope.queue.manager import queue_manager
 
 logger = logging.getLogger("calliope.video_agent")
+
+_SKILL = "h3-video-prompt-enhancer"
+_VISION_EDGE = 768
+_VIDEO_FRAMES = 4
 
 
 def _path_key(path: str) -> str:
@@ -229,6 +235,200 @@ async def _reference_media_parts(
     return parts
 
 
+def _under_assets(path: str) -> Path | None:
+    target = Path(path)
+    if not target.is_file():
+        return None
+    try:
+        target.resolve().relative_to(settings.assets_dir.resolve())
+    except ValueError:
+        return None
+    return target
+
+
+def _vision_data_url(path: str) -> str | None:
+    """JPEG data URL, long edge capped, so a reference image fits a vision call."""
+    target = _under_assets(path)
+    if target is None:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(target) as image:
+            frame = image.convert("RGB")
+            long_edge = max(frame.size)
+            if long_edge > _VISION_EDGE:
+                scale = _VISION_EDGE / long_edge
+                frame = frame.resize(
+                    (
+                        max(1, int(frame.width * scale)),
+                        max(1, int(frame.height * scale)),
+                    )
+                )
+            buffer = io.BytesIO()
+            frame.save(buffer, format="JPEG", quality=80)
+            raw = buffer.getvalue()
+    except Exception:
+        raw = target.read_bytes()
+        if len(raw) > 512_000:
+            return None
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _video_frame_urls(path: str) -> list[str]:
+    """A few JPEG frames from a reference video. Empty when ffmpeg cannot read it."""
+    target = _under_assets(path)
+    ffmpeg = shutil.which("ffmpeg")
+    if target is None or ffmpeg is None:
+        return []
+    urls: list[str] = []
+    flags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        flags = subprocess.CREATE_NO_WINDOW
+    with tempfile.TemporaryDirectory() as tmp:
+        pattern = str(Path(tmp) / "frame_%02d.jpg")
+        try:
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(target),
+                    "-vf",
+                    f"fps=1,scale='min({_VISION_EDGE},iw)':-2",
+                    "-frames:v",
+                    str(_VIDEO_FRAMES),
+                    pattern,
+                ],
+                check=False,
+                capture_output=True,
+                creationflags=flags,
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            return []
+        for frame in sorted(Path(tmp).glob("frame_*.jpg")):
+            encoded = base64.b64encode(frame.read_bytes()).decode("ascii")
+            urls.append(f"data:image/jpeg;base64,{encoded}")
+    return urls
+
+
+_SKILL_SYSTEM: str | None = None
+
+
+def _h3_skill_system() -> str:
+    global _SKILL_SYSTEM
+    if _SKILL_SYSTEM is not None:
+        return _SKILL_SYSTEM
+    skill = read_skill_file(_SKILL, "SKILL.md")
+    spec = read_skill_file(_SKILL, "references/ref2va-format.md")
+    procedure = skill.get("content") if skill.get("ok") else ""
+    format_spec = spec.get("content") if spec.get("ok") else ""
+    continuation = read_skill_file("video-continuation", "SKILL.md")
+    continuation_text = continuation.get("content") if continuation.get("ok") else ""
+    _SKILL_SYSTEM = (
+        "You are the h3-video-prompt-enhancer. The pictures after the brief are "
+        "the reference images and, when present, frames from the reference video "
+        "in time order. Describe face, hair, clothing, colors, materials, and "
+        "motion from those pictures. Do not invent an appearance from a filename. "
+        "Every clip names the place, the environment, and the camera in enough "
+        "detail that the next clip can repeat them: surfaces, light, landmarks, "
+        "camera height, angle, distance, and whether the camera is locked. "
+        "When the brief continues a previous clip, copy that place, environment, "
+        "and camera angle. Do not invent a new angle. "
+        "Output ONLY the six Ref2VA sections, in order, with no preamble and no "
+        "markdown fence.\n\n"
+        f"{procedure}\n\n{format_spec}\n\n{continuation_text}"
+    )
+    return _SKILL_SYSTEM
+
+
+def _skill_messages(
+    scene: dict[str, Any],
+    subjects: list[dict[str, Any]],
+    videos: list[dict[str, Any]],
+    media_parts: list[dict[str, Any]],
+    continuity: str | None,
+) -> list[dict[str, Any]]:
+    pictures = "\n".join(
+        "Picture {index}: {name} ({kind})".format(
+            index=item["index"],
+            name=item.get("name") or "reference",
+            kind=item.get("kind") or "image",
+        )
+        for item in subjects
+    ) or "(no reference images)"
+    clips = "\n".join(
+        f"Video {item['index']}: {item.get('name') or 'reference video'}"
+        for item in videos
+    ) or "(no reference video)"
+    lock = (continuity or "").strip()
+    lock_block = f"\nContinuity ledger:\n{lock}\n" if lock else ""
+    brief = (
+        "Keep the place, the environment, and the camera angle specific. "
+        "If this clip continues an earlier one, repeat that place, light, and camera. "
+        "Do not change the angle unless the action leaves the location.\n"
+        f"Duration: {scene.get('duration_sec') or 8} seconds\n"
+        f"Heading: {scene.get('heading') or '(none)'}\n"
+        f"Action: {scene.get('action') or '(none)'}\n"
+        f"Dialogue: {scene.get('dialog') or '(none)'}\n"
+        f"{lock_block}\n"
+        f"Reference images:\n{pictures}\n\n"
+        f"Reference videos:\n{clips}\n"
+    )
+    content: str | list[dict[str, Any]] = brief
+    if media_parts:
+        content = [{"type": "text", "text": brief}, *media_parts]
+    return [
+        {"role": "system", "content": _h3_skill_system()},
+        {"role": "user", "content": content},
+    ]
+
+
+async def _skill_vision_parts(
+    subjects: list[dict[str, Any]], videos: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Vision parts for every reference image and the frames of every reference video."""
+    parts: list[dict[str, Any]] = []
+    for subject in subjects:
+        url = await asyncio.to_thread(_vision_data_url, str(subject.get("path") or ""))
+        if not url:
+            continue
+        index = subject["index"]
+        parts.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Picture {index} is the reference image for "
+                    f"<Subject {index}>. Describe what is visible."
+                ),
+            }
+        )
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    for video in videos:
+        frames = await asyncio.to_thread(_video_frame_urls, str(video.get("path") or ""))
+        if not frames:
+            continue
+        index = video["index"]
+        parts.append(
+            {
+                "type": "text",
+                "text": (
+                    f"The next {len(frames)} pictures are frames of "
+                    f"<Video {index}> in time order."
+                ),
+            }
+        )
+        for url in frames:
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts
+
+
+def _finished_h3(text: str | None) -> bool:
+    return bool(text and "subject_definitions:" in text)
+
+
 class _H3Compiler:
     """Per-batch H3 prompt compiler with a dead-endpoint circuit breaker.
 
@@ -250,32 +450,29 @@ class _H3Compiler:
         scene: dict[str, Any],
         subjects: list[dict[str, Any]],
         *,
+        videos: list[dict[str, Any]] | None = None,
         continuity: str | None = None,
     ) -> str:
         if self.dead:
             return minimax_h3_ref_fallback(scene, subjects)
-        client = LLMClient.for_role("video", timeout=self.timeout)
+        clips = videos or []
         try:
-            # wait_for makes `timeout` a REAL wall-clock cap. The httpx timeout
-            # on a streaming response only bounds the gap between chunks, so a
-            # slow-but-alive endpoint (e.g. prompt-processing a vision payload)
-            # would otherwise hold "Resolving prompt…" open for minutes despite
-            # the documented fail-fast. Timing out counts as a dead endpoint:
-            # the breaker latches and the rest of the batch templates too.
+            client = LLMClient.for_role("video", timeout=self.timeout)
+        except Exception as exc:
+            self.dead = True
+            logger.warning("MiniMax H3 prompt rewrite has no video model (%s)", exc)
+            return minimax_h3_ref_fallback(scene, subjects)
+        try:
+            parts = await _skill_vision_parts(subjects, clips)
             return await asyncio.wait_for(
                 client.chat(
-                    build_minimax_h3_ref_messages(
-                        scene,
-                        subjects,
-                        media_parts=(await _reference_media_parts(subjects)) or None,
-                        continuity=continuity,
-                    ),
+                    _skill_messages(scene, subjects, clips, parts, continuity),
                     temperature=0.4,
                     extra_body=settings.h3_rewrite_extra_body or None,
                 ),
                 timeout=self.timeout,
             )
-        except Exception as exc:  # TimeoutError subclasses Exception on 3.11+
+        except Exception as exc:
             self.dead = True
             logger.warning(
                 "MiniMax H3 prompt rewrite failed (%s); using fallback template "
@@ -552,9 +749,9 @@ async def preview_clip_prompt(
     hash_clip = {**clip, "character_ids": [c["id"] for c in characters]}
 
     if profile == "minimax_h3_ref":
-        # Prompt precedence — fast by default, LLM only when explicitly asked:
-        #   force (Regenerate) → LLM rewrite, with a continuity-ledger refresh;
-        #   the user's own form prompt text → sent verbatim;
+        # Prompt precedence:
+        #   force (Regenerate) → skill rewrite with vision and a ledger refresh;
+        #   the user's typed form prompt → sent verbatim;
         #   a fresh saved draft → used;
         #   otherwise → the deterministic six-section compile (no LLM at all).
         if force:
@@ -564,13 +761,22 @@ async def preview_clip_prompt(
             lock = continuity_lock_text(plan, clip_id)
             await event_bus.publish(
                 "agent.thinking",
-                {"message": f"H3 prompt rewrite · scene {clip.get('scene_order_index')} clip {clip.get('order_index')}", "project_id": project_id},
+                {
+                    "message": (
+                        "H3 prompt rewrite · "
+                        f"scene {clip.get('scene_order_index')} "
+                        f"clip {clip.get('order_index')}"
+                    ),
+                    "project_id": project_id,
+                },
             )
             # Preview shares the batch cap (120s) as a REAL wall clock: the
             # editor stays usable below (seeded + editable), and a pathological
             # endpoint lands on the deterministic template instead of hanging.
             writer = compiler or _H3Compiler(timeout=120.0)
-            prompt = await writer.rewrite(scene, subjects, continuity=lock)
+            prompt = await writer.rewrite(
+                scene, subjects, videos=videos, continuity=lock
+            )
             from_draft = False
             rewrite_ran = True
         else:
@@ -578,12 +784,21 @@ async def preview_clip_prompt(
             user_text = _form_prompt_text(inputs, form_values)
             draft = _stored_prompt_draft(clip)
             meta = _clip_video_settings(clip).get("prompt_draft_meta") or {}
+            fresh = bool(
+                draft
+                and meta.get("based_on")
+                == _clip_prompt_hash(
+                    hash_clip,
+                    references=ref_sig,
+                    ledger=str((plan or {}).get("based_on") or ""),
+                )
+            )
             if user_text:
+                # A prompt the user typed on the clip form is sent VERBATIM —
+                # the compile never replaces it, refs or not.
                 prompt = user_text
                 from_draft = False
-            elif draft and meta.get("based_on") == _clip_prompt_hash(
-                hash_clip, references=ref_sig, ledger=str((plan or {}).get("based_on") or "")
-            ):
+            elif fresh:
                 prompt = draft
                 from_draft = True
             else:

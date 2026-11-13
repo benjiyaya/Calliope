@@ -294,3 +294,68 @@ def test_h3_ref_prompt_uses_only_the_fixed_retention_markers():
     text = minimax_h3_ref_fallback({"heading": "INT. HALL", "action": "He runs."}, [])
     assert "attribute_transfer" not in text or "<Video" not in text
     assert "<Video" not in text
+
+
+def test_skill_rewrite_sends_the_reference_image(monkeypatch, tmp_path):
+    import asyncio
+
+    from PIL import Image
+
+    from calliope.agent.video_agent import _H3Compiler
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    image = tmp_path / "maya.png"
+    Image.new("RGB", (40, 20), (12, 34, 56)).save(image)
+    seen: dict = {}
+
+    class Client:
+        async def chat(self, messages, temperature=0.4, extra_body=None):
+            seen["messages"] = messages
+            return (
+                "subject_definitions:\n"
+                "<Subject 1> is the woman in <Picture 1>.\n"
+            )
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "calliope.agent.video_agent.LLMClient",
+        type("Stub", (), {"for_role": staticmethod(lambda role, **kw: Client())}),
+    )
+    text = asyncio.run(
+        _H3Compiler(timeout=5).rewrite(
+            {"heading": "EXT. VALLEY", "action": "She waits.", "duration_sec": 8},
+            [{"index": 1, "kind": "character", "name": "Maya", "path": str(image)}],
+        )
+    )
+    assert text.startswith("subject_definitions:")
+    system = seen["messages"][0]["content"]
+    assert "h3-video-prompt-enhancer" in system
+    assert "subject_definitions:" in system
+    assert "video-continuation" in system
+    assert "camera" in system.lower()
+    user = seen["messages"][1]["content"]
+    assert any(part.get("type") == "image_url" for part in user)
+    assert any("Picture 1" in (part.get("text") or "") for part in user)
+
+
+def test_skill_vision_parts_include_video_frames(monkeypatch, tmp_path):
+    import asyncio
+
+    from calliope.agent.video_agent import _skill_vision_parts
+    from calliope.config import settings
+
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    video = tmp_path / "fight.mp4"
+    video.write_bytes(b"not-a-real-video")
+    monkeypatch.setattr(
+        "calliope.agent.video_agent._video_frame_urls",
+        lambda path: ["data:image/jpeg;base64,AAAA"],
+    )
+    parts = asyncio.run(
+        _skill_vision_parts([], [{"index": 1, "path": str(video), "name": "fight.mp4"}])
+    )
+    assert any("<Video 1>" in (part.get("text") or "") for part in parts)
+    assert any(part.get("type") == "image_url" for part in parts)

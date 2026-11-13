@@ -64,11 +64,12 @@ def test_web_references_only_known_sse_events():
 
 
 def test_web_references_only_known_guard_codes():
+    codes = CONTRACTS.get("guard_codes", [])
     unknown: list[str] = []
     for path in _web_sources():
         text = path.read_text(encoding="utf-8", errors="replace")
         for name in _GUARD_RE.findall(text):
-            if name not in CONTRACTS["guard_codes"]:
+            if name not in codes:
                 unknown.append(f"{path.relative_to(WEB)}: {name}")
     assert not unknown, "guard codes referenced in calliope-web but not defined by the harness:\n" + "\n".join(unknown)
 
@@ -87,14 +88,35 @@ def test_web_role_chips_use_canonical_or_alias_roles():
 def test_registry_covers_core_contract_families():
     """The allowlist itself must stay whole — an empty/gutted registry makes
     every other check here vacuous."""
-    assert len(CONTRACTS["sse_events"]) >= 10
-    assert len(CONTRACTS["agent_tool_names"]) >= 20
+    assert len(CONTRACTS["sse_events"]) >= 15
+    assert len(CONTRACTS["agent_tool_names"]) >= 25
     assert len(CONTRACTS["agent_event_types"]) >= 10
-    assert "guard_render_approval" in CONTRACTS["guard_codes"]
-    assert "guard_destructive_replace" in CONTRACTS["guard_codes"]
-    for tool in ("ask_user", "save_memory", "list_skills", "read_skill", "run_workflow"):
+    # Denial reason_codes are plain error strings in the studio engine; the
+    # guard_codes contract family is gone (the UI references none).
+    assert CONTRACTS["guard_codes"] == [] if "guard_codes" in CONTRACTS else True
+    for tool in (
+        "ask_user",
+        "save_memory",
+        "list_skills",
+        "read_skill",
+        "run_command",
+        "write_file",
+        "list_workflows",
+        "enqueue_video_jobs",
+        "add_scene",
+        "add_beat",
+    ):
         assert tool in CONTRACTS["agent_tool_names"], f"export_contracts.py lost tool {tool}"
-    for event in ("question/asked", "question/answered", "memory/saved", "memory/forgotten"):
+    for event in (
+        "user/message",
+        "assistant/message",
+        "tool/result",
+        "steering/message",
+        "question/asked",
+        "question/answered",
+        "memory/saved",
+        "task/end",
+    ):
         assert event in CONTRACTS["agent_event_types"], f"export_contracts.py lost event {event}"
 
 

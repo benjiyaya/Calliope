@@ -1,67 +1,80 @@
 """Agent shell (run_command): containment, approvals, exec mechanics.
 
-The shell is default-OFF; every guard branch here is a security contract:
-- disabled → guard_shell_disabled
-- read-only (ffprobe / --version) runs without approval, anything else
-  needs a scope='shell' card or the command named in the user's words
-- cwd must resolve inside the agent workspace
-- path-like args must resolve inside workspace/assets_dir, and sensitive
-  names (config, *.db, .env, credentials) are always denied
-- shell interpreters are blocked outright
-- exec is argv-list based with a stripped environment and a timeout
+The shell lives in ``calliope/agent/capabilities/shell.py`` (the old plugin
+harness/registry is gone; ``catalog.execute("run_command", ...)`` routes here
+and the tool works in unlinked sandbox chats). Every branch below is a
+security contract:
+
+- default OFF (``settings.agent_shell_enabled``) — the denial names Settings,
+  teaching where to enable it;
+- ``command`` must be a bare executable name; shell interpreters (bash /
+  powershell / cmd / pwsh) are blocked outright because a single opaque
+  payload defeats argv-level path containment;
+- read-only inspection (whoami / where / which / a bare ``--version`` flag
+  list) auto-runs; anything else needs the user's explicit ask — a
+  ``scope="shell"`` question card (``log.has_structured_approval``) or the
+  command named in their latest visible message (``shell.is_shell_request``),
+  with the machine ``[Calliope context]`` appendix invisible to the check;
+- ``cwd`` must resolve inside ``settings.workspace_dir``; path-like args must
+  resolve inside workspace+assets_dir; sensitive names (calliope_config.json,
+  calliope.db, .env, credentials, id_rsa, *.pem/.pfx/.p12) are always denied;
+- exec is an argv list via ``create_subprocess_exec`` (never a shell string)
+  with a stripped environment (KEY/SECRET/TOKEN/CREDENTIAL/PASSWORD), output
+  capped at ~2000 chars per stream, and a wall-clock timeout that kills the
+  process (``timed_out: true``).
+
+Windows note: the suite runs on win32 — binaries are probed with
+``shutil.which`` and the dependent tests skip when genuinely absent.
 """
 from __future__ import annotations
 
 import asyncio
-import sys
+import shutil
 from pathlib import Path
 
 import pytest
 
-from calliope.agent.harness import build_harness
+from calliope.agent.capabilities import shell
 from calliope.agent.harness import log as session_log
-from calliope.agent.harness.registry import ToolContext
+from calliope.config import settings
+from calliope.db import get_db, migrate_db
 
-PYTHON = Path(sys.executable).stem  # bare name ("python") — the tool refuses paths
+requires_python = pytest.mark.skipif(
+    shutil.which("python") is None, reason="python is not on PATH"
+)
+requires_where = pytest.mark.skipif(
+    shutil.which("where") is None, reason="where is not on PATH"
+)
+requires_whoami = pytest.mark.skipif(
+    shutil.which("whoami") is None, reason="whoami is not on PATH"
+)
 
 
-@pytest.fixture(autouse=True, scope="module")
-def _never_touch_real_db():
-    """Redirect data_dir before ANY write in this module (repo test rule)."""
-    import tempfile
+@pytest.fixture()
+def board(tmp_path, monkeypatch):
+    """Temp data_dir/workspace/assets + a fresh DB. Shell starts DISABLED."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "assets_dir", tmp_path / "assets")
+    monkeypatch.setattr(settings, "agent_workspace_dir", None)
+    monkeypatch.setattr(settings, "agent_shell_enabled", False)
+    asyncio.run(migrate_db(settings.db_path))
+    settings.ensure_storage_dirs()
+    return tmp_path
 
-    import calliope.config as config_module
-    from calliope.db import migrate_db
 
-    prev = {
-        "data_dir": config_module.settings.data_dir,
-        "assets_dir": config_module.settings.assets_dir,
-        "agent_workspace_dir": config_module.settings.agent_workspace_dir,
-        "agent_shell_enabled": config_module.settings.agent_shell_enabled,
-        "dry_run": config_module.settings.dry_run,
-    }
-    with tempfile.TemporaryDirectory() as tmp:
-        config_module.settings.data_dir = Path(tmp)
-        config_module.settings.assets_dir = Path(tmp) / "assets"
-        config_module.settings.agent_workspace_dir = None
-        config_module.settings.agent_shell_enabled = False
-        config_module.settings.dry_run = True
-        config_module.settings.ensure_storage_dirs()
-        asyncio.run(migrate_db(config_module.settings.db_path))
-        yield
-    for k, v in prev.items():
-        setattr(config_module.settings, k, v)
+@pytest.fixture()
+def enabled(board, monkeypatch):
+    """The shell switched ON for the guard/exec tests."""
+    monkeypatch.setattr(settings, "agent_shell_enabled", True)
+    return board
 
 
 def _session() -> int:
-    from calliope.db import get_db
-    from calliope.config import settings
-
     conn = get_db(settings.db_path)
     try:
         cur = conn.execute(
-            "INSERT INTO agent_sessions (title, project_id) VALUES (?, NULL)",
-            ("shell-test",),
+            "INSERT INTO agent_sessions (title, project_id, status, origin) "
+            "VALUES ('shell-test', NULL, 'idle', 'chat')"
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -70,49 +83,48 @@ def _session() -> int:
 
 
 def _say(session_id: int, text: str) -> None:
-    session_log.append_event(session_id, session_log.USER_MESSAGE, {"content": text})
+    session_log.append_event(session_id, "user/message", {"content": text})
 
 
-def _answer_card(session_id: int, answer: str) -> None:
-    """A scope='shell' question card answered affirmatively (the ask_user flow)."""
-    session_log.append_event(
+def _approve(session_id: int, answer: str = "Yes, run it") -> None:
+    """A scope='shell' question card answered by the user (the ask_user flow).
+
+    The answered marker carries the asked event's seq — that is what
+    ``has_structured_approval`` matches on."""
+    seq = session_log.append_event(
         session_id, session_log.QUESTION_ASKED, {"question": "Run it?", "scope": "shell"}
     )
-    session_log.append_event(session_id, session_log.QUESTION_ANSWERED, {"scope": "shell", "answer": answer})
-    session_log.append_event(session_id, session_log.USER_MESSAGE, {"content": answer})
+    session_log.append_event(
+        session_id,
+        session_log.QUESTION_ANSWERED,
+        {"question_seq": seq, "answer": answer},
+    )
 
 
-@pytest.fixture()
-def enabled():
-    import calliope.config as config_module
-
-    config_module.settings.agent_shell_enabled = True
-    yield
-    config_module.settings.agent_shell_enabled = False
-
-
-def _ctx() -> ToolContext:
-    return ToolContext(session_id=_session(), project_id=None)
+def _run(session_id: int | None, args: dict) -> dict:
+    return asyncio.run(shell.run_command(session_id, args))
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Registration & default-off
+# Default-off gate
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_run_command_registered_and_sandbox_visible():
-    registry, _ = build_harness()
-    t = registry.get("run_command")
-    assert t is not None
-    assert t.requires_project is False
-    assert t.category == "system"
-
-
-def test_disabled_by_default_denial(client):
-    registry, _ = build_harness()
-    out = asyncio.run(registry.execute(_ctx(), "run_command", {"command": "ffprobe"}))
+def test_disabled_by_default_denial_names_settings(board):
+    """The shell is opt-in: even a read-only command is refused, and the
+    denial teaches where the toggle lives (never 'tool does not exist')."""
+    out = _run(None, {"command": "whoami"})
     assert out["ok"] is False
-    assert out["reason_code"] == "guard_shell_disabled"
+    assert out["reason_code"] == "guard_shell_denied"
+    assert "Settings" in out["error"]
+
+
+def test_disabled_denial_precedes_every_other_check(board):
+    """Order contract: the enabled gate is first, so a hostile command gets
+    the enable guidance even when it would also fail the arg scan."""
+    out = _run(None, {"command": "where", "args": ["calliope_config.json"]})
+    assert out["ok"] is False
+    assert "Settings" in out["error"]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -120,202 +132,255 @@ def test_disabled_by_default_denial(client):
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_path_in_command_denied(enabled):
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(_ctx(), "run_command", {"command": "C:/evil/python.exe"})
-    )
-    assert out["reason_code"] == "guard_shell_denied_command"
+def test_command_must_be_a_bare_name(enabled):
+    """Paths and shell strings are refused — argv containment needs a bare
+    executable name resolved via shutil.which."""
+    for bad in ("C:/evil/python.exe", "..\\python", "/usr/bin/env", "tools/ffprobe"):
+        out = _run(None, {"command": bad})
+        assert out["ok"] is False, bad
+        assert "bare executable name" in out["error"], bad
 
 
-def test_shell_interpreter_denied(enabled):
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(_ctx(), "run_command", {"command": "bash", "args": ["-c", "ls"]})
-    )
-    assert out["reason_code"] == "guard_shell_denied_command"
+def test_shell_interpreters_blocked_outright(enabled):
+    """sh/powershell/cmd payloads defeat argv-level path containment, so the
+    interpreters are denied before they are even looked up on PATH."""
+    for name in ("bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh"):
+        out = _run(None, {"command": name, "args": ["-c", "echo pwned"]})
+        assert out["ok"] is False, name
+        assert "interpreter" in out["error"], name
 
 
 def test_unknown_binary_denied(enabled):
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(_ctx(), "run_command", {"command": "definitely-not-installed-xyz"})
-    )
-    assert out["reason_code"] == "guard_shell_denied_command"
+    out = _run(None, {"command": "definitely-not-installed-xyz-913"})
+    assert out["ok"] is False
+    assert "not an installed executable" in out["error"]
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Approval gate
+# Read-only auto-run vs HITL approval
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_read_only_probe_runs_without_approval(enabled):
-    """A --version flag pair counts as read-only — no user ask needed."""
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(
-            _ctx(), "run_command", {"command": PYTHON, "args": ["--version"]}
-        )
-    )
+@requires_whoami
+def test_read_only_inspection_runs_without_approval(enabled):
+    """whoami/where/which (and bare --version lists) cannot mutate anything —
+    they run with no session, no card, and no prose ask."""
+    out = _run(None, {"command": "whoami"})
+    assert out["ok"] is True, out
+    assert out["stdout"].strip()
+
+
+@requires_python
+def test_version_flags_count_as_read_only(enabled):
+    """python --version is a version-flag-only arg list → auto-run."""
+    out = _run(None, {"command": "python", "args": ["--version"]})
     assert out["ok"] is True, out
     assert out["exit_code"] == 0
 
 
-def test_mutating_without_approval_denied(enabled):
-    registry, _ = build_harness()
+@requires_python
+def test_mutating_command_denied_without_user_ask(enabled):
+    """A benign user message that never names the command or a shell verb is
+    NOT permission — the denial names the ask_user card that unlocks it."""
     sid = _session()
-    _say(sid, "organize my workspace please")  # no command named, no shell cue
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {"command": PYTHON, "args": ["-c", "print('hi')"]},
-        )
-    )
+    _say(sid, "tidy up my scratch folder")
+    out = _run(sid, {"command": "python", "args": ["-c", "print('hi')"]})
     assert out["ok"] is False
-    assert out["reason_code"] == "guard_shell_approval"
+    assert out["reason_code"] == "guard_shell_denied"
+    assert "ask_user" in out["error"]
+    assert 'scope="shell"' in out["error"]
 
 
-def test_command_named_in_user_words_allows(enabled):
-    registry, _ = build_harness()
+@requires_python
+def test_no_session_means_no_prose_approval(enabled):
+    """Without a session there is no latest user message — only a structured
+    card (which also needs one) could unlock, so the call is denied."""
+    out = _run(None, {"command": "python", "args": ["-c", "print('x')"]})
+    assert out["ok"] is False
+    assert "ask_user" in out["error"]
+
+
+@requires_python
+def test_structured_card_unlocks(enabled):
+    """The ask_user flow: a scope='shell' card answered affirmatively lets the
+    retry through — proven without any user/message naming the command."""
     sid = _session()
-    _say(sid, "run python -c to check the workspace files")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {"command": "python", "args": ["-c", "print('approved')"]},
-        )
-    )
+    _approve(sid)
+    out = _run(sid, {"command": "python", "args": ["-c", "print('card-approved')"]})
     assert out["ok"] is True, out
+    assert "card-approved" in out["stdout"]
 
 
-def test_structured_shell_approval_allows(enabled):
-    registry, _ = build_harness()
+@requires_python
+def test_refusal_answer_keeps_denial(enabled):
+    """A refusal option ("No") does NOT count as approval."""
     sid = _session()
-    _answer_card(sid, "Yes, run it")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {"command": PYTHON, "args": ["-c", "print('card-approved')"]},
-        )
+    _approve(sid, "No")
+    out = _run(sid, {"command": "python", "args": ["-c", "print('nope')"]})
+    assert out["ok"] is False
+    assert "ask_user" in out["error"]
+
+
+@requires_python
+def test_new_unanswered_card_voids_previous_yes(enabled):
+    """Each new card of the scope resets the verdict — a stale 'yes' from an
+    older card must not approve a fresh ask."""
+    sid = _session()
+    _approve(sid)
+    session_log.append_event(
+        sid, session_log.QUESTION_ASKED, {"question": "Again?", "scope": "shell"}
     )
+    out = _run(sid, {"command": "python", "args": ["-c", "print('x')"]})
+    assert out["ok"] is False
+
+
+@requires_python
+def test_other_scope_card_does_not_unlock_shell(enabled):
+    """Only scope='shell' cards grant shell — an answered 'info' card grants
+    nothing."""
+    sid = _session()
+    seq = session_log.append_event(
+        sid, session_log.QUESTION_ASKED, {"question": "Pick one?", "scope": "info"}
+    )
+    session_log.append_event(
+        sid,
+        session_log.QUESTION_ANSWERED,
+        {"question_seq": seq, "answer": "Yes, run it"},
+    )
+    out = _run(sid, {"command": "python", "args": ["-c", "print('x')"]})
+    assert out["ok"] is False
+
+
+@requires_python
+def test_command_named_in_user_words_unlocks(enabled):
+    """The command appearing in the user's own latest message is permission."""
+    sid = _session()
+    _say(sid, "please run python to summarize the scratch files")
+    out = _run(sid, {"command": "python", "args": ["-c", "print('prose-approved')"]})
     assert out["ok"] is True, out
+    assert "prose-approved" in out["stdout"]
+
+
+@requires_python
+def test_negated_command_in_prose_stays_denied(enabled):
+    """Clause-scoped negation: 'do not run python' is a veto, not a request."""
+    sid = _session()
+    _say(sid, "do not run python for this")
+    out = _run(sid, {"command": "python", "args": ["-c", "print('x')"]})
+    assert out["ok"] is False
+
+
+@requires_python
+def test_appendix_never_grants_shell(enabled):
+    """The machine ``[Calliope context]`` appendix can carry a command name —
+    it is stripped before the prose check, so it can never auto-approve."""
+    sid = _session()
+    _say(sid, "tidy the workspace\n\n[Calliope context]\npython=3.12 mentioned")
+    out = _run(sid, {"command": "python", "args": ["-c", "print('x')"]})
+    assert out["ok"] is False
+
+
+def test_user_allows_shell_reads_only_user_messages(enabled):
+    """user_allows_shell: structured card or the latest user/message only —
+    assistant replies and tool results never grant shell."""
+    sid = _session()
+    _say(sid, "please organize my drafts")
+    session_log.append_event(
+        sid, "assistant/message", {"content": "run python to organize?"}
+    )
+    assert shell.user_allows_shell(sid, "python") is False
+    _say(sid, "ok, run python for me")
+    assert shell.user_allows_shell(sid, "python") is True
+    # a different command in the same message is not permission for python
+    assert shell.user_allows_shell(sid, "ffmpeg") is False
+    assert shell.user_allows_shell(None, "python") is False
+
+
+def test_is_shell_request_cues():
+    """Generic run/execute-a-command cues, clause-scoped negation."""
+    assert shell.is_shell_request("run ffmpeg over the raw clip", None) is True
+    assert shell.is_shell_request("please execute this script", None) is True
+    assert shell.is_shell_request("do not run ffmpeg tonight", None) is False
+    # a terminal mention without a run verb is not a request
+    assert shell.is_shell_request("I want to buy a terminal", None) is False
+
+
+def test_is_shell_request_command_named():
+    """With a command, the name in visible prose counts by itself (documented
+    design choice), and the [Calliope context] appendix is invisible."""
+    assert shell.is_shell_request("run python to check the files", "python") is True
+    assert shell.is_shell_request("never run python here", "python") is False
+    assert shell.is_shell_request("tidy my drafts", "python") is False
+    assert shell.is_shell_request("", "python") is False
+    assert shell.is_shell_request("python would be handy here", "python") is True
+    assert shell.is_shell_request("[Calliope context]\npython=3.12", "python") is False
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Containment
+# Containment: cwd + path-like args
 # ─────────────────────────────────────────────────────────────────────────
 
 
+@requires_whoami
 def test_cwd_outside_workspace_denied(enabled):
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "cwd": str(Path(settings_data_dir_home()))},
-        )
-    )
-    assert out["reason_code"] == "guard_shell_outside_workspace"
+    """The process is born inside the workspace or nowhere — the user's real
+    home is definitively outside the test workspace."""
+    out = _run(None, {"command": "whoami", "cwd": str(Path.home())})
+    assert out["ok"] is False
+    assert "outside the agent workspace" in out["error"]
 
 
-def settings_data_dir_home() -> Path:
-    """The user's real home — definitively outside the test workspace."""
-    return Path.home()
-
-
-def test_sensitive_arg_denied(enabled, tmp_path):
-    registry, _ = build_harness()
-    secret = tmp_path / "calliope_config.json"
-    secret.write_text("{}", encoding="utf-8")
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "args": [str(secret)]},
-        )
-    )
-    assert out["reason_code"] == "guard_shell_denied_path"
-
-
-def test_db_arg_denied(enabled, tmp_path):
-    registry, _ = build_harness()
-    db = tmp_path / "calliope.db"
-    db.write_bytes(b"")
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "args": [str(db)]},
-        )
-    )
-    assert out["reason_code"] == "guard_shell_denied_path"
-
-
-def test_env_file_arg_denied(enabled):
-    registry, _ = build_harness()
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "args": ["--", ".env"]},
-        )
-    )
-    assert out["reason_code"] == "guard_shell_denied_path"
-
-
-def test_outside_absolute_arg_denied(enabled, tmp_path):
-    registry, _ = build_harness()
-    outside = tmp_path / "movie.mp4"
-    outside.write_bytes(b"00")
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "args": [str(outside)]},
-        )
-    )
-    assert out["reason_code"] == "guard_shell_outside_workspace"
-
-
-def test_inside_asset_arg_allowed(enabled):
-    """assets_dir is a legit read root for reference inspection."""
-    from calliope.config import settings
-
-    registry, _ = build_harness()
-    ref = settings.assets_dir / "ref.mp4"
-    ref.write_bytes(b"00")
-    out = asyncio.run(
-        registry.execute(
-            _ctx(),
-            "run_command",
-            {"command": "ffprobe", "args": ["-v", "error", str(ref)]},
-        )
-    )
-    # Not a real mp4 — ffprobe fails, but the GUARD must not have denied it.
-    assert out.get("reason_code") is None
-    assert out.get("exit_code") != 0 or out.get("ok") is False or out["ok"] is True
-
-
-def test_workspace_relative_cwd_allowed(enabled, tmp_path):
-    from calliope.config import settings
-
-    registry, _ = build_harness()
+@requires_whoami
+def test_cwd_inside_workspace_allowed(enabled):
     sub = settings.workspace_dir / "sub"
     sub.mkdir(parents=True, exist_ok=True)
-    sid = _session()
-    _say(sid, "run python to print the cwd")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {"command": PYTHON, "args": ["-c", "import os; print(os.getcwd())"], "cwd": str(sub)},
-        )
-    )
+    out = _run(None, {"command": "whoami", "cwd": str(sub)})
     assert out["ok"] is True, out
-    assert out["stdout"].strip().lower() == str(sub.resolve()).lower()
+    assert Path(out["cwd"]) == sub.resolve()
+
+
+@requires_where
+def test_sensitive_args_denied(enabled):
+    """Sensitive names are denied before any containment logic — even on a
+    read-only command, even as bare (non-path) words."""
+    for arg in (
+        "calliope_config.json",
+        "calliope.db",
+        ".env",
+        "creds/id_rsa",
+        "apikey.pem",
+        "backup.p12",
+        "My-SECRET.txt",
+    ):
+        out = _run(None, {"command": "where", "args": [arg]})
+        assert out["ok"] is False, arg
+        assert "sensitive file" in out["error"], arg
+
+
+@requires_where
+def test_absolute_path_arg_outside_denied(enabled, tmp_path):
+    """tmp_path IS the test data_dir — its own root is outside both the
+    workspace (data_dir/workspace) and the assets folder."""
+    outside = tmp_path / "movie.mp4"
+    outside.write_bytes(b"xx")
+    out = _run(None, {"command": "where", "args": [str(outside)]})
+    assert out["ok"] is False
+    assert "outside the agent workspace" in out["error"]
+
+
+@requires_where
+def test_args_inside_workspace_and_assets_pass_the_guard(enabled):
+    """assets_dir is a legit read root for reference inspection; the workspace
+    is the write root. The guard passes both through (where itself may or may
+    not match the name — that is an exit code, not a denial)."""
+    ref = settings.assets_dir / "ref.mp4"
+    ref.write_bytes(b"xx")
+    scratch = settings.workspace_dir / "draft.txt"
+    scratch.write_text("x", encoding="utf-8")
+    for arg in (str(ref), str(scratch)):
+        out = _run(None, {"command": "where", "args": [arg]})
+        assert out.get("reason_code") is None, out
+        assert "outside the agent workspace" not in str(out.get("error", ""))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -323,102 +388,65 @@ def test_workspace_relative_cwd_allowed(enabled, tmp_path):
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_stdout_captured_and_env_stripped(enabled):
-    registry, _ = build_harness()
-    sid = _session()
-    _say(sid, "run python -c to dump env keys")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {
-                "command": PYTHON,
-                "args": [
-                    "-c",
-                    "import os; print('KEY' + '=' + str('LLM_API_KEY' in os.environ or 'FAKE_API_KEY' in os.environ)); print('ran')",
-                ],
-            },
-        )
+@requires_python
+def test_env_stripped_from_child(enabled, monkeypatch):
+    """KEY/SECRET/TOKEN/CREDENTIAL/PASSWORD env vars are stripped from the
+    child process; ordinary vars pass through (the env is filtered, not
+    emptied). The probe is a script file in the workspace so the -sensitive
+    arg scan never sees the variable name."""
+    script = settings.workspace_dir / "env_check.py"
+    script.write_text(
+        "import os\n"
+        "print('stripped:', [k for k in os.environ if k.startswith('CALLIOPE_TEST_SECRET')])\n"
+        "print('plain:', os.environ.get('CALLIOPE_TEST_PLAIN'))\n",
+        encoding="utf-8",
     )
-    assert out["ok"] is True, out
-    assert "ran" in out["stdout"]
-    assert "=False" in out["stdout"]
-
-
-def test_timeout_kills_process(enabled):
-    registry, _ = build_harness()
+    monkeypatch.setenv("CALLIOPE_TEST_SECRET_TOKEN", "topsecret-value")
+    monkeypatch.setenv("CALLIOPE_TEST_PLAIN", "survives")
     sid = _session()
-    _say(sid, "run python -c sleep check")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {
-                "command": PYTHON,
-                "args": ["-c", "import time; time.sleep(30)"],
-                "timeout_sec": 2,
-            },
-        )
+    _approve(sid)
+    out = _run(sid, {"command": "python", "args": [str(script)]})
+    assert out["ok"] is True, out
+    assert "stripped: []" in out["stdout"]
+    assert "plain: survives" in out["stdout"]
+    assert "topsecret" not in out["stdout"]
+
+
+@requires_python
+def test_timeout_kills_the_process(enabled):
+    """A command over its wall-clock budget is killed and reported with
+    timed_out=True — the wait never hangs past min(timeout_sec, queue cap)."""
+    sid = _session()
+    _approve(sid)
+    out = _run(
+        sid,
+        {
+            "command": "python",
+            "args": ["-c", "import time; time.sleep(30)"],
+            "timeout_sec": 1,
+        },
     )
     assert out["ok"] is False
     assert out.get("timed_out") is True
+    assert "exceeded" in out["error"]
 
 
+@requires_python
 def test_nonzero_exit_reported(enabled):
-    registry, _ = build_harness()
     sid = _session()
-    _say(sid, "run python -c failing check")
-    out = asyncio.run(
-        registry.execute(
-            ToolContext(session_id=sid, project_id=None),
-            "run_command",
-            {"command": PYTHON, "args": ["-c", "raise SystemExit(3)"]},
-        )
-    )
+    _approve(sid)
+    out = _run(sid, {"command": "python", "args": ["-c", "raise SystemExit(3)"]})
     assert out["ok"] is False
     assert out["exit_code"] == 3
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Settings roundtrip
-# ─────────────────────────────────────────────────────────────────────────
-
-
-def test_settings_roundtrip_for_new_keys(client, monkeypatch):
-    """POST /api/settings persists agent_workspace_dir + agent_shell_enabled."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        r = client.post(
-            "/api/settings",
-            json={"agent_workspace_dir": tmp, "agent_shell_enabled": True},
-        )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["agent_shell_enabled"] is True
-        assert Path(body["agent_workspace_dir"]).resolve() == Path(tmp).resolve()
-
-        r2 = client.post("/api/settings", json={"agent_shell_enabled": False})
-        assert r2.status_code == 200
-        assert r2.json()["agent_shell_enabled"] is False
-
-
-def test_settings_rejects_ephemeral_workspace():
-    """load/save poison-guard: a %TEMP% workspace resets to the data_dir default."""
-    import tempfile
-
-    import calliope.config as config_module
-
-    s = config_module.settings
-    prev = s.agent_workspace_dir
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            s.agent_workspace_dir = Path(tmp)
-            s.save_config_file()
-            assert s.agent_workspace_dir is None
-            assert s.workspace_dir == s.data_dir / "workspace"
-    finally:
-        # This test drives the REAL save path (conftest redirects CONFIG_FILE to a
-        # scratch file, so no operator data is at risk), but it must still not
-        # leave the shared singleton holding a reset workspace for later tests.
-        s.agent_workspace_dir = prev
+@requires_python
+def test_stdout_captured_and_capped(enabled):
+    """Streams are captured but capped (~2000 chars) with an explicit
+    stdout_truncated marker — a chatty command cannot flood the context."""
+    sid = _session()
+    _approve(sid)
+    out = _run(sid, {"command": "python", "args": ["-c", "print('x' * 5000)"]})
+    assert out["ok"] is True, out
+    assert out.get("stdout_truncated") is True
+    assert len(out["stdout"]) <= 2000

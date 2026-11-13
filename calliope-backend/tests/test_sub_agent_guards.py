@@ -1,712 +1,166 @@
-"""Sub-agent loop safety nets — the swarm must not be a second-class citizen.
+"""Grant scoping: a subagent can call the tools in its grant and nothing else.
 
-Covers the four nets ported from run_turn into _run_sub_agent:
-repeat guard, fail-streak directive, final-step budget nudge, and ask_user
-escalation (which pauses the whole swarm in orchestrate).
+The payload (tools_for) and the execute path (run_subagent's grant check) are
+two layers of the same rule; the coordinator refuses project grants without a
+project, and the memory/skills base is in EVERY grant.
 """
+
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
+import json
 
 import pytest
 
-from calliope.agent.harness.registry import ToolContext
+from calliope.agent.capabilities.catalog import GRANTS, tools_for
+from calliope.agent.llm import ChatTurn, ToolCall
+from calliope.agent.runtime import subagent as subagent_mod
+from calliope.agent.runtime.coordinator import dispatch
+from calliope.agent.runtime.subagent import run_subagent
+from calliope.agent.runtime.types import Run
 from calliope.config import settings
-from calliope.db import get_db
-
-@pytest.fixture(autouse=True, scope="module")
-def _never_touch_real_db():
-    prev = settings.data_dir
-    with tempfile.TemporaryDirectory() as tmp:
-        settings.data_dir = Path(tmp)
-        settings.assets_dir = Path(tmp) / "assets"
-        asyncio.run(_migrate(settings.db_path))
-        yield
-    settings.data_dir = prev
+from calliope.db import migrate_db
 
 
-async def _migrate(db_path):
-    from calliope.db import migrate_db
-
-    await migrate_db(db_path)
-
-
-def _mk_session() -> int:
-    conn = get_db(settings.db_path)
-    try:
-        cur = conn.execute(
-            "INSERT INTO agent_sessions (title, project_id) VALUES (?, NULL)",
-            ("subagent-guard-test",),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-    finally:
-        conn.close()
+@pytest.fixture(autouse=True)
+def db(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "assets_dir", tmp_path / "assets")
+    asyncio.run(migrate_db(settings.db_path))
 
 
-def _tc(name: str, args: str = "{}", call_id: str = "c1"):
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": name, "arguments": args},
-    }
+class Scripted:
+    def __init__(self, turns: list[ChatTurn]) -> None:
+        self.turns = turns
 
+    def __call__(self, *_args, **_kwargs):
+        return self
 
-class _ScriptedClient:
-    """chat_with_tools/chat_stream that replay scripted responses, one per call."""
+    async def chat_with_tools(
+        self, messages, temperature=0.7, tools=None, tool_choice=None,
+        on_token=None, on_reasoning=None, on_usage=None,
+    ):
+        turn = self.turns.pop(0)
+        return {
+            "role": "assistant",
+            "content": turn.content or "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+                }
+                for call in turn.tool_calls
+            ],
+        }
 
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self.seen_messages: list[dict] = []
-
-    async def chat_with_tools(self, messages, temperature=0.7, tools=None, tool_choice=None):
-        self.seen_messages.append(list(messages))
-        if self._responses:
-            return self._responses.pop(0)
-        return {"role": "assistant", "content": "done", "tool_calls": []}
-
-    async def chat_stream(self, messages, temperature=0.4, tools=None, **kwargs):
-        self.seen_messages.append(list(messages))
-        if self._responses:
-            msg = self._responses.pop(0)
-        else:
-            msg = {"role": "assistant", "content": "done", "tool_calls": []}
-        if msg.get("content"):
-            yield {"type": "delta", "content": msg["content"]}
-        for tc in msg.get("tool_calls") or []:
-            yield {"type": "tool_call", "tool_call": tc}
-        yield {"type": "done"}
-
-    async def close(self):
-        pass
-
-
-class _StubRegistry:
-    """Registry stub: counts executions, returns scripted results per tool."""
-
-    def __init__(self, results_by_tool=None):
-        self.executed: list[tuple[str, dict]] = []
-        self.results_by_tool = results_by_tool or {}
-
-    def get(self, name):
+    async def close(self) -> None:
         return None
 
-    async def execute(self, ctx, name, args):
-        self.executed.append((name, dict(args)))
-        r = self.results_by_tool.get(name)
-        return dict(r) if isinstance(r, dict) else {"ok": True}
+
+# ── payload layer ──────────────────────────────────────────────────────────
 
 
-def _install(orch, client, registry):
-    """Patch the orchestrator: LLMClient is a FACTORY (called with no args),
-    so wrap the scripted client in a lambda."""
-    orch.LLMClient = lambda: client
-    orch.get_registry = lambda: registry
+def test_memory_and_skills_base_in_every_grant():
+    base = {"save_memory", "list_memories", "forget_memory", "list_skills", "read_skill", "ask_user"}
+    for name, tools in GRANTS.items():
+        assert base <= tools, f"{name} grant lost the universal base"
 
 
-def test_repeat_guard_blocks_reexecution():
-    """After REPEAT_EXECUTE_LIMIT identical calls, the sub-agent gets the
-    cached result back with the repeat_guard directive — not another
-    execution burning the step budget."""
-    import calliope.agent.harness.orchestrator as orch
+def test_system_tools_in_chat_grants_not_shot():
+    system = {"run_command", "list_files", "read_file", "write_file", "delete_file"}
+    for name in ("story", "script", "assets", "render", "canvas"):
+        assert system <= GRANTS[name], f"{name} grant lost the system tools"
+    assert not (system & GRANTS["shot"]), "Build Scene must stay shot-only"
 
-    sid = _mk_session()
-    # Five model turns, all asking for the same tool+args.
-    client = _ScriptedClient(
-        [{"role": "assistant", "content": None, "tool_calls": [_tc("get_workspace", call_id=f"c{i}")]}
-         for i in range(4)]
-        + [{"role": "assistant", "content": "gave up", "tool_calls": []}]
+
+def test_grant_boundaries():
+    assert "add_beat" not in GRANTS["script"]
+    assert "add_object" not in GRANTS["script"]
+    assert "enqueue_video_jobs" not in GRANTS["script"]
+    assert "add_scene" not in GRANTS["render"]
+    assert "enqueue_video_jobs" in GRANTS["render"]
+    assert "create_project" in GRANTS["story"]
+    assert "run_workflow" not in GRANTS["script"]
+
+
+def test_tools_for_returns_exactly_the_grant():
+    names = {entry["function"]["name"] for entry in tools_for("script")}
+    assert names == set(GRANTS["script"])
+    shot_names = {entry["function"]["name"] for entry in tools_for("shot")}
+    assert shot_names == set(GRANTS["shot"])
+
+
+# ── execute layer ──────────────────────────────────────────────────────────
+
+
+def test_subagent_denies_out_of_grant_calls():
+    client = Scripted(
+        [
+            ChatTurn(content=None, tool_calls=[ToolCall(id="c1", name="enqueue_video_jobs", arguments={})]),
+            ChatTurn(content="tried"),
+        ]
     )
-    registry = _StubRegistry()
-    orig_client, orig_reg = orch.LLMClient, orch.get_registry
-    _install(orch, client, registry)
-    try:
-        final = asyncio.run(
-            orch._run_sub_agent(
-                ToolContext(session_id=sid, project_id=1),
-                [{"role": "user", "content": "do"}],
-                ["get_workspace"],
-                agent_name="script-agent",
-                max_iterations=6,
-            )
+    monkeypatch_target = subagent_mod
+    original = monkeypatch_target.LLMClient
+    monkeypatch_target.LLMClient = client  # patched below via monkeypatch fixture
+
+    async def scenario():
+        return await run_subagent(
+            project_id=None, session_id=None, grant="canvas", goal="sneak"
         )
-    finally:
-        orch.LLMClient, orch.get_registry = orig_client, orig_reg
 
-    assert final == "gave up"
-    # Executed for real only 2 times (limit=2); later repeats intercepted.
-    assert len(registry.executed) == 2
-    # The directive reached the model on the intercepted call.
-    repeat_msgs = [
-        m for batch in client.seen_messages
-        for m in batch
-        if m.get("role") == "tool" and "repeat_guard" in (m.get("content") or "")
-    ]
-    assert repeat_msgs, "repeat_guard directive never reached the model"
+    import unittest.mock
+
+    with unittest.mock.patch.object(subagent_mod, "LLMClient", client):
+        result = asyncio.run(scenario())
+    assert "enqueue_video_jobs" in result.tools_ran
+    tool_rows = [m for m in result.transcript if m.get("role") == "tool"]
+    assert "not granted" in tool_rows[-1]["content"]
+    del original
 
 
-def test_fail_streak_directive_appended():
-    """Two not-ok results in a row append the [SYSTEM DIRECTIVE] change-course
-    text to the tool result the model sees."""
-    import calliope.agent.harness.orchestrator as orch
+def test_coordinator_refuses_project_grants_without_project():
+    run = Run(id="r1", session_id=1, project_id=None, goal="go")
 
-    sid = _mk_session()
-    client = _ScriptedClient(
-        [{"role": "assistant", "content": None, "tool_calls": [_tc("run_workflow", call_id="a")]}]
-        + [{"role": "assistant", "content": None, "tool_calls": [_tc("run_workflow", call_id="b")]}]
-        + [{"role": "assistant", "content": None, "tool_calls": [_tc("get_workspace", call_id="c")]}]
-        + [{"role": "assistant", "content": "changed course", "tool_calls": []}]
-    )
-    registry = _StubRegistry({"run_workflow": {"ok": False, "error": "blocked"}})
-    orig_client, orig_reg = orch.LLMClient, orch.get_registry
-    _install(orch, client, registry)
+    async def scenario():
+        return await dispatch(run, "go", grant="script", write_required=False)
+
+    with pytest.raises(RuntimeError, match="needs a project"):
+        asyncio.run(scenario())
+
+
+def test_coordinator_allows_canvas_without_project():
+    """Sandbox chats may run canvas calls (the sandbox canvas is keyed by the
+    session row) — dispatch must not raise "needs a project"."""
+    from unittest.mock import patch
+
+    from calliope.db import get_db
+
+    conn = get_db(settings.db_path)
     try:
-        final = asyncio.run(
-            orch._run_sub_agent(
-                ToolContext(session_id=sid, project_id=1),
-                [{"role": "user", "content": "do"}],
-                ["run_workflow", "get_workspace"],
-                agent_name="assets-agent",
-                max_iterations=6,
-            )
+        conn.execute(
+            "INSERT INTO agent_sessions (id, title, origin) VALUES (1, 'sandbox', 'chat')"
         )
+        conn.commit()
     finally:
-        orch.LLMClient, orch.get_registry = orig_client, orig_reg
+        conn.close()
+    run = Run(id="r2", session_id=1, project_id=None, goal="go")
 
-    assert final == "changed course"
-    tool_texts = [m.get("content") or "" for batch in client.seen_messages for m in batch if m.get("role") == "tool"]
-    assert any("[SYSTEM DIRECTIVE]" in t for t in tool_texts)
+    class FailClient:
+        def __call__(self, *_a, **_k):
+            return self
 
-
-def test_final_step_nudge_present():
-    """On the last iteration the model is told to wrap up, not start work."""
-    import calliope.agent.harness.orchestrator as orch
-
-    sid = _mk_session()
-    client = _ScriptedClient(
-        [{"role": "assistant", "content": None, "tool_calls": [_tc("get_workspace")]}]
-        + [{"role": "assistant", "content": "wrapping", "tool_calls": []}]
-    )
-    registry = _StubRegistry()
-    orig_client, orig_reg = orch.LLMClient, orch.get_registry
-    _install(orch, client, registry)
-    try:
-        final = asyncio.run(
-            orch._run_sub_agent(
-                ToolContext(session_id=sid, project_id=1),
-                [{"role": "user", "content": "do"}],
-                ["get_workspace"],
-                agent_name="script-agent",
-                max_iterations=2,
-            )
-        )
-    finally:
-        orch.LLMClient, orch.get_registry = orig_client, orig_reg
-
-    assert final == "wrapping"
-    last_batch = client.seen_messages[-1]
-    assert any(
-        m.get("role") == "user" and "FINAL step" in (m.get("content") or "")
-        for m in last_batch
-    ), "final-step nudge missing from the last model request"
-
-
-def test_ask_user_pauses_sub_agent():
-    """An ask_user result ends the sub-agent immediately with the Paused
-    prefix — no more model calls, no more executions."""
-    import calliope.agent.harness.orchestrator as orch
-
-    sid = _mk_session()
-    client = _ScriptedClient(
-        [{"role": "assistant", "content": None, "tool_calls": [_tc("ask_user", '{"question": "Generate?"}')]}]
-        + [{"role": "assistant", "content": "never reached", "tool_calls": []}]
-    )
-    registry = _StubRegistry(
-        {"ask_user": {"ok": True, "awaiting_user_input": True, "question": "Generate?"}}
-    )
-    orig_client, orig_reg = orch.LLMClient, orch.get_registry
-    _install(orch, client, registry)
-    try:
-        final = asyncio.run(
-            orch._run_sub_agent(
-                ToolContext(session_id=sid, project_id=1),
-                [{"role": "user", "content": "do"}],
-                ["ask_user"],
-                agent_name="assets-agent",
-                max_iterations=6,
-            )
-        )
-    finally:
-        orch.LLMClient, orch.get_registry = orig_client, orig_reg
-
-    assert final.startswith("Paused: ")
-    assert "Generate?" in final
-    # The scripted "never reached" response stayed in the queue — only one
-    # model call happened.
-    assert len(client.seen_messages) == 1
-
-
-def test_sub_agent_streams_reasoning_events():
-    """The sub-agent publishes agent.thinking (agent_name-tagged) while its
-    model streams reasoning — between tool events the working-state card used
-    to sit silent for whole tasks. Token deltas stay unpublished."""
-    import calliope.agent.harness.orchestrator as orch
-
-    sid = _mk_session()
-
-    class _ThinkingClient:
-        def __init__(self):
-            self.step = 0
-
-        async def chat_stream(self, messages, temperature=0.3, tools=None, **kwargs):
-            self.step += 1
-            if self.step == 1:
-                yield {"type": "reasoning", "content": "Inspecting the board first. "}
-                yield {"type": "tool_call", "tool_call": _tc("get_workspace", call_id="w1")}
-            else:
-                yield {"type": "reasoning", "content": "Done inspecting — wrapping up."}
-                yield {"type": "delta", "content": "wrapping"}
-            yield {"type": "done"}
-
-        async def close(self):
-            pass
-
-    class _Recorder:
-        def __init__(self):
-            self.events: list[tuple[str, dict]] = []
-
-        async def publish(self, event, data):
-            self.events.append((event, data))
-
-    client = _ThinkingClient()
-    recorder = _Recorder()
-    orig_client, orig_bus = orch.LLMClient, orch.event_bus
-    orch.LLMClient = lambda: client
-    orch.event_bus = recorder
-    try:
-        final = asyncio.run(
-            orch._run_sub_agent(
-                ToolContext(session_id=sid, project_id=1),
-                [{"role": "user", "content": "do"}],
-                ["get_workspace"],
-                agent_name="script-agent",
-                max_iterations=4,
-            )
-        )
-    finally:
-        orch.LLMClient, orch.event_bus = orig_client, orig_bus
-
-    assert final == "wrapping"
-    assert not [ev for ev, _ in recorder.events if ev == "agent.token"]  # token deltas are not broadcast
-    thinking = [d for ev, d in recorder.events if ev == "agent.thinking"]
-    assert thinking, "no agent.thinking events published by the sub-agent"
-    assert all(d["agent_name"] == "script-agent" for d in thinking)
-    assert all(d["session_id"] == sid for d in thinking)
-    joined = "".join(d["content"] for d in thinking)
-    assert "Inspecting the board" in joined and "wrapping up" in joined
-
-
-def test_ask_user_visible_in_every_role():
-    """Every ROLE_TOOLS list carries ask_user so a stuck sub-agent can
-    escalate instead of spinning."""
-    from calliope.agent.harness.orchestrator import ROLE_TOOLS
-
-    for role, tools in ROLE_TOOLS.items():
-        assert "ask_user" in tools, f"{role} cannot escalate"
-
-
-def test_clip_tools_in_swarm_roles():
-    from calliope.agent.harness.orchestrator import ROLE_TOOLS
-
-    for tool in ("list_clips", "break_into_shots", "add_clip", "update_clip", "delete_clip"):
-        assert tool in ROLE_TOOLS["script"], f"{tool} missing from script role"
-    assert "list_clips" in ROLE_TOOLS["video"]
-
-
-# ── per-tool wall-clock timeout ─────────────────────────────────────────
-
-
-def test_tool_timeout_kills_hung_tool():
-    """A tool slower than Settings → Queue → Timeout returns ok:False with the
-    timeout marker instead of stalling the step forever."""
-    import asyncio as aio
-
-    from calliope.agent.harness.registry import ToolDefinition, ToolRegistry
-
-    async def _hang(ctx, args):
-        await aio.sleep(30)
-        return {"ok": True}
-
-    async def _fast(ctx, args):
-        return {"ok": True}
-
-    reg = ToolRegistry()
-    reg.register(
-        ToolDefinition(name="hang", description="", parameters={}, executor=_hang, requires_project=False)
-    )
-    reg.register(
-        ToolDefinition(
-            name="exempt",
-            description="",
-            parameters={},
-            executor=_hang,
-            requires_project=False,
-            long_running=True,
-        )
-    )
-    reg.register(
-        ToolDefinition(name="fast", description="", parameters={}, executor=_fast, requires_project=False)
-    )
-
-    orig = settings.queue_poll_timeout_sec
-    try:
-        settings.queue_poll_timeout_sec = 0.2
-        out = aio.run(reg.execute(ToolContext(session_id=1), "hang", {}))
-        assert out["ok"] is False
-        assert out.get("timeout") is True
-        assert "timed out" in out["error"]
-
-        # long_running tools are exempt (they own their wait contract).
-        # (Not awaiting the hang: exemption means wait_for is not applied at
-        # all — verified structurally by _tool_timeout_sec + the fast path.)
-        out_fast = aio.run(reg.execute(ToolContext(session_id=1), "fast", {}))
-        assert out_fast["ok"] is True
-
-        # 0 waits until the tool finishes.
-        settings.queue_poll_timeout_sec = 0
-        from calliope.agent.harness.registry import _tool_timeout_sec
-
-        assert _tool_timeout_sec() == 0.0
-    finally:
-        settings.queue_poll_timeout_sec = orig
-
-
-def test_wait_for_jobs_is_long_running():
-    """wait_for_jobs owns its timeout contract (timeout_sec →
-    queue_poll_timeout_sec) — it must be exempt from the wall-clock cap."""
-    from calliope.agent.harness.tools import TOOLS
-
-    assert TOOLS["wait_for_jobs"].long_running is True
-
-
-# ── planner fast-path ───────────────────────────────────────────────────
-
-
-def test_is_trivial_goal_classification():
-    from calliope.agent.harness.orchestrator import _is_trivial_goal
-
-    assert _is_trivial_goal("rename character 3 to Kira")
-    assert _is_trivial_goal("What's the queue status?")
-    assert _is_trivial_goal("show me scene 2")
-    assert _is_trivial_goal("LIST WORKFLOWS")
-    # Multi-step / long / procedural messages must NOT skip the planner.
-    assert not _is_trivial_goal("draft a new storyline and then regenerate the script")
-    assert not _is_trivial_goal("")
-    assert not _is_trivial_goal("x" * 200)
-    assert not _is_trivial_goal("first do this;\nthen do that")
-
-
-def test_trivial_goal_skips_planner():
-    """A one-line imperative goes straight to run_turn — no planner LLM call,
-    no workspace read."""
-    import calliope.agent.harness.orchestrator as orch
-
-    sid = _mk_session()
-    from calliope.agent.harness import log as session_log
-
-    session_log.append_event(sid, session_log.USER_MESSAGE, {"content": "rename character 3 to Kira"})
-
-    planner_calls = {"n": 0}
-
-    class _PlannerSpy:
-        def __init__(self):
-            planner_calls["n"] += 1
-
-        async def chat(self, *a, **kw):
-            raise AssertionError("planner must not be called for a trivial goal")
+        async def chat_with_tools(self, messages, **kwargs):
+            return {"role": "assistant", "content": "no tools here", "tool_calls": []}
 
         async def close(self):
             return None
 
-    async def fake_run_turn(ctx, history, *, on_message=None):
-        return "single-loop answer"
-
-    orig_client = orch.LLMClient
-    orig_run_turn = orch.run_turn
-    orig_ws = orch.get_registry
-    orch.LLMClient = _PlannerSpy
-    orch.run_turn = fake_run_turn
-
-    class _NoWorkspace:
-        def get(self, name):
-            return None
-
-        async def execute(self, ctx, name, args):
-            raise AssertionError("workspace read must be skipped for a trivial goal")
-
-    orch.get_registry = lambda: _NoWorkspace()
-    try:
-        ctx = ToolContext(session_id=sid, project_id=1)
-        out = asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
-    finally:
-        orch.LLMClient = orig_client
-        orch.run_turn = orig_run_turn
-        orch.get_registry = orig_ws
-
-    assert out == "single-loop answer"
-    assert planner_calls["n"] == 0
-
-
-# ── planner role validation (finding 5) ─────────────────────────────────
-
-
-def test_unknown_planner_role_clamped_to_story_with_note():
-    """A planner that invents a role ("asset" typo, "renderer") gets it clamped
-    to story; the clamp is recorded in the plan event and surfaced in the note
-    instead of silently running the script toolset."""
-    import json as _json
-
-    import calliope.agent.harness.orchestrator as orch
-    from calliope.agent.harness import log as session_log
-
-    sid = _mk_session()
-    session_log.append_event(
-        sid, session_log.USER_MESSAGE, {"content": "Build the whole film from scratch"}
-    )
-
-    class _PlannerClient:
-        async def chat_stream(self, messages, *a, **kw):
-            yield {
-                "type": "delta",
-                "content": _json.dumps(
-                    {
-                        "mode": "swarm",
-                        "note": "Plan ready.",
-                        "tasks": [
-                            {"role": "story", "goal": "write beats"},
-                            {"role": "asset", "goal": "make characters"},
-                            {"role": "renderer", "goal": "render it"},
-                        ],
-                    }
-                ),
-            }
-            yield {"type": "done"}
-
-        async def close(self):
-            return None
-
-    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
-        return f"{agent_name} done"
-
-    async def fake_run_turn(ctx, history, *, on_message=None):
-        return "single"
-
-    orig_client = orch.LLMClient
-    orig_run_sub = orch._run_sub_agent
-    orig_run_turn = orch.run_turn
-    orch.LLMClient = lambda: _PlannerClient()
-    orch._run_sub_agent = fake_run_sub
-    orch.run_turn = fake_run_turn
-
-    class _NoWorkspace:
-        def get(self, name):
-            return {"ok": True}
-
-        async def execute(self, ctx, name, args):
-            return {"ok": True}
-
-    orig_ws = orch.get_registry
-    orch.get_registry = lambda: _NoWorkspace()
-    try:
-        ctx = ToolContext(session_id=sid, project_id=1)
-        asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
-    finally:
-        orch.LLMClient = orig_client
-        orch._run_sub_agent = orig_run_sub
-        orch.run_turn = orig_run_turn
-        orch.get_registry = orig_ws
-
-    events = session_log.read_events(sid)
-    plan_event = next(e for e in events if e.type == session_log.PLAN_CREATED)
-    clamped = plan_event.data.get("clamped_roles")
-    assert clamped and len(clamped) == 2
-    assert {c["from"] for c in clamped} == {"asset", "renderer"}
-    assert all(c["to"] == "story" for c in clamped)
-    # The plan event roles are the CLAMPED ones.
-    assert {t["role"] for t in plan_event.data["tasks"]} == {"story"}
-    # The note surfaced the clamp.
-    assert "'asset' is not valid — ran as story" in plan_event.data["note"]
-    assert "'renderer' is not valid — ran as story" in plan_event.data["note"]
-
-
-def test_valid_planner_roles_not_clamped():
-    """A well-formed plan records no clamped_roles entry."""
-    import json as _json
-
-    import calliope.agent.harness.orchestrator as orch
-    from calliope.agent.harness import log as session_log
-
-    sid = _mk_session()
-    session_log.append_event(
-        sid, session_log.USER_MESSAGE, {"content": "Build the whole film from scratch"}
-    )
-
-    class _PlannerClient:
-        async def chat_stream(self, messages, *a, **kw):
-            yield {
-                "type": "delta",
-                "content": _json.dumps(
-                    {
-                        "mode": "swarm",
-                        "note": "",
-                        "tasks": [
-                            {"role": "story", "goal": "a"},
-                            {"role": "script", "goal": "b"},
-                            {"role": "assets", "goal": "c"},
-                            {"role": "video", "goal": "d"},
-                        ],
-                    }
-                ),
-            }
-            yield {"type": "done"}
-
-        async def close(self):
-            return None
-
-    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
-        return "done"
-
-    orig_client = orch.LLMClient
-    orig_run_sub = orch._run_sub_agent
-    orch.LLMClient = lambda: _PlannerClient()
-    orch._run_sub_agent = fake_run_sub
-
-    class _NoWorkspace:
-        def get(self, name):
-            return {"ok": True}
-
-        async def execute(self, ctx, name, args):
-            return {"ok": True}
-
-    orig_ws = orch.get_registry
-    orch.get_registry = lambda: _NoWorkspace()
-    try:
-        ctx = ToolContext(session_id=sid, project_id=1)
-        asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
-    finally:
-        orch.LLMClient = orig_client
-        orch._run_sub_agent = orig_run_sub
-        orch.get_registry = orig_ws
-
-    plan_event = next(
-        e for e in session_log.read_events(sid) if e.type == session_log.PLAN_CREATED
-    )
-    assert "clamped_roles" not in plan_event.data
-
-
-def test_synthesis_states_the_truth_when_the_project_is_still_empty():
-    """The swarm must not report work that never happened (2026-10-03).
-
-    A story sub-agent that stopped after one tool call reported "Done.", and the
-    synthesis LLM expanded that into "beats, characters, environments, and misc.
-    items were produced" on a project with zero rows. The counts come from the
-    DB, so the correction is applied even though the summary text claims
-    otherwise.
-    """
-    import json as _json
-
-    import calliope.agent.harness.orchestrator as orch
-    from calliope.agent.harness import log as session_log
-
-    sid = _mk_session()
-    session_log.append_event(
-        sid, session_log.USER_MESSAGE, {"content": "Draft a storyline"}
-    )
-
-    class _PlannerClient:
-        """Overclaims exactly like the live failure."""
-
-        async def chat_stream(self, messages, *a, **kw):
-            text = " ".join(str(m.get("content") or "") for m in (messages or []))
-            if "mode" in text:
-                yield {
-                    "type": "delta",
-                    "content": _json.dumps(
-                        {"mode": "swarm", "note": "", "tasks": [{"role": "story", "goal": "a"}]}
-                    ),
-                }
-            else:
-                yield {
-                    "type": "delta",
-                    "content": (
-                        "Storyline draft completed: beats, characters, environments, "
-                        "and misc. items were produced. Failures: none reported."
-                    ),
-                }
-            yield {"type": "done"}
-
-        async def close(self):
-            return None
-
-    async def fake_run_sub(ctx, sub_history, allowed, *, agent_name=None, on_message=None):
-        return "Done."
-
-    orig_client = orch.LLMClient
-    orig_run_sub = orch._run_sub_agent
-    orig_counts = orch._content_counts
-    orch.LLMClient = lambda: _PlannerClient()
-    orch._run_sub_agent = fake_run_sub
-    orch._content_counts = lambda pid: {
-        t: 0 for t in orch._CONTENT_TABLES
-    }
-
-    class _NoWorkspace:
-        def get(self, name):
-            return {"ok": True}
-
-        async def execute(self, ctx, name, args):
-            return {"ok": True}
-
-    orig_ws = orch.get_registry
-    orch.get_registry = lambda: _NoWorkspace()
-    try:
-        ctx = ToolContext(session_id=sid, project_id=1)
-        final = asyncio.run(orch.orchestrate(ctx, [], session_id=sid))
-    finally:
-        orch.LLMClient = orig_client
-        orch._run_sub_agent = orig_run_sub
-        orch._content_counts = orig_counts
-        orch.get_registry = orig_ws
-
-    assert "No content was created" in final
-    assert "still empty" in final
-
-
-def test_content_counts_failure_is_not_reported_as_an_empty_project():
-    """Unreadable counts mean "unknown", never "nothing was created".
-
-    Collapsing the two would make a DB hiccup announce a false negative on a
-    project that is actually full.
-    """
-    import calliope.agent.harness.orchestrator as orch
-    from calliope.agent.harness.registry import ToolContext
-
-    orig = orch._content_counts
-    orch._content_counts = lambda pid: None
-    try:
-        # The guard must key off None, so the correction block never fires.
-        assert orch._content_counts(1) is None
-    finally:
-        orch._content_counts = orig
-    assert orch._content_counts(1) is not None
-
-
-def test_content_counts_close_the_connection_they_open():
-    """A leaked handle pins the DB file — on Windows that breaks teardown."""
-    import calliope.agent.harness.orchestrator as orch
-
-    counts = orch._content_counts(1)
-    assert counts is not None
-    assert set(counts) == set(orch._CONTENT_TABLES)
+    with patch.object(subagent_mod, "LLMClient", FailClient()):
+        # A finished reply without writes fails the fingerprint check — but
+        # the POINT is it did not raise "needs a project".
+        call, _ = asyncio.run(
+            dispatch(run, "go", grant="canvas", write_required=False)
+        )
+        assert call.status in ("failed", "succeeded")

@@ -186,6 +186,7 @@ class QueueWorker:
             "project_id": job.get("project_id"),
             "prompt": str(job_payload.get("prompt") or "")[:120],
             "source": job_payload.get("source"),
+            "canvas_id": job_payload.get("canvas_id"),
             "clip_id": job.get("clip_id"),
             "message": f"{self._job_label(job)} · {len(outputs)} file(s)",
         }

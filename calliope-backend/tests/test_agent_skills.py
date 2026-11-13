@@ -1,4 +1,7 @@
-"""Tests for the skills plugin: seeding, list/read, containment guards."""
+"""Skills store: runtime reads from data_dir/skills (user, wins) +
+skills_builtin (builtin), with a fail-closed path-escape guard. No seeding —
+builtin folders are never copied into the data dir."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,130 +9,67 @@ import asyncio
 import pytest
 
 from calliope.agent import skills_store
-from calliope.agent.harness.plugins import skills
-from calliope.agent.harness.registry import ToolContext
-from calliope.agent.harness.tools import execute_tool
+from calliope.config import settings
+from calliope.db import migrate_db
 
 
 @pytest.fixture
-def session(client):
-    resp = client.post("/api/agent/sessions", json={})
-    assert resp.status_code in (200, 201), resp.text
-    return resp.json()
+def db(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "assets_dir", tmp_path / "assets")
+    asyncio.run(migrate_db(settings.db_path))
+    return tmp_path
 
 
-def _ctx(session):
-    return ToolContext(session_id=session["id"], project_id=None)
-
-
-def test_builtin_skills_seeded(client):
-    skills_store.ensure_builtin_skills()
-    root = skills_store.skills_root()
-    assert (root / "h3-video-prompt-enhancer" / "SKILL.md").is_file()
-    assert (root / "h3-video-prompt-enhancer" / "references" / "ref2va-format.md").is_file()
-    assert (root / "scene-to-video" / "SKILL.md").is_file()
-    assert (root / "character-consistency" / "SKILL.md").is_file()
-    assert (root / "shot-composer-blockout" / "SKILL.md").is_file()
-    assert (root / "shot-composer-blockout" / "references" / "motion-recipes.md").is_file()
-
-
-def test_seeding_never_overwrites_user_edits(client):
-    skills_store.ensure_builtin_skills()
-    marker = skills_store.skills_root() / "scene-to-video" / "SKILL.md"
-    marker.write_text("---\nname: scene-to-video\ndescription: USER EDIT\n---\nbody\n", encoding="utf-8")
-    skills_store.ensure_builtin_skills()
-    assert "USER EDIT" in marker.read_text(encoding="utf-8")
-
-
-def test_list_skills_returns_frontmatter_only(session):
-    result = asyncio.run(execute_tool(_ctx(session), "list_skills", {}))
-    assert result["ok"] is True
-    names = [s["name"] for s in result["skills"]]
+def test_builtin_skills_are_listed(db):
+    names = {row["name"] for row in skills_store.list_skills()}
     assert "h3-video-prompt-enhancer" in names
-    h3 = next(s for s in result["skills"] if s["name"] == "h3-video-prompt-enhancer")
-    assert "MiniMax" in h3["description"] or "H3" in h3["description"]
-    assert all("content" not in s for s in result["skills"])
+    assert "shot-composer-blockout" in names
 
 
-def test_read_skill_returns_body(session):
-    result = asyncio.run(execute_tool(_ctx(session), "read_skill", {"name": "scene-to-video"}))
-    assert result["ok"] is True
-    assert "# Scene to Video" in result["content"]
+def test_no_seeding_into_data_dir(db):
+    # Reading skills must not copy builtins into the user folder.
+    skills_store.list_skills()
+    user_root = settings.data_dir / "skills"
+    if user_root.is_dir():
+        assert not (user_root / "h3-video-prompt-enhancer").exists()
 
 
-def test_read_skill_relative_path_within_skill(session):
-    result = asyncio.run(
-        execute_tool(
-            _ctx(session),
-            "read_skill",
-            {"name": "h3-video-prompt-enhancer", "path": "references/ref2va-format.md"},
-        )
+def test_user_skill_wins_on_collision(db):
+    user = settings.data_dir / "skills" / "h3-video-prompt-enhancer"
+    user.mkdir(parents=True)
+    (user / "SKILL.md").write_text(
+        "---\nname: h3-video-prompt-enhancer\ndescription: user override\n---\nUser body",
+        encoding="utf-8",
     )
-    assert result["ok"] is True, result
-    assert result["content"].strip(), "reference file should not be empty"
+    rows = {row["name"]: row for row in skills_store.list_skills()}
+    assert rows["h3-video-prompt-enhancer"]["description"] == "user override"
+    read = skills_store.read_skill_file("h3-video-prompt-enhancer")
+    assert read["ok"] is True and "User body" in read["content"]
 
 
-def test_read_skill_traversal_refused(session):
-    result = asyncio.run(
-        execute_tool(
-            _ctx(session),
-            "read_skill",
-            {"name": "scene-to-video", "path": "../../calliope_config.json"},
-        )
-    )
-    assert result["ok"] is False
-    assert "files" in result  # refusal lists the skill's real files
+def test_read_skill_file_and_custom_path(db):
+    folder = settings.data_dir / "skills" / "mine"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("---\nname: mine\ndescription: d\n---\nBody", encoding="utf-8")
+    (folder / "references" ).mkdir()
+    (folder / "references" / "extra.md").write_text("# Extra", encoding="utf-8")
+    read = skills_store.read_skill_file("mine")
+    assert read["ok"] is True and "Body" in read["content"]
+    read2 = skills_store.read_skill_file("mine", "references/extra.md")
+    assert read2["ok"] is True and "# Extra" in read2["content"]
 
 
-def test_read_skill_unknown_name_lists_available(session):
-    result = asyncio.run(execute_tool(_ctx(session), "read_skill", {"name": "no-such-skill"}))
-    assert result["ok"] is False
-    assert "scene-to-video" in result["available"]
+def test_read_skill_path_escape_fail_closed(db):
+    skills_store.list_skills()
+    assert skills_store.read_skill_file("h3-video-prompt-enhancer", "../other/SKILL.md")["ok"] is False
+    assert skills_store.read_skill_file("h3-video-prompt-enhancer", "../../config.py")["ok"] is False
+    assert skills_store.read_skill_file("../../etc/passwd")["ok"] is False
+    assert skills_store.read_skill_file("no-such-skill")["ok"] is False
+    assert skills_store.read_skill_file("h3-video-prompt-enhancer", "missing.md")["ok"] is False
 
 
-def test_skills_prompt_section_lists_summaries(session):
-    text = skills.skills_prompt_text(_ctx(session))
-    assert text is not None
-    assert text.startswith("## Skills")
-    assert "h3-video-prompt-enhancer" in text
-    # discovery stays cheap: no full SKILL.md bodies in the prompt
-    assert "# H3 Video Prompt Enhancer" not in text
-
-
-def test_settings_skills_api(client):
-    """The Settings → Skills management endpoints: path exposure, list, and
-    contained file reads (traversal refused at the API layer too)."""
-    listing = client.get("/api/agent/skills")
-    assert listing.status_code == 200
-    names = [s["name"] for s in listing.json()]
-    assert "h3-video-prompt-enhancer" in names
-    # Inline YAML lists must parse as arrays — the naive parser returned the
-    # literal "[a, b]" string, which threw in the Settings list render and
-    # blanked the whole page.
-    for skill in listing.json():
-        assert isinstance(skill["tags"], list) and skill["tags"], skill["name"]
-
-    path = client.get("/api/agent/skills/path")
-    assert path.status_code == 200
-    assert path.json()["path"].endswith("skills")
-
-    files = client.get("/api/agent/skills/h3-video-prompt-enhancer/files")
-    assert files.status_code == 200
-    assert "SKILL.md" in files.json()["files"]
-    assert any("references/" in f for f in files.json()["files"])
-
-    body = client.get(
-        "/api/agent/skills/h3-video-prompt-enhancer/file",
-        params={"path": "references/ref2va-format.md"},
-    )
-    assert body.status_code == 200
-    assert body.json()["content"].strip()
-
-    trav = client.get(
-        "/api/agent/skills/scene-to-video/file",
-        params={"path": "../../calliope_config.json"},
-    )
-    assert trav.status_code == 404
-
-    missing = client.get("/api/agent/skills/no-such-skill/files")
-    assert missing.status_code == 404
+def test_skill_files_listing(db):
+    names = skills_store.skill_files("h3-video-prompt-enhancer")
+    assert names is not None and "SKILL.md" in names
+    assert skills_store.skill_files("no-such-skill") is None

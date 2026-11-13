@@ -510,25 +510,18 @@ def test_generate_videos_accepts_clip_ids(client, video_workflow):
 # ── agent tool scope: break_into_shots guard + clip addressing ─────────
 
 
-def _mk_tool_ctx(client, session_id: int, project_id: int):
-    from calliope.agent.harness.registry import ToolContext
-
-    return ToolContext(session_id=session_id, project_id=project_id)
-
-
 def test_break_into_shots_requires_scope(client):
-    from calliope.agent.harness.plugins.script import t_break_into_shots
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     _add_scene(client, pid, 1)
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_break_into_shots(ctx, {}))
+    result = asyncio.run(catalog.execute("break_into_shots", {}, pid, 1))
     assert result["ok"] is False
-    assert "scene_ids" in result["error"]
+    assert "scene_id" in result["error"]
 
 
 def test_list_clips_labels(client):
-    from calliope.agent.harness.plugins.script import t_list_clips
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     scene = _add_scene(client, pid, 3)
@@ -541,47 +534,72 @@ def test_list_clips_labels(client):
         conn.commit()
     finally:
         conn.close()
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_list_clips(ctx, {}))
+    result = asyncio.run(catalog.execute("list_clips", {}, pid, 1))
     labels = [c["label"] for c in result["clips"]]
     assert "#3.1" in labels and "#3.2" in labels
 
 
 def test_delete_clip_tool_protects_last(client):
-    from calliope.agent.harness.plugins.script import t_delete_clip
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     scene = _add_scene(client, pid, 1)
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_delete_clip(ctx, {"clip_id": scene["clips"][0]["id"]}))
+    result = asyncio.run(
+        catalog.execute("delete_clip", {"clip_id": scene["clips"][0]["id"]}, pid, 1)
+    )
     assert result["ok"] is False
     assert "at least one clip" in result["error"]
 
 
 def test_update_clip_by_ref(client):
-    from calliope.agent.harness.plugins.script import t_update_clip
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     scene = _add_scene(client, pid, 2)
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_update_clip(ctx, {"ref": "#2.1", "description": "updated", "duration_sec": 7}))
+    result = asyncio.run(
+        catalog.execute(
+            "update_clip", {"ref": "#2.1", "description": "updated", "duration_sec": 7}, pid, 1
+        )
+    )
     assert result.get("ok", True) is not False
-    assert result["clip"]["description"] == "updated"
+    conn = get_db(settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT description FROM clips WHERE project_id = ? AND order_index = 1",
+            (pid,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "updated"
 
 
 def test_enqueue_video_jobs_tool_by_ref(client, video_workflow):
-    from calliope.agent.harness.plugins.render import t_enqueue_video_jobs
+    """The render tool returns a REVIEW card (awaiting_review) — it never
+    queues directly; the confirm endpoint does."""
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     scene = _add_scene(client, pid, 1)
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_enqueue_video_jobs(ctx, {"refs": ["#1.1"]}))
-    assert "jobs" in result
-    assert result["count"] == 1
+    clip_id = scene["clips"][0]["id"]
+    result = asyncio.run(
+        catalog.execute("enqueue_video_jobs", {"clip_ids": [clip_id]}, pid, 1)
+    )
+    assert result["ok"] is True
+    assert result["awaiting_review"] is True
+    assert [item["id"] for item in result["review"]["items"]] == [clip_id]
+    # Nothing was queued.
+    conn = get_db(settings.db_path)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM jobs WHERE project_id = ?", (pid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
 
 
-def test_enqueue_video_jobs_tool_bulk_guard(client, video_workflow):
-    from calliope.agent.harness.plugins.render import t_enqueue_video_jobs
+def test_enqueue_video_jobs_review_lists_all_clips(client, video_workflow):
+    """Unscoped render asks review EVERY clip — the user sees the full list
+    before pressing Generate (the bulk guard became the review gate)."""
+    from calliope.agent.capabilities import catalog
 
     pid = _mk_project(client)
     scene = _add_scene(client, pid, 1)
@@ -596,8 +614,7 @@ def test_enqueue_video_jobs_tool_bulk_guard(client, video_workflow):
         conn.commit()
     finally:
         conn.close()
-    ctx = _mk_tool_ctx(client, session_id=1, project_id=pid)
-    result = asyncio.run(t_enqueue_video_jobs(ctx, {"scene_ids": [scene_id]}))
-    # scene_ids expands to 6 clips (>3) without explicit user prose — blocked.
-    assert result["ok"] is False
-    assert "bulk" in result["error"]
+    result = asyncio.run(catalog.execute("enqueue_video_jobs", {}, pid, 1))
+    assert result["ok"] is True
+    assert result["awaiting_review"] is True
+    assert len(result["review"]["items"]) == 5

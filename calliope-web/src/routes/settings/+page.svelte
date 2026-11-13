@@ -43,6 +43,10 @@
 	let apiKeyDrafts = $state<Record<string, string>>({});
 	let comfyKeyDraft = $state('');
 	let comfyKeyTouched = $state(false);
+	const comfyProxyCommands = [
+		'pip install comfy-api-proxy',
+		'comfy-api-proxy --comfyui http://127.0.0.1:8188 --port 8189',
+	].join('\n');
 
 	// Dirty tracking: any staged field (draft map or a typed API key) counts.
 	const dirtyKeys = $derived([
@@ -788,6 +792,10 @@
 					<section class="panel">
 						<h1>{t('settings.comfySection')}</h1>
 						<p class="lead">{t('settings.comfyLead')}</p>
+						<div class="proxy-note">
+							<p>{t('settings.comfyProxyNote')}</p>
+							<pre class="proxy-cmd">{comfyProxyCommands}</pre>
+						</div>
 						<label class="field">
 							<span class="field-label">{t('settings.baseUrl')}</span>
 							<input
@@ -1253,6 +1261,31 @@
 		margin: 0 0 var(--space-lg);
 		color: var(--text-secondary);
 		font-size: 14px;
+	}
+	.proxy-note {
+		margin: 0 0 var(--space-lg);
+		padding: 12px 14px;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border);
+		background: var(--bg-elevated);
+	}
+	.proxy-note p {
+		margin: 0 0 10px;
+		font-size: 13px;
+		line-height: 1.5;
+		color: var(--text-secondary);
+	}
+	.proxy-cmd {
+		margin: 0;
+		padding: 10px 12px;
+		border-radius: var(--radius-sm);
+		background: var(--bg-primary);
+		border: 1px solid var(--border);
+		color: var(--text-primary);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1.6;
+		white-space: pre-wrap;
 	}
 	.check {
 		display: flex;

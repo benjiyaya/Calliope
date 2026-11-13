@@ -8,7 +8,6 @@ from calliope.agent.continuity import (
     continuity_lock_text,
     ensure_continuity_plan,
 )
-from calliope.agent.harness.orchestrator import ROLE_TOOLS
 from calliope.config import settings
 from calliope.db import get_db
 
@@ -485,23 +484,19 @@ def test_default_preview_is_deterministic_and_form_prompt_wins(client, monkeypat
     assert typed_result["from_draft"] is False
 
 
-def test_refresh_tool_is_on_the_script_role(client, monkeypatch):
-    from calliope.agent.harness.plugins.script import t_refresh_continuity_plan
-    from calliope.agent.harness.registry import ToolContext
+def test_ledger_is_engine_wired(client):
+    """The continuity ledger is computed inside the render path now — there
+    is no refresh_continuity_plan agent tool, but the plan/lock text are the
+    video agent's grounding."""
+    from calliope.agent.capabilities.catalog import GRANTS
 
-    assert "refresh_continuity_plan" in ROLE_TOOLS["script"]
-    pid = _mk_project(client, "Tool")
+    assert "refresh_continuity_plan" not in GRANTS["script"]
+    import inspect
 
-    async def fake_ensure(project_id, force=False, live_refs=None):
-        assert project_id == pid
-        assert force is True
-        return {"based_on": "abc", "shots": [{}, {}], "refreshed": True}
+    import calliope.agent.video_agent as video_agent
 
-    monkeypatch.setattr("calliope.agent.continuity.ensure_continuity_plan", fake_ensure)
-    result = asyncio.run(
-        t_refresh_continuity_plan(ToolContext(session_id=1, project_id=pid), {})
-    )
-    assert result == {"ok": True, "based_on": "abc", "shots": 2, "refreshed": True}
+    src = inspect.getsource(video_agent)
+    assert "ensure_continuity_plan" in src and "continuity_lock_text" in src
 
 
 def test_plan_sends_the_h3_request_extras_and_the_critic_does_not(client, monkeypatch):

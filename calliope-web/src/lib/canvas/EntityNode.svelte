@@ -2,6 +2,7 @@
 	import { Handle, Position, type Node, type NodeProps } from '@xyflow/svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import NodeComposer, { type ComposerReference } from '$lib/canvas/NodeComposer.svelte';
 	import { assetUrl } from '$lib/api';
 	import type { IconName } from '$lib/components/ui/icons';
 
@@ -15,8 +16,16 @@
 		imagePath: string | null;
 		/** Clip path — when set the card becomes a playable video card. */
 		videoPath: string | null;
-		/** Called on card click: opens the large media preview (no navigation). */
+		/** Seed for a clip card's composer. */
+		prompt?: string;
+		workflowId?: number | null;
+		references?: ComposerReference[];
+		/** Story cards open the lightbox. Clip cards select and show the composer. */
 		onOpenMedia?: (kind: 'image' | 'video') => void;
+		onPreview?: () => void;
+		onRegenerate?: (prompt: string) => void | Promise<void>;
+		onRequestReview?: (prompt: string) => void;
+		onSendToAgent?: (prompt: string) => void;
 	}
 
 	type EntityNode = Node<EntityNodeData, 'entity'>;
@@ -36,7 +45,7 @@
 		}
 	}
 
-	let { data }: NodeProps<EntityNode> = $props();
+	let { data, selected }: NodeProps<EntityNode> = $props();
 
 	const posterSrc = $derived(assetUrl(data.imagePath));
 	// '#t=0.1' media fragment: with preload="metadata" browsers paint nothing
@@ -44,9 +53,13 @@
 	// the first frame without playing (same trick as ClipMonitor).
 	const videoSrc = $derived(data.videoPath ? assetUrl(data.videoPath) + '#t=0.1' : null);
 
+	const clipCard = $derived(data.entityType === 'clip');
+	const downloadUrl = $derived(assetUrl(data.videoPath) ?? posterSrc);
+
 	function activate() {
-		// One rule for every card (artifact and entity alike): click opens the
-		// modal player/lightbox — video cards NEVER play in-card.
+		// Story cards open the lightbox. A clip card selects and shows the
+		// composer; Preview on that bar opens the player. Nothing plays in-card.
+		if (clipCard) return;
 		if (videoSrc) {
 			data.onOpenMedia?.('video');
 		} else if (posterSrc) {
@@ -55,15 +68,7 @@
 	}
 </script>
 
-<div
-	class="entity-node"
-	role="button"
-	tabindex="0"
-	onclick={activate}
-	onkeydown={(e) => {
-		if (e.key === 'Enter') activate();
-	}}
->
+{#snippet card()}
 	{#if data.entityType === 'character' || data.entityType === 'location'}
 		<Handle type="source" position={Position.Right} id="asset" isConnectable={false} />
 	{/if}
@@ -102,12 +107,44 @@
 			<span class="placeholder">{data.entityType}</span>
 		{/if}
 	</div>
+	{#if selected && clipCard}
+		{#key data.prompt ?? ''}
+		<NodeComposer
+			prompt={data.prompt ?? ''}
+			mediaUrl={downloadUrl}
+			canRegenerate={data.workflowId != null}
+			references={data.references ?? []}
+			onPreview={() => data.onPreview?.()}
+			onRegenerate={(prompt) => data.onRegenerate?.(prompt)}
+			onRequestReview={(prompt) => data.onRequestReview?.(prompt)}
+			onSendToAgent={(prompt) => data.onSendToAgent?.(prompt)}
+		/>
+		{/key}
+	{/if}
 	{#if videoSrc}
 		<span class="out-kind">video</span>
 	{:else if posterSrc}
 		<span class="out-kind">image</span>
 	{/if}
-</div>
+{/snippet}
+
+{#if clipCard}
+	<div class={['entity-node', { wide: selected }]} role="group">
+		{@render card()}
+	</div>
+{:else}
+	<div
+		class="entity-node"
+		role="button"
+		tabindex="0"
+		onclick={activate}
+		onkeydown={(e) => {
+			if (e.key === 'Enter') activate();
+		}}
+	>
+		{@render card()}
+	</div>
+{/if}
 
 <style>
 .entity-node {
@@ -120,6 +157,12 @@
 	cursor: pointer;
 	transition: border-color 0.15s;
 }
+	.entity-node.wide {
+		width: 320px;
+	}
+	.entity-node.wide .out-kind {
+		display: none;
+	}
 	.entity-node:hover {
 		border-color: #3a3a44;
 	}

@@ -53,9 +53,10 @@ def test_is_cancelled_reflects_terminal_state():
 
 
 def test_cancel_endpoint_returns_cancelled_jobs(client):
-    from calliope.agent.harness.registry import _db
+    from calliope.config import settings
+    from calliope.db import get_db
 
-    conn = _db()
+    conn = get_db(settings.db_path)
     try:
         conn.execute("INSERT INTO projects (id, title) VALUES (1, 'Stop Film')")
         conn.commit()

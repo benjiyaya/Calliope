@@ -29,31 +29,33 @@ apply the rules below. Load `h3-video-prompt-enhancer` for the format itself.
 
 ## Rules
 
-1. **Same subjects, same labels.** Keep `subject_definitions` and the
+1. **Same place, same environment, same camera.** Copy the place, the light, and the camera height, angle, and distance from the previous clip into `summary` and the opening of `detailed_description`. A new angle is a cut, and only when this clip's action leaves the location. Load `video-continuation`.
+2. **Same subjects, same labels.** Keep `subject_definitions` and the
    reference labels (`<Subject N>`, `<Picture N>`) identical across the whole
    chain. Renumbering or rewording a subject reads to the model as a new
    subject.
-2. **Open on continuation only.** `detailed_description` begins already in
+3. **Open on continuation only.** `detailed_description` begins already in
    progress, mid-action: same camera position and distance, same pace, same
    light, the same surfaces passing. No new scenery nouns in the opening.
    For the first ~2 s nothing new enters the frame and the subject does not
    stop, turn or reach.
-3. **Shift timestamps by the pinned head.** The first 22 frames are pinned
+4. **Shift timestamps by the pinned head.** The first 22 frames are pinned
    context and get trimmed from the delivered clip. Write every timestamp
    0.92 s later than where it should land in the final cut (an event meant
    at 1.0 s in the film is written at 1.92 s).
-4. **No progressive camera move across a join.** Never carry a push-in,
+5. **No progressive camera move across a join.** Never carry a push-in,
    orbit or similar progressive move over a join; finish it inside one clip.
    Put joins mid-walk or mid-action, never at a doorway or threshold.
-5. **Music continues.** `non_diegetic_music`: "continuing the same … at the
+6. **Music continues.** `non_diegetic_music`: "continuing the same … at the
    same tempo, without a new entry or a build", unless a change is the intent.
-6. **Dialogue pacing.** About one short line per 2.5 s. Split dialogue
+7. **Dialogue pacing.** About one short line per 2.5 s. Split dialogue
    between sentences, never mid-sentence across a join.
-7. **Leave something to continue.** End each clip with the action still in
+8. **Leave something to continue.** End each clip with the action still in
    progress, so the next clip has motion to pick up.
 
 ## Checklist
 
+- [ ] Place, light, and camera height/angle/distance copied from the previous clip
 - [ ] `subject_definitions` and reference labels copied verbatim from the previous clip
 - [ ] Opening sentence is mid-action, no new nouns, no stop/turn/reach in the first ~2 s
 - [ ] Every timestamp +0.92 s

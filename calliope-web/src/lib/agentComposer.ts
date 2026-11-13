@@ -24,6 +24,8 @@ export interface AgentComposerPayload {
 	attachments: AgentAttachment[];
 	/** question/asked seq this message answers (question-card click). */
 	answer_to?: number;
+	/** Per-message effort. `default` keeps the Settings profile. */
+	thinking?: 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 export interface WorkflowOption {

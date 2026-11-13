@@ -6,7 +6,7 @@ license: MIT
 metadata:
   author: Benjamin Law (Muse-AI)
   tags: [video, prompt-engineering, minimax-h3, comfyui, text-to-video, image-to-video, creative]
-  related_skills: [comfyui]
+  related_skills: [comfyui, video-continuation]
 ---
 
 # H3 Video Prompt Enhancer
@@ -19,6 +19,8 @@ Transform a user's rough video idea + attached assets into a production-grade Mi
 - **Base MultiShot** (T2VA / I2VA / FL2VA / L2VA) — for text-to-video or image-anchored generation. Outputs a timed multi-shot prompt. Load `references/base-multishot-format.md` for the full spec.
 
 The skill's distinctive value: it doesn't just format-comply — it **creatively enhances** the brief with professional-grade cinematic detail (camera aesthetics, visual texture, lighting design, pacing arcs, spatial choreography, continuity tracking) before mapping everything into the exact H3 output format. Load `references/creative-showcase.md` for quality benchmarks and pattern examples from advanced long-form prompts.
+
+A clip is about ten seconds. The next clip is a new generation. `detailed_description` must name the place (the room or landscape and its landmarks), the environment (time of day, light direction, weather, surfaces), and the camera (height, angle, distance, and whether it is locked). When the story stays in the same place, copy those three from the previous clip instead of inventing a new angle. Load `video-continuation` for the rules.
 
 ## When to Use
 

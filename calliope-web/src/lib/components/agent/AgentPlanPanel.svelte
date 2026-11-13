@@ -11,20 +11,28 @@
 	let { plan }: Props = $props();
 
 	const tasks = $derived(plan.tasks ?? []);
-	const doneCount = $derived(tasks.filter((t) => t.status === 'done').length);
-	const running = $derived(tasks.some((t) => t.status === 'running'));
+	const doneCount = $derived(
+		tasks.filter((task) => task.status === 'done' || task.status === 'verified').length,
+	);
+	const running = $derived(tasks.some((task) => task.status === 'running'));
+
+	function finished(status: string): boolean {
+		return status === 'done' || status === 'verified';
+	}
 
 	function statusIcon(status: string): 'check' | 'close' | 'clock' | 'stop' {
-		if (status === 'done') return 'check';
+		if (finished(status)) return 'check';
 		if (status === 'failed') return 'close';
-		if (status === 'running') return 'clock';
+		if (status === 'running' || status === 'blocked') return 'clock';
 		return 'stop';
 	}
 
 	function statusLabel(status: string): string {
 		if (status === 'running') return t('job.status.running');
+		if (status === 'verified') return 'Verified';
 		if (status === 'done') return t('job.status.done');
 		if (status === 'failed') return t('job.status.failed');
+		if (status === 'blocked') return t('agentPlan.review');
 		if (status === 'skipped') return t('agentPlan.skipped');
 		return t('queue.queued');
 	}
@@ -32,7 +40,7 @@
 
 <div class="plan-panel">
 	<header class="head">
-		<span class="icon-wrap" class:spinning={running}>
+		<span class={['icon-wrap', { spinning: running }]}>
 			<Icon name="sparkle" size={13} />
 		</span>
 		<span class="title">{t('agentPlan.planner')}</span>
@@ -45,8 +53,17 @@
 	<ol class="tasks">
 		{#each tasks as task, i (i)}
 			{@const color = agentColor(`${task.role}-agent`)}
-			<li class="task" class:active={task.status === 'running'}>
-				<span class="status" class:done={task.status === 'done'} class:failed={task.status === 'failed'} class:running={task.status === 'running'}>
+			<li class={['task', { active: task.status === 'running' }]}>
+				<span
+					class={[
+						'status',
+						{
+							done: finished(task.status),
+							failed: task.status === 'failed',
+							running: task.status === 'running',
+						},
+					]}
+				>
 					{#if task.status === 'running'}
 						<span class="spin-dot" style:background={color}></span>
 					{:else}
@@ -56,7 +73,7 @@
 				<span class="role" style:color={color} style:--role-color={color}>
 					{agentDisplayName(`${task.role}-agent`)}
 				</span>
-				<span class="goal" class:done={task.status === 'done'}>{task.goal}</span>
+				<span class={['goal', { done: finished(task.status) }]}>{task.goal}</span>
 				<span class="state mono">{statusLabel(task.status)}</span>
 			</li>
 		{/each}

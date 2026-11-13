@@ -12,8 +12,9 @@
 		type WorkflowMention,
 		type WorkflowOption,
 	} from '$lib/agentComposer';
-	import { assetUrl } from '$lib/api';
+	import { assetUrl, type ThinkingMode } from '$lib/api';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import { storageGet, storageSet } from '$lib/storage';
 	import { createUploadManager, truncateMiddle } from '$lib/comfy/useUpload.svelte';
 	import { toast } from '$lib/toast';
 	import WorkflowMentionMenu from './WorkflowMentionMenu.svelte';
@@ -69,6 +70,13 @@ let {
 	let slashIndex = $state(0);
 	let slashAnchor = $state({ top: 0, bottom: 0, left: 0 });
 
+	const EFFORT_KEY = 'calliope.composer.effort';
+	const EFFORTS: ThinkingMode[] = ['default', 'off', 'low', 'medium', 'high', 'xhigh'];
+	const storedEffort = storageGet(EFFORT_KEY);
+	let effort = $state<ThinkingMode>(
+		EFFORTS.includes(storedEffort as ThinkingMode) ? (storedEffort as ThinkingMode) : 'default',
+	);
+
 	const uploads = createUploadManager();
 	const mentionItems = $derived.by(() => {
 		const rows: Array<{ id?: number; name: string; kind: 'image' | 'video' }> = [
@@ -104,7 +112,7 @@ let {
 		function onDocDown(e: MouseEvent) {
 			const t = e.target as Node | null;
 			if (editorEl?.contains(t)) return;
-			if (t instanceof Element && t.closest('.mention-menu')) return;
+			if (t instanceof Element && t.closest('.mention-menu, [data-composer-menu]')) return;
 			mentionOpen = false;
 			slashOpen = false;
 		}
@@ -171,6 +179,7 @@ let {
 			content,
 			mentions,
 			attachments: [...attachments],
+			thinking: effort,
 		};
 		if (payloadIsEmpty(payload)) return;
 		if (editorEl) editorEl.innerHTML = '';
@@ -282,6 +291,31 @@ let {
 		mentionIndex = 0;
 		mentionAnchor = caretAnchor();
 		mentionLocked = chipCount() >= MAX_WORKFLOW_MENTIONS;
+	}
+
+	function setEffort(value: string) {
+		if (!EFFORTS.includes(value as ThinkingMode)) return;
+		effort = value as ThinkingMode;
+		storageSet(EFFORT_KEY, effort);
+	}
+
+	function openMenu(which: 'skills' | 'workflow', event: MouseEvent) {
+		const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+		const anchor = { top: rect.top, bottom: rect.bottom, left: rect.left };
+		if (which === 'skills') {
+			slashAnchor = anchor;
+			slashQuery = '';
+			slashIndex = 0;
+			slashOpen = !slashOpen;
+			mentionOpen = false;
+			return;
+		}
+		mentionAnchor = anchor;
+		mentionQuery = '';
+		mentionIndex = 0;
+		mentionLocked = chipCount() >= MAX_WORKFLOW_MENTIONS;
+		mentionOpen = !mentionOpen;
+		slashOpen = false;
 	}
 
 	function insertMention(wf: { id?: number; name: string; kind: 'image' | 'video' }) {
@@ -564,6 +598,41 @@ let {
 				multiple
 				onchange={onFileChosen}
 			/>
+			<label class="effort">
+				<span class="sr-only">{t('agentComposer.effort')}</span>
+				<select
+					aria-label={t('agentComposer.effort')}
+					value={effort}
+					onchange={(e) => setEffort(e.currentTarget.value)}
+				>
+					<option value="default">{t('agentComposer.effortDefault')}</option>
+					<option value="off">{t('agentComposer.effortOff')}</option>
+					<option value="low">{t('agentComposer.effortLow')}</option>
+					<option value="medium">{t('agentComposer.effortMedium')}</option>
+					<option value="high">{t('agentComposer.effortHigh')}</option>
+					<option value="xhigh">{t('agentComposer.effortXhigh')}</option>
+				</select>
+			</label>
+			<button
+				type="button"
+				class="attach text"
+				data-composer-menu
+				title={t('agentComposer.skills')}
+				disabled={busy}
+				onclick={(e) => openMenu('skills', e)}
+			>
+				{t('agentComposer.skills')}
+			</button>
+			<button
+				type="button"
+				class="attach text"
+				data-composer-menu
+				title={t('agentComposer.workflow')}
+				disabled={busy}
+				onclick={(e) => openMenu('workflow', e)}
+			>
+				{t('agentComposer.workflow')}
+			</button>
 			<button
 				type="button"
 				class="attach"
@@ -573,6 +642,7 @@ let {
 			>
 				<Icon name="paperclip" size={16} />
 			</button>
+			<span class="spacer"></span>
 			{#if running}
 				<button type="button" class="send stop" onclick={onCancel} title={t('agentComposer.stopTitle')}>
 					<Icon name="stop" size={14} />
@@ -693,7 +763,8 @@ let {
 	}
 	.box {
 		display: flex;
-		align-items: flex-end;
+		flex-direction: column;
+		align-items: stretch;
 		gap: 8px;
 		min-width: 0;
 		background: var(--bg-surface);
@@ -751,6 +822,27 @@ let {
 		align-items: center;
 		gap: 6px;
 		flex-shrink: 0;
+		flex-wrap: wrap;
+	}
+	.spacer {
+		flex: 1;
+	}
+	.effort select {
+		height: 32px;
+		max-width: 112px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		color: var(--text-primary);
+		font: inherit;
+		font-size: 12px;
+		padding: 0 6px;
+	}
+	.attach.text {
+		width: auto;
+		padding: 0 8px;
+		font-size: 12px;
+		font-weight: 600;
 	}
 	.attach {
 		display: inline-flex;

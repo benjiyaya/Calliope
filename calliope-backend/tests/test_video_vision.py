@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 from calliope.config import settings
-from calliope.agent.harness.log import (
+from calliope.agent.media import (
     _MAX_VIDEO_FRAMES,
     _video_attachment_frames,
     project_user_content,

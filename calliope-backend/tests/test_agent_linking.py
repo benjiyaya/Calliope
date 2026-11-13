@@ -73,17 +73,18 @@ def test_session_updated_events_carry_project(client, captured_events):
 
 
 def test_create_project_tool_event_enriched(client, captured_events):
-    """The harness's create_project/link_project auto-link path must also
-    publish enriched sessions (this was the live-header bug)."""
-    from calliope.agent.harness.tools import ToolContext, execute_tool
+    """The engine's create_project auto-link path must also publish enriched
+    sessions (this was the live-header bug)."""
+    from calliope.agent.capabilities import catalog
 
     r = client.post("/api/agent/sessions", json={})
     sid = r.json()["id"]
 
-    ctx = ToolContext(session_id=sid, project_id=None)
-    result = asyncio.run(execute_tool(ctx, "create_project", {"title": "Auto", "idea": "x"}))
+    result = asyncio.run(
+        catalog.execute("create_project", {"title": "Auto", "idea": "x"}, None, sid)
+    )
     assert result["ok"] is True
-    pid = result["project"]["id"]
+    pid = int(result["project_id"])
 
     session_events = [d for (t, d) in captured_events if t == "agent.session.updated"]
     assert session_events, "auto-link must publish agent.session.updated"

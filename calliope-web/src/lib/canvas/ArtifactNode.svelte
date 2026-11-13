@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { type Node, type NodeProps } from '@xyflow/svelte';
 	import SafeMedia from '$lib/components/SafeMedia.svelte';
+	import NodeComposer, { type ComposerReference } from '$lib/canvas/NodeComposer.svelte';
 	import { assetUrl } from '$lib/api';
 	import { t } from '$lib/i18n.svelte';
 
@@ -11,13 +12,21 @@
 		artifactPath: string | null;
 		kind: 'image' | 'video';
 		status: string;
-		/** Called on media click: opens the large preview (no navigation). */
-		onOpenMedia?: (kind: 'image' | 'video') => void;
+		/** Seed for the card composer. */
+		prompt?: string;
+		/** Workflow that can render this card again. Null disables Regenerate. */
+		workflowId?: number | null;
+		references?: ComposerReference[];
+		/** Opens the large preview. The picture click only selects the card. */
+		onPreview?: () => void;
+		onRegenerate?: (prompt: string) => void | Promise<void>;
+		onRequestReview?: (prompt: string) => void;
+		onSendToAgent?: (prompt: string) => void;
 	}
 
 	type ArtifactNode = Node<ArtifactNodeData, 'image' | 'video'>;
 
-	let { data }: NodeProps<ArtifactNode> = $props();
+	let { data, selected }: NodeProps<ArtifactNode> = $props();
 
 	const mediaSrc = $derived(data.artifactPath ? assetUrl(data.artifactPath) : null);
 	// '#t=0.1' fragment paints the first frame (same trick as ClipMonitor).
@@ -26,14 +35,9 @@
 	);
 
 	const running = $derived(data.status === 'running' || data.status === 'pending');
-
-	function openPreview() {
-		if (!mediaSrc) return;
-		data.onOpenMedia?.(data.kind);
-	}
 </script>
 
-<div class="artifact-node" class:running>
+<div class={['artifact-node', { running, wide: selected }]}>
 	<header>
 		<span class="type-chip">{data.kind}</span>
 		<span class="title" title={data.title}>{data.title}</span>
@@ -47,44 +51,35 @@
 	</header>
 	<div class="media">
 		{#if videoSrc}
-			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<button
-				type="button"
-				class="media-btn"
-				onclick={openPreview}
-				title={t('canvas.openPreview')}
-			>
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video
-					class="media-el"
-					src={videoSrc}
-					muted
-					playsinline
-					preload="metadata"
-				></video>
-			</button>
+			<video class="media-el" src={videoSrc} muted playsinline preload="metadata"></video>
 		{:else if mediaSrc}
-			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<button
-				type="button"
-				class="media-btn"
-				onclick={openPreview}
-				title={t('canvas.openPreview')}
-			>
-				<SafeMedia
-					class="media-el"
-					src={mediaSrc}
-					alt={data.title}
-					kind="image"
-					controls={false}
-				/>
-			</button>
+			<SafeMedia
+				class="media-el"
+				src={mediaSrc}
+				alt={data.title}
+				kind="image"
+				controls={false}
+			/>
 		{:else if data.status === 'running'}
 			<span class="placeholder">{t('canvas.generating')}</span>
 		{:else}
 			<span class="placeholder">{t('canvas.noMedia')}</span>
 		{/if}
 	</div>
+	{#if selected}
+		{#key data.prompt ?? ''}
+		<NodeComposer
+			prompt={data.prompt ?? ''}
+			mediaUrl={mediaSrc}
+			canRegenerate={data.workflowId != null}
+			references={data.references ?? []}
+			onPreview={() => data.onPreview?.()}
+			onRegenerate={(prompt) => data.onRegenerate?.(prompt)}
+			onRequestReview={(prompt) => data.onRequestReview?.(prompt)}
+			onSendToAgent={(prompt) => data.onSendToAgent?.(prompt)}
+		/>
+		{/key}
+	{/if}
 	<span class="out-kind">{data.kind}</span>
 </div>
 
@@ -96,6 +91,12 @@
 		border-radius: 12px;
 		overflow: hidden;
 		position: relative;
+	}
+	.artifact-node.wide {
+		width: 320px;
+	}
+	.artifact-node.wide .out-kind {
+		display: none;
 	}
 	.artifact-node.running {
 		border-color: rgba(125, 211, 252, 0.6);
@@ -177,16 +178,6 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
-		display: block;
-	}
-	.media-btn {
-		appearance: none;
-		border: none;
-		background: transparent;
-		padding: 0;
-		width: 100%;
-		height: 100%;
-		cursor: pointer;
 		display: block;
 	}
 	.placeholder {

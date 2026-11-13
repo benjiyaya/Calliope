@@ -86,16 +86,16 @@ def estimate_target_seconds(target_duration: str | None) -> int:
 def recommend_beat_count(target_duration: str | None) -> int:
     """
     Story beats for the AI video pipeline (~12s of narrative weight each).
-    30s -> 4, 2 min -> 10, 5 min -> 25, 10 min -> 50 (capped at 60).
+    30s -> 4, 2 min -> 10, 5 min -> 25, 10 min -> 50, 60 min -> 300.
     """
     secs = estimate_target_seconds(target_duration)
-    return max(4, min(60, round(secs / 12)))
+    return max(4, round(secs / 12))
 
 
 def recommend_scene_count(target_duration: str | None) -> int:
     """Video scenes (~7s each) for the target runtime."""
     secs = estimate_target_seconds(target_duration)
-    return max(4, min(90, round(secs / 7)))
+    return max(4, round(secs / 7))
 
 
 def story_generation_user_prompt(
@@ -420,6 +420,7 @@ def build_script_chunk_messages(
     chunk_start: int,
     chunk_scenes: int,
     previous_tail: list[dict[str, Any]] | None = None,
+    beat_arc: str | None = None,
 ) -> list[dict[str, str]]:
     """Prompt for ONE chunk of a longer script (scenes `chunk_start`..
     `chunk_start + chunk_scenes - 1`), so a 20+ scene board is written in
@@ -468,6 +469,7 @@ scenes outside {chunk_start}..{last}.
 
 Story beats:
 {beat_lines or '(none)'}
+{('Beat arc: ' + beat_arc) if beat_arc else ''}
 
 Characters:
 {char_lines or '(none)'}

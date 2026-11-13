@@ -1,11 +1,5 @@
-"""Agent session runner: persistence + asyncio task lifecycle.
+"""Session adapter. Routers keep calling this object; the run lives in runtime."""
 
-Runs agent turns as asyncio tasks (LLM-bound work stays off the ComfyUI job
-queue, which is render-bound). The session event log is the source of truth:
-the loop appends events; the runner derives LLM history from it, backfills
-legacy agent_messages sessions on first run, and broadcasts agent.message /
-agent.session.updated events.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -14,292 +8,180 @@ import logging
 from typing import Any
 
 from calliope.agent.harness import log as session_log
-from calliope.agent.harness.orchestrator import orchestrate
-from calliope.agent.harness.registry import ToolContext
+from calliope.agent.runtime.run_service import execute
+from calliope.agent.runtime.types import StreamSink
 from calliope.config import settings
-from calliope.db import get_db
+from calliope.db import get_db, row_to_dict
 from calliope.events.bus import event_bus
 
-logger = logging.getLogger("calliope.harness.runner")
+logger = logging.getLogger("calliope.agent")
 
 
-class AgentRunner:
+class _StreamPublisher(StreamSink):
+    """Batches LLM stream deltas into throttled SSE publishes.
+
+    The llm client invokes token()/reasoning()/usage() synchronously inside
+    its stream loop, while event_bus.publish is async — so deltas buffer and
+    drain on an 80ms task (one SSE event per window instead of per token).
+    flush() drains the tail before the turn settles so nothing strands after
+    the final assistant message. Usage reports accumulate for the turn and
+    land on the assistant/message event data.
+    """
+
+    FLUSH_DELAY = 0.08
+
+    def __init__(self, session_id: int) -> None:
+        self._session_id = session_id
+        self.role: str | None = None
+        self._tokens: list[str] = []
+        self._reasoning: list[str] = []
+        self.usage_totals: dict[str, int] = {}
+        self._task: asyncio.Task[None] | None = None
+
+    def token(self, content: str) -> None:
+        self._tokens.append(content)
+        self._schedule()
+
+    def reasoning(self, content: str) -> None:
+        self._reasoning.append(content)
+        self._schedule()
+
+    def usage(self, usage: dict[str, Any]) -> None:
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                self.usage_totals[key] = self.usage_totals.get(key, 0) + int(value)
+
+    def _schedule(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.get_running_loop().create_task(self._flush_soon())
+
+    async def _flush_soon(self) -> None:
+        await asyncio.sleep(self.FLUSH_DELAY)
+        await self.flush()
+
+    async def flush(self) -> None:
+        if self._tokens:
+            joined = "".join(self._tokens)
+            self._tokens.clear()
+            await event_bus.publish(
+                "agent.token",
+                {"session_id": self._session_id, "content": joined},
+            )
+        if self._reasoning:
+            joined = "".join(self._reasoning)
+            self._reasoning.clear()
+            await event_bus.publish(
+                "agent.thinking",
+                {
+                    "session_id": self._session_id,
+                    "agent_name": self.role,
+                    "content": joined,
+                },
+            )
+
+
+class Runner:
     def __init__(self) -> None:
-        self._tasks: dict[int, asyncio.Task] = {}
-        # Guards the is_running check → task registration span in start_turn:
-        # awaits in between (event publishes, DB writes) would otherwise let a
-        # concurrent POST slip past the check and double-run one session.
-        self._start_lock = asyncio.Lock()
-
-    # ── persistence ──────────────────────────────────────────────
-
-    def _db(self):
-        return get_db(settings.db_path)
-
-    def _set_status(self, session_id: int, status: str) -> None:
-        conn = self._db()
-        try:
-            conn.execute(
-                "UPDATE agent_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (status, session_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    async def _publish_session(self, session_id: int) -> None:
-        from calliope.routers.agent import session_event_payload
-
-        session = await session_event_payload(session_id)
-        if session:
-            await event_bus.publish("agent.session.updated", {"session": session})
-
-    def _persist_message(
-        self,
-        session_id: int,
-        *,
-        role: str,
-        content: str,
-        agent_name: str | None = None,
-        tool_name: str | None = None,
-        tool_args: dict[str, Any] | None = None,
-        tool_result: Any = None,
-        status: str | None = None,
-        append_event: bool = True,
-        extra_event_data: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Mirror into agent_messages (legacy chat rows) + optionally append
-        the corresponding session event. The event log is the source of truth;
-        tool exchanges are appended by the loop itself (append_event=False in
-        the sink to avoid duplicates)."""
-        if append_event:
-            event_type = {
-                "user": session_log.USER_MESSAGE,
-                "assistant": session_log.ASSISTANT_MESSAGE,
-            }.get(role)
-            if event_type is not None:
-                data: dict[str, Any] = {
-                    "content": content,
-                    "agent_name": agent_name,
-                    "status": status,
-                }
-                if extra_event_data:
-                    data.update(extra_event_data)
-                session_log.append_event(session_id, event_type, data)
-        conn = self._db()
-        try:
-            cur = conn.execute(
-                """
-                INSERT INTO agent_messages
-                (session_id, role, content, agent_name, tool_name, tool_args_json, tool_result_json, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    role,
-                    content or "",
-                    agent_name,
-                    tool_name,
-                    json.dumps(tool_args, ensure_ascii=False) if tool_args else None,
-                    json.dumps(tool_result, ensure_ascii=False, default=str)
-                    if tool_result is not None
-                    else None,
-                    status,
-                ),
-            )
-            conn.execute(
-                "UPDATE agent_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (session_id,),
-            )
-            conn.commit()
-            from calliope.db import row_to_dict
-
-            row = conn.execute(
-                "SELECT * FROM agent_messages WHERE id = ?", (cur.lastrowid,)
-            ).fetchone()
-            out = row_to_dict(row)
-            # Echo the parsed shapes alongside the raw *_json strings, so the
-            # live agent.message SSE row has the same shape as GET
-            # /sessions/{id} rows (which derive from the parsed event log).
-            # AgentChat derives the ask_user question card from
-            # tool_result.options — raw-string rows made the card invisible
-            # until a page reload (PR #49).
-            if out.get("tool_args_json"):
-                try:
-                    out["tool_args"] = json.loads(out["tool_args_json"])
-                except (json.JSONDecodeError, TypeError):
-                    out["tool_args"] = None
-            if out.get("tool_result_json"):
-                try:
-                    out["tool_result"] = json.loads(
-                        out["tool_result_json"], strict=False
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    out["tool_result"] = None
-            return out
-        finally:
-            conn.close()
-
-    def _make_message_sink(self, session_id: int):
-        """Persistence + broadcast sink for harness messages (planner notes,
-        sub-agent reports). Tool calls/results are already logged by the loop
-        via the event log — the sink only mirrors them into agent_messages."""
-
-        async def sink(message: dict[str, Any]) -> None:
-            tool_result = message.get("tool_result")
-            if tool_result is not None:
-                # Bound the mirrored copy (event log caps its own at 16KB):
-                # agent_messages.tool_result_json and the SSE echo must not
-                # carry multi-hundred-KB comfy_mcp payloads verbatim.
-                text = json.dumps(tool_result, ensure_ascii=False, default=str)
-                if len(text) > session_log.EVENT_DATA_TRUNCATE:
-                    tool_result = {
-                        "truncated": True,
-                        "preview": text[: session_log.EVENT_DATA_TRUNCATE] + "…[truncated]",
-                    }
-            persisted = self._persist_message(
-                session_id,
-                role=message.get("role") or "assistant",
-                content=message.get("content") or "",
-                agent_name=message.get("agent_name"),
-                tool_name=message.get("tool_name"),
-                tool_args=message.get("tool_args")
-                if isinstance(message.get("tool_args"), dict)
-                else None,
-                tool_result=tool_result,
-                status=message.get("status"),
-                append_event=False,  # the loop already logged these events
-            )
-            await event_bus.publish("agent.message", {"message": persisted})
-
-        return sink
-
-    # ── session lifecycle ────────────────────────────────────────
+        self._running: set[int] = set()
+        self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._cancel: dict[int, asyncio.Event] = {}
+        self._steer_seq: dict[int, int] = {}
+        self._streams: dict[int, _StreamPublisher] = {}
 
     def is_running(self, session_id: int) -> bool:
-        task = self._tasks.get(session_id)
-        return task is not None and not task.done()
+        return session_id in self._running
 
-    def recover_orphaned_sessions(self) -> int:
-        """Reset sessions stuck in ``running`` at startup.
-
-        A crashed or killed process never reaches the loop's ``turn/end``
-        (its finally-block died with it), so those rows stay ``running``
-        forever — the UI shows a phantom "Working…" state with a dead Stop
-        button and the session looks unresumable. At startup no tasks exist
-        yet, so every ``running`` row is orphaned by definition. Returns the
-        number of rows reset."""
-        conn = self._db()
+    def recover_orphaned_sessions(self) -> None:
+        """A process restart leaves no live task. Those rows go back to idle."""
+        conn = get_db(settings.db_path)
         try:
-            stuck = [r["id"] for r in conn.execute(
-                "SELECT id FROM agent_sessions WHERE status = 'running'"
-            ).fetchall()]
-            if stuck:
-                conn.execute(
-                    "UPDATE agent_sessions SET status = 'idle' WHERE status = 'running'"
-                )
-                conn.commit()
-                logger.warning(
-                    "Startup recovery: reset %d agent session(s) left 'running' "
-                    "by a previous process: %s",
-                    len(stuck), stuck,
-                )
-            return len(stuck)
+            conn.execute(
+                "UPDATE agent_sessions SET status = 'idle' WHERE status = 'running'"
+            )
+            conn.commit()
         finally:
             conn.close()
+
+    async def shutdown(self) -> None:
+        tasks = list(self._tasks.values())
+        for event in self._cancel.values():
+            event.set()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        self._cancel.clear()
+        self._running.clear()
 
     async def start_turn(
         self,
         session_id: int,
-        user_message: str,
+        content: str,
         *,
         mentions: list[dict[str, Any]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         answer_to: int | None = None,
+        thinking: str | None = None,
     ) -> dict[str, Any]:
-        """Persist the user message and kick off the agent turn. Returns the
-        persisted user message dict. Raises RuntimeError when already running.
-
-        `answer_to` marks the message as the answer to an ask_user question
-        card (the question's event seq); the structured approval is recorded
-        as a question/answered event before the turn starts."""
-        if answer_to is not None:
-            # Record the structured answer FIRST so the user/message echo is
-            # its immediate successor in the log (policy.latest_answer's
-            # adjacency rule) and guards see the approval for this turn.
-            from calliope.agent.harness.plugins.interaction import latest_open_question
-
-            open_q = latest_open_question(session_id)
-            if open_q is not None and open_q["seq"] == answer_to:
-                session_log.append_event(
-                    session_id,
-                    session_log.QUESTION_ANSWERED,
-                    {
-                        "question_seq": answer_to,
-                        "answer": user_message.strip()[:200],
-                        "scope": open_q.get("scope") or "info",
-                    },
-                )
-        async with self._start_lock:
-            if self.is_running(session_id):
-                raise RuntimeError("Session is already running a turn")
-
-            conn = self._db()
-            try:
-                row = conn.execute(
-                    "SELECT * FROM agent_sessions WHERE id = ?", (session_id,)
-                ).fetchone()
-                if not row:
-                    raise ValueError("Session not found")
-                session = dict(row)
-            finally:
-                conn.close()
-
-            extra: dict[str, Any] = {}
-            if mentions:
-                extra["mentions"] = mentions
-            if attachments:
-                extra["attachments"] = attachments
-            user_msg = self._persist_message(
-                session_id,
-                role="user",
-                content=user_message,
-                extra_event_data=extra or None,
+        if session_id in self._running:
+            raise RuntimeError("Session is running")
+        conn = get_db(settings.db_path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM agent_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("Session not found")
+            cur = conn.execute(
+                """
+                INSERT INTO agent_messages (session_id, role, content, status)
+                VALUES (?, 'user', ?, NULL)
+                """,
+                (session_id, content),
             )
-            if mentions:
-                user_msg["mentions"] = mentions
-            if attachments:
-                user_msg["attachments"] = attachments
-            await event_bus.publish("agent.message", {"message": user_msg})
-
-            # Auto-title from the first user message
-            if session["title"] in ("New chat", ""):
-                title_src = user_message.strip().splitlines()[0] if user_message.strip() else ""
-                if not title_src and mentions:
-                    title_src = f"@{mentions[0].get('name') or 'workflow'}"
-                if not title_src and attachments:
-                    title_src = str(attachments[0].get("name") or "Attachments")
-                title = (title_src or "New chat")[:60]
-                conn = self._db()
-                try:
-                    conn.execute(
-                        "UPDATE agent_sessions SET title = ? WHERE id = ?",
-                        (title, session_id),
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
-
-            self._set_status(session_id, "running")
-            task = asyncio.create_task(
-                self._run_session(session_id), name=f"agent-session-{session_id}"
+            conn.execute(
+                """
+                UPDATE agent_sessions
+                SET status = 'running', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (session_id,),
             )
-            self._tasks[session_id] = task
-            task.add_done_callback(lambda t: self._tasks.pop(session_id, None))
-        # Outside the lock: publish after registration so listeners see the
-        # task already registered (running=true).
+            conn.commit()
+            stored = conn.execute(
+                "SELECT * FROM agent_messages WHERE id = ?", (int(cur.lastrowid),)
+            ).fetchone()
+            message = row_to_dict(stored)
+        finally:
+            conn.close()
+        message["mentions"] = mentions or []
+        message["attachments"] = attachments or []
+        message["tool_args"] = None
+        message["tool_result"] = None
+        self._running.add(session_id)
+        seq = session_log.append_event(
+            session_id,
+            "user/message",
+            {
+                "role": "user",
+                "content": content,
+                "mentions": mentions or [],
+                "attachments": attachments or [],
+                "answer_to": answer_to,
+                "thinking": thinking,
+            },
+        )
+        self._steer_seq[session_id] = seq
+        self._cancel[session_id] = asyncio.Event()
+        await self._publish_message(message)
         await self._publish_session(session_id)
-        return user_msg
+        self._tasks[session_id] = asyncio.create_task(
+            self._run(session_id, content, thinking, mentions, attachments),
+            name=f"calliope-run-{session_id}",
+        )
+        return message
 
     async def steer(
         self,
@@ -309,137 +191,301 @@ class AgentRunner:
         mentions: list[dict[str, Any]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
-        """Persist + publish a mid-run steering message. No new turn.
-
-        Only valid while a turn is running (the router falls back to this when
-        POST /messages hits the running-session 409). The event is
-        `steering/message`, NOT user/message — policy derives render and
-        destructive approval from the latest user/message, so steering must
-        never silently grant or void permissions. The running loop drains
-        these between steps and injects them into its in-flight request
-        history. Returns the published chat row, or None when the session is
-        not running (caller should start a normal turn instead).
-        """
-        if not self.is_running(session_id):
+        if session_id not in self._running:
             return None
-
-        extra: dict[str, Any] = {}
-        if mentions:
-            extra["mentions"] = mentions
-        if attachments:
-            extra["attachments"] = attachments
-        event = session_log.append_event(
-            session_id,
-            session_log.STEERING_MESSAGE,
-            {"content": content, **extra},
-        )
-        # Mirror into agent_messages so legacy readers see the row; the event
-        # log stays authoritative (role user, status steering).
-        conn = self._db()
+        conn = get_db(settings.db_path)
         try:
             cur = conn.execute(
                 """
-                INSERT INTO agent_messages
-                (session_id, role, content, agent_name, status)
-                VALUES (?, 'user', ?, NULL, 'steering')
+                INSERT INTO agent_messages (session_id, role, content, status)
+                VALUES (?, 'user', ?, 'steering')
                 """,
-                (session_id, content or ""),
+                (session_id, content),
             )
             conn.commit()
-            row = conn.execute(
-                "SELECT * FROM agent_messages WHERE id = ?", (cur.lastrowid,)
+            stored = conn.execute(
+                "SELECT * FROM agent_messages WHERE id = ?", (int(cur.lastrowid),)
             ).fetchone()
+            message = row_to_dict(stored)
         finally:
             conn.close()
-        from calliope.db import row_to_dict
-
-        out = row_to_dict(row)
-        out["seq"] = event.seq
-        if mentions:
-            out["mentions"] = mentions
-        if attachments:
-            out["attachments"] = attachments
-        await event_bus.publish("agent.message", {"message": out})
-        return out
-
-    async def _run_session(self, session_id: int) -> None:
-        conn = self._db()
-        try:
-            row = conn.execute(
-                "SELECT project_id, origin FROM agent_sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            project_id = row["project_id"] if row else None
-            origin = (row["origin"] if row else None) or "chat"
-        finally:
-            conn.close()
-
-        ctx = ToolContext(
-            session_id=session_id,
-            project_id=project_id,
-            origin=origin,
+        message["mentions"] = mentions or []
+        message["attachments"] = attachments or []
+        message["tool_args"] = None
+        message["tool_result"] = None
+        session_log.append_event(
+            session_id,
+            "steering/message",
+            {"role": "user", "content": content, "status": "steering"},
         )
-        try:
-            final = await orchestrate(
-                ctx,
-                [],  # history derived inside from the event log
-                session_id=session_id,
-                on_message=self._make_message_sink(session_id),
-            )
-            # Final answer is persisted + broadcast by the loop's emit() call
-            # (which goes through the message sink). Only set status here.
-            self._set_status(session_id, "idle")
-        except asyncio.CancelledError:
-            self._persist_message(
-                session_id,
-                role="assistant",
-                content="— run cancelled —",
-                status="cancelled",
-            )
-            self._set_status(session_id, "idle")
-            raise
-        except Exception as exc:  # noqa: BLE001 — surfaced to the chat as the reply
-            logger.exception("Agent turn failed for session %s", session_id)
-            self._persist_message(
-                session_id,
-                role="assistant",
-                content=f"Agent error: {exc}",
-                status="error",
-            )
-            self._set_status(session_id, "error")
-        finally:
-            await self._publish_session(session_id)
+        await self._publish_message(message)
+        return message
 
     async def cancel(self, session_id: int) -> bool:
         task = self._tasks.get(session_id)
-        if task is None or task.done():
+        if session_id not in self._running and (task is None or task.done()):
             return False
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-        # The cancelled task's own finally-block publish races the reaper
-        # (the CancelledError re-raise can tear down before the sink/publish
-        # completes) — republish unconditionally so every subscribed canvas
-        # flips back to idle immediately, without a manual refresh.
+        event = self._cancel.get(session_id)
+        if event is not None:
+            event.set()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._running.discard(session_id)
+        self._tasks.pop(session_id, None)
+        self._cancel.pop(session_id, None)
         self._set_status(session_id, "idle")
         await self._publish_session(session_id)
         return True
 
-    async def shutdown(self) -> None:
-        tasks = [t for t in list(self._tasks.values()) if not t.done()]
-        for task in tasks:
-            task.cancel()
-        # Reap cancelled tasks so LLM / comfy-mcp resources actually close
-        # instead of leaking (each task's CancelledError is consumed here).
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
-        # Tear down the shared comfy-mcp subprocess if it was ever spawned.
-        from calliope.agent.harness.plugins.comfy_mcp import _client, _get_client  # noqa: F401
+    async def _run(
+        self,
+        session_id: int,
+        content: str,
+        thinking: str | None = None,
+        mentions: list[dict[str, Any]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
+        status = "idle"
+        sink = _StreamPublisher(session_id)
+        self._streams[session_id] = sink
+        try:
+            project_id, origin = self._scope(session_id)
+            result = await execute(
+                session_id,
+                project_id,
+                content,
+                origin=origin,
+                thinking=thinking,
+                cancel=self._cancel.get(session_id),
+                pull_steering=lambda: self._drain_steering(session_id),
+                on_tool=lambda name, args, tool_result: self._on_tool(
+                    session_id, name, args, tool_result
+                ),
+                on_plan=lambda tasks, note: self._on_plan(session_id, tasks, note),
+                on_task=lambda index, task_status, role="script": self._on_task(
+                    session_id, index, task_status, role
+                ),
+                stream=sink,
+                attachments=attachments,
+                mentions=mentions,
+            )
+            await sink.flush()
+            await self._store_assistant(
+                session_id, result.text, agent_name=None, usage=sink.usage_totals or None
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("agent run failed session=%s", session_id)
+            status = "error"
+            await self._store_assistant(
+                session_id,
+                "The run failed before a scene check completed.",
+                agent_name=None,
+            )
+        finally:
+            try:
+                await sink.flush()
+            except Exception:  # noqa: BLE001 - SSE tail must not mask the outcome
+                logger.exception("stream flush failed session=%s", session_id)
+            self._running.discard(session_id)
+            self._tasks.pop(session_id, None)
+            self._cancel.pop(session_id, None)
+            self._streams.pop(session_id, None)
+            self._set_status(session_id, status)
+            await self._publish_session(session_id)
 
-        if _client is not None:
-            await _client.close()
+    def _drain_steering(self, session_id: int) -> list[str]:
+        notes, seq = session_log.steering_after(
+            session_id, self._steer_seq.get(session_id, 0)
+        )
+        self._steer_seq[session_id] = seq
+        return notes
+
+    def _scope(self, session_id: int) -> tuple[int | None, str]:
+        conn = get_db(settings.db_path)
+        try:
+            row = conn.execute(
+                "SELECT project_id, origin FROM agent_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None, "chat"
+            project_id = None if row["project_id"] is None else int(row["project_id"])
+            origin = row["origin"] if row["origin"] in ("chat", "scene") else "chat"
+            return project_id, origin
+        finally:
+            conn.close()
+
+    def _set_status(self, session_id: int, status: str) -> None:
+        conn = get_db(settings.db_path)
+        try:
+            conn.execute(
+                """
+                UPDATE agent_sessions
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (status, session_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    async def _on_plan(self, session_id: int, tasks: list[dict[str, Any]], note: str) -> None:
+        session_log.append_event(session_id, "plan/created", {"tasks": tasks, "note": note})
+        await event_bus.publish(
+            "agent.plan", {"session_id": session_id, "tasks": tasks, "note": note}
+        )
+
+    async def _on_task(
+        self, session_id: int, index: int, status: str, role: str = "script"
+    ) -> None:
+        sink = self._streams.get(session_id)
+        if sink is not None:
+            sink.role = role
+        event_type = "task/start" if status == "running" else "task/end"
+        session_log.append_event(
+            session_id,
+            event_type,
+            {"index": index, "status": status, "role": role},
+        )
+        await event_bus.publish(
+            "agent.task",
+            {
+                "session_id": session_id,
+                "index": index,
+                "status": status,
+                "role": role,
+            },
+        )
+
+    async def _on_tool(
+        self,
+        session_id: int,
+        name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        await event_bus.publish(
+            "agent.tool",
+            {"session_id": session_id, "phase": "start", "tool": name, "args": args},
+        )
+        if name == "ask_user" and result.get("ok"):
+            # Allocate the question event FIRST so the tool result carries the
+            # real seq — the UI's answer_to and the guards' approval scan both
+            # match on it (a placeholder 0 would match nothing).
+            seq = session_log.append_event(
+                session_id,
+                "question/asked",
+                {
+                    "question": result.get("question"),
+                    "options": result.get("options"),
+                    "scope": result.get("scope"),
+                },
+            )
+            result["question_seq"] = seq
+        content = json.dumps(result)[:2000]
+        conn = get_db(settings.db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO agent_messages
+                    (session_id, role, content, tool_name, tool_args_json, tool_result_json)
+                VALUES (?, 'tool', ?, ?, ?, ?)
+                """,
+                (session_id, content, name, json.dumps(args), json.dumps(result)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        session_log.append_event(
+            session_id,
+            "tool/result",
+            {
+                "role": "tool",
+                "content": content,
+                "tool_name": name,
+                "tool_args": args,
+                "tool_result": result,
+                "agent_name": "script",
+            },
+        )
+        await event_bus.publish(
+            "agent.tool",
+            {
+                "session_id": session_id,
+                "phase": "finish",
+                "tool": name,
+                "args": args,
+                "result": result,
+            },
+        )
+
+    async def _store_assistant(
+        self,
+        session_id: int,
+        content: str,
+        *,
+        agent_name: str | None,
+        usage: dict[str, int] | None = None,
+    ) -> None:
+        conn = get_db(settings.db_path)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO agent_messages (session_id, role, content, agent_name)
+                VALUES (?, 'assistant', ?, ?)
+                """,
+                (session_id, content, agent_name),
+            )
+            conn.commit()
+            stored = conn.execute(
+                "SELECT * FROM agent_messages WHERE id = ?", (int(cur.lastrowid),)
+            ).fetchone()
+            message = row_to_dict(stored)
+        finally:
+            conn.close()
+        message["tool_args"] = None
+        message["tool_result"] = None
+        message["mentions"] = []
+        message["attachments"] = []
+        event_data: dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "agent_name": agent_name,
+        }
+        if usage:
+            # Reported by the endpoint on the stream; never fabricated.
+            event_data["usage"] = usage
+        session_log.append_event(session_id, "assistant/message", event_data)
+        await self._publish_message(message)
+
+    async def _publish_message(self, message: dict[str, Any]) -> None:
+        await event_bus.publish("agent.message", {"message": message})
+
+    async def _publish_session(self, session_id: int) -> None:
+        conn = get_db(settings.db_path)
+        try:
+            row = conn.execute(
+                "SELECT * FROM agent_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if not row:
+                return
+            session = row_to_dict(row)
+            if session.get("project_id"):
+                project = conn.execute(
+                    "SELECT id, title, status FROM projects WHERE id = ?",
+                    (session["project_id"],),
+                ).fetchone()
+                session["project"] = row_to_dict(project) if project else None
+            else:
+                session["project"] = None
+        finally:
+            conn.close()
+        session["running"] = self.is_running(session_id)
+        await event_bus.publish("agent.session.updated", {"session": session})
 
 
-runner = AgentRunner()
+runner = Runner()

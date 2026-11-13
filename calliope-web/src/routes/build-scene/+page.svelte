@@ -546,6 +546,7 @@ function toggleChat() {
 						composerNonce++;
 					}}
 					onAnswer={handleQuestionAnswer}
+					{sessionId}
 				/>
 				<AgentComposer
 					{running}

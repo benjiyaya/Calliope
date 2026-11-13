@@ -24,6 +24,7 @@
 	import AgentPlanPanel from '$lib/components/agent/AgentPlanPanel.svelte';
 	import ImageLightbox from '$lib/components/ImageLightbox.svelte';
 	import EntityNode from '$lib/canvas/EntityNode.svelte';
+	import type { ComposerReference } from '$lib/canvas/NodeComposer.svelte';
 	import ArtifactNodeComp from '$lib/canvas/ArtifactNode.svelte';
 	import { clipPresentation, currentClipPaths, storyEdges } from '$lib/canvas/storyEdges';
 	import Icon from '$lib/components/ui/Icon.svelte';
@@ -150,6 +151,56 @@
 		preview = { src, kind, caption };
 	}
 
+	function longestText(values: Record<string, unknown> | null | undefined): string {
+		if (!values) return '';
+		const strings = Object.values(values).filter(
+			(value): value is string => typeof value === 'string' && value.trim().length > 0,
+		);
+		strings.sort((a, b) => b.length - a.length);
+		return strings[0] ?? '';
+	}
+
+	function mediaRefs(values: Record<string, unknown> | null | undefined) {
+		const out: { kind: 'image' | 'audio' | 'video'; url: string; name: string }[] = [];
+		if (!values) return out;
+		const visit = (value: unknown) => {
+			if (typeof value === 'string') {
+				const lower = value.toLowerCase();
+				const kind = /\.(mp4|webm|mov)$/.test(lower)
+					? 'video'
+					: /\.(mp3|wav|m4a|ogg|flac|aac)$/.test(lower)
+						? 'audio'
+						: /\.(png|jpe?g|webp|gif)$/.test(lower)
+							? 'image'
+							: null;
+				const url = kind ? assetUrl(value) : null;
+				if (kind && url) {
+					out.push({ kind, url, name: value.split(/[/\\]/).pop() ?? value });
+				}
+				return;
+			}
+			if (Array.isArray(value)) value.forEach(visit);
+			else if (value && typeof value === 'object') {
+				Object.values(value as Record<string, unknown>).forEach(visit);
+			}
+		};
+		Object.values(values).forEach(visit);
+		return out;
+	}
+
+	function jobPrompt(job: Job | undefined): { prompt: string; workflowId: number | null } {
+		const payload = job?.payload ?? {};
+		const typed = typeof payload.prompt === 'string' ? payload.prompt.trim() : '';
+		const values =
+			payload.input_values && typeof payload.input_values === 'object'
+				? (payload.input_values as Record<string, unknown>)
+				: null;
+		return {
+			prompt: typed || longestText(values),
+			workflowId: job?.workflow_id ?? null,
+		};
+	}
+
 	// ---- graph sync ----------------------------------------------------------
 
 	let syncVersion = $state(0);
@@ -214,6 +265,23 @@
 						? clipPresentation(scenes, n.entity_id)
 						: null;
 				if (n.type === 'image' || n.type === 'video') {
+					const job =
+						n.job_id != null ? jobs.find((row) => row.id === n.job_id) : undefined;
+					const fromJob = jobPrompt(job);
+					let stored: Record<string, unknown> = {};
+					try {
+						stored = JSON.parse(n.input_values_json || '{}') as Record<string, unknown>;
+					} catch {
+						stored = {};
+					}
+					const title = (n.title ?? 'Artifact').replace(/\s· #\d+$/, '');
+					const prompt = fromJob.prompt || longestText(stored) || title;
+					const workflowId = n.workflow_id ?? fromJob.workflowId;
+					const payloadValues =
+						job?.payload?.input_values && typeof job.payload.input_values === 'object'
+							? (job.payload.input_values as Record<string, unknown>)
+							: {};
+					const references = mediaRefs({ ...stored, ...payloadValues });
 					return {
 						id: `cn-${n.id}`,
 						type: n.type,
@@ -224,14 +292,40 @@
 							artifactPath: n.artifact_path,
 							kind: n.type,
 							status: nodeRunning.get(n.id) ? 'running' : n.status,
-							onOpenMedia: (kind: 'image' | 'video') =>
-								openMediaPreview(kind, n.artifact_path, n.title ?? 'Artifact'),
+							prompt,
+							workflowId,
+							references,
+							onPreview: () =>
+								openMediaPreview(n.type as 'image' | 'video', n.artifact_path, title),
+							onRegenerate: (next: string) => regenerateCard(n.id, next),
+							onRequestReview: (next: string) =>
+								requestGenerationReview({
+									nodeId: n.id,
+									prompt: next,
+									mediaUrl: n.artifact_path ? assetUrl(n.artifact_path) : null,
+									references,
+								}),
+							onSendToAgent: (next: string) => setComposerDraft(next),
 						},
 					};
 				}
 				const caption = clipView
 					? `${clipView.mention} · ${clipView.subtitle}`
 					: (n.title ?? 'Untitled');
+				const clip =
+					n.entity_type === 'clip' && n.entity_id != null
+						? scenes
+								.flatMap((scene) => scene.clips ?? [])
+								.find((row) => row.id === n.entity_id)
+						: undefined;
+				const clipPrompt =
+					clip?.video_settings?.prompt_draft?.trim() ||
+					clip?.description?.trim() ||
+					'';
+				const clipReferences = mediaRefs(
+					(clip?.video_settings as { input_values?: Record<string, unknown> } | undefined)
+						?.input_values,
+				);
 				return {
 					id: `cn-${n.id}`,
 					type: 'entity' as const,
@@ -248,10 +342,26 @@
 						mention: clipView?.mention ?? null,
 						imagePath: media.imagePath,
 						videoPath: media.videoPath,
+						prompt: clipPrompt,
+						workflowId: clip?.workflow_id ?? null,
+						references: clipReferences,
 						onOpenMedia: (kind: 'image' | 'video') =>
 							kind === 'video'
 								? openMediaPreview('video', media.videoPath, caption)
 								: openMediaPreview('image', media.imagePath, caption),
+						onPreview: () =>
+							media.videoPath
+								? openMediaPreview('video', media.videoPath, caption)
+								: openMediaPreview('image', media.imagePath, caption),
+						onRegenerate: (next: string) => regenerateCard(n.id, next),
+						onRequestReview: (next: string) =>
+							requestGenerationReview({
+								nodeId: n.id,
+								prompt: next,
+								mediaUrl: assetUrl(media.videoPath) ?? assetUrl(media.imagePath),
+								references: clipReferences,
+							}),
+						onSendToAgent: (next: string) => setComposerDraft(next),
 					},
 				};
 			});
@@ -572,6 +682,39 @@
 		});
 	}
 
+	// Once a sandbox chat is linked, leave this board for the project canvas.
+	// The session list regroups from the same session payload; the project
+	// canvas GET seeds the new cards. A reload is not required.
+	let followedProjectId: number | null = null;
+
+	async function followProject(projectId: number, sessionId: number) {
+		if (canvas?.project_id === projectId || followedProjectId === projectId) return;
+		followedProjectId = projectId;
+		try {
+			const graph = await canvasApi.ensureForProject(projectId);
+			await client.invalidateQueries({ queryKey: ['agent-sessions'] });
+			if (graph.canvas.id === canvasId) {
+				await client.invalidateQueries({ queryKey: ['canvas', canvasId] });
+				await client.invalidateQueries({ queryKey: ['canvas-scenes'] });
+				await client.invalidateQueries({ queryKey: ['canvas-assets'] });
+				return;
+			}
+			goto(`/canvas/${graph.canvas.id}?session=${sessionId}`);
+		} catch (err) {
+			followedProjectId = null;
+			toast.error(err instanceof Error ? err.message : t('canvas.openThatFailed'));
+		}
+	}
+
+	$effect(() => {
+		const pid = activeSession?.project_id ?? null;
+		const sid = activeSession?.id ?? null;
+		const canvasPid = canvas?.project_id ?? null;
+		if (pid == null) return;
+		if (sid == null || pid === canvasPid) return;
+		void followProject(pid, sid);
+	});
+
 	// Selecting a session from another scope navigates to that scope's canvas.
 	async function selectSession(id: number) {
 		const s = sessions.find((x) => x.id === id);
@@ -602,6 +745,36 @@
 		livePlan = null;
 		composerDraft = '';
 		composerNonce = 0;
+	}
+
+	let generationReview = $state<{
+		nodeId: number;
+		prompt: string;
+		mediaUrl: string | null;
+		references: ComposerReference[];
+	} | null>(null);
+
+	function requestGenerationReview(review: NonNullable<typeof generationReview>) {
+		generationReview = review;
+	}
+
+	async function confirmGenerationReview() {
+		const review = generationReview;
+		if (!review || !review.prompt.trim()) return;
+		await regenerateCard(review.nodeId, review.prompt.trim());
+		generationReview = null;
+	}
+
+	async function regenerateCard(nodeId: number, prompt: string) {
+		try {
+			await canvasApi.regenerate(canvasId, nodeId, prompt);
+			toast.success(t('canvas.regenQueued'));
+			await client.invalidateQueries({ queryKey: ['agent-project-jobs'] });
+			await client.invalidateQueries({ queryKey: ['playground-jobs'] });
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('canvas.regenFailed'));
+			throw err;
+		}
 	}
 
 	function setComposerDraft(text: string) {
@@ -842,9 +1015,16 @@
 					}
 					// Script and cast edits land as tool results. Refetch the
 					// board so new clip cards and story lines appear without a
-					// reload. Thinking-token deltas must not do this.
+					// reload. A create_project result also leaves the sandbox.
 					client.invalidateQueries({ queryKey: ['canvas', canvasId] });
 					client.invalidateQueries({ queryKey: ['canvas-scenes'] });
+					client.invalidateQueries({ queryKey: ['canvas-assets'] });
+					const linked = Number(
+						(ev.data?.result as { project_id?: number } | undefined)?.project_id,
+					);
+					if (Number.isFinite(linked) && linked > 0 && activeId != null) {
+						void followProject(linked, activeId);
+					}
 				}
 			} else if (ev.type === 'agent.plan') {
 				if (ev.data?.session_id !== activeId) return;
@@ -907,7 +1087,10 @@
 		// the worker on the event — no race with the jobs poll). Other
 		// sandbox tabs' scratch jobs cannot cross-post.
 		const evPid = data?.project_id == null ? null : Number(data.project_id);
-		if (canvas?.project_id != null) {
+		const evCanvas = Number(data?.canvas_id);
+		if (Number.isFinite(evCanvas)) {
+			if (evCanvas !== canvasId) return;
+		} else if (canvas?.project_id != null) {
 			if (evPid !== canvas.project_id) return;
 		} else {
 			if (!activeSession) return;
@@ -1255,6 +1438,15 @@ title={running
 						suggestions={SUGGESTIONS}
 						onSuggestion={setComposerDraft}
 						onAnswer={handleQuestionAnswer}
+						sessionId={activeId}
+						onReviewed={async (summary) => {
+							toast.success(summary);
+							await client.invalidateQueries({ queryKey: ['agent-project-jobs'] });
+							await client.invalidateQueries({ queryKey: ['playground-jobs'] });
+							if (activeId != null) {
+								await client.invalidateQueries({ queryKey: ['agent-session', activeId] });
+							}
+						}}
 					/>
 					{#if running && plan && plan.tasks.length > 0}
 						<AgentPlanPanel {plan} />
@@ -1296,9 +1488,126 @@ title={running
 			onClose={() => (preview = null)}
 		/>
 	{/if}
+
+	{#if generationReview}
+		<div class="generation-review" role="dialog" aria-label={t('agentChat.reviewHint')}>
+			<p class="generation-title">{t('agentChat.reviewHint')}</p>
+			<textarea
+				class="generation-prompt"
+				rows="10"
+				aria-label={t('canvas.prompt')}
+				value={generationReview.prompt}
+				oninput={(event) => {
+					if (!generationReview) return;
+					generationReview = {
+						...generationReview,
+						prompt: (event.currentTarget as HTMLTextAreaElement).value,
+					};
+				}}
+			></textarea>
+			<div class="generation-media">
+				{#if generationReview.mediaUrl}
+					{#if generationReview.mediaUrl.match(/\.(mp4|webm|mov)(\?|#|$)/i)}
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<video controls src={generationReview.mediaUrl}></video>
+					{:else}
+						<img src={generationReview.mediaUrl} alt="" />
+					{/if}
+				{/if}
+				{#each generationReview.references as ref (`${ref.kind}-${ref.url}`)}
+					{#if ref.kind === 'audio'}
+						<audio controls src={ref.url}></audio>
+					{:else if ref.kind === 'video'}
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<video controls src={ref.url}></video>
+					{:else}
+						<img src={ref.url} alt={ref.name ?? ''} />
+					{/if}
+				{/each}
+			</div>
+			<div class="generation-actions">
+				<button type="button" class="generation-go" onclick={confirmGenerationReview}>
+					{t('agentChat.generateNow')}
+				</button>
+				<button type="button" onclick={() => (generationReview = null)}>
+					{t('agentChat.revise')}
+				</button>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
+	.generation-review {
+		position: fixed;
+		z-index: 40;
+		top: 72px;
+		right: 24px;
+		width: min(560px, calc(100vw - 40px));
+		max-height: calc(100vh - 96px);
+		overflow: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		padding: 16px;
+		background: var(--bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+		border-radius: var(--radius-md);
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+	}
+	.generation-title {
+		margin: 0;
+		font-size: 13px;
+		font-weight: 650;
+	}
+	.generation-prompt {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		min-height: 160px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--bg-surface);
+		color: var(--text-primary);
+		font: inherit;
+		font-size: 13px;
+		line-height: 1.45;
+		padding: 8px 10px;
+	}
+	.generation-media {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.generation-media img,
+	.generation-media video,
+	.generation-media audio {
+		width: 100%;
+		max-height: 240px;
+		border-radius: 8px;
+		background: black;
+		object-fit: contain;
+	}
+	.generation-actions {
+		display: flex;
+		gap: 8px;
+	}
+	.generation-actions button {
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-primary);
+		font: inherit;
+		font-size: 13px;
+		font-weight: 650;
+		padding: 6px 14px;
+		cursor: pointer;
+	}
+	.generation-go {
+		background: var(--accent) !important;
+		border-color: var(--accent) !important;
+		color: white !important;
+	}
 	.shell {
 		display: flex;
 		flex-direction: column;

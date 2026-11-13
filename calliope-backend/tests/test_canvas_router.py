@@ -286,8 +286,7 @@ def test_post_artifact_to_canvas_from_job(client, monkeypatch):
     """post_artifact_to_canvas resolves a finished job's output into a card."""
     import asyncio
 
-    from calliope.agent.harness.plugins.canvas import t_post_artifact
-    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.capabilities import canvas_ops
 
     pid = client.post("/api/projects", json={"title": "Post", "idea": "x"}).json()["id"]
     sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
@@ -313,8 +312,9 @@ def test_post_artifact_to_canvas_from_job(client, monkeypatch):
 
     monkeypatch.setattr(bus_mod.event_bus, "publish", fake_publish)
 
-    ctx = ToolContext(session_id=sid, project_id=pid)
-    result = asyncio.run(t_post_artifact(ctx, {"job_id": 9001}))
+    result = asyncio.run(
+        canvas_ops.post_artifact_to_canvas(pid, sid, {"job_id": 9001})
+    )
     assert result["ok"] is True, result
     assert result["type"] == "image"
     assert result["artifact_path"] == "C:/assets/out_0001_.png"
@@ -333,8 +333,7 @@ def test_post_artifact_video_kind_from_asset_path(client, monkeypatch):
     """asset_path extension decides image vs video; no disk check needed."""
     import asyncio
 
-    from calliope.agent.harness.plugins.canvas import t_post_artifact
-    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.capabilities import canvas_ops
 
     pid = client.post("/api/projects", json={"title": "PostV", "idea": "x"}).json()["id"]
     sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
@@ -347,9 +346,10 @@ def test_post_artifact_video_kind_from_asset_path(client, monkeypatch):
 
     monkeypatch.setattr(bus_mod.event_bus, "publish", fake_publish)
 
-    ctx = ToolContext(session_id=sid, project_id=pid)
     result = asyncio.run(
-        t_post_artifact(ctx, {"asset_path": "C:/clips/scene_3.mp4", "title": "Scene 3"})
+        canvas_ops.post_artifact_to_canvas(
+            pid, sid, {"asset_path": "C:/clips/scene_3.mp4", "title": "Scene 3"}
+        )
     )
     assert result["ok"] is True, result
     assert result["type"] == "video"
@@ -363,16 +363,14 @@ def test_post_artifact_video_kind_from_asset_path(client, monkeypatch):
 def test_post_artifact_requires_job_or_asset(client):
     import asyncio
 
-    from calliope.agent.harness.plugins.canvas import t_post_artifact
-    from calliope.agent.harness.registry import ToolContext
+    from calliope.agent.capabilities import canvas_ops
 
     pid = client.post("/api/projects", json={"title": "PostN", "idea": "x"}).json()["id"]
     sid = client.post("/api/agent/sessions", json={"project_id": pid}).json()["id"]
     # Session needs a canvas for the scope check to pass before arg validation.
     client.post("/api/canvas", json={"project_id": pid})
 
-    ctx = ToolContext(session_id=sid, project_id=pid)
-    result = asyncio.run(t_post_artifact(ctx, {}))
+    result = asyncio.run(canvas_ops.post_artifact_to_canvas(pid, sid, {}))
     assert result["ok"] is False
     assert "job_id" in result["error"]
 

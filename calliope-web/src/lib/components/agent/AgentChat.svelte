@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { AgentMessage, Job } from '$lib/api';
-	import { assetUrl } from '$lib/api';
+	import { agentApi, assetUrl } from '$lib/api';
 	import type { WorkflowMention } from '$lib/agentComposer';
 	import AgentToolCard from './AgentToolCard.svelte';
 	import AgentArtifactCard, { type ArtifactJob } from './AgentArtifactCard.svelte';
@@ -28,6 +28,10 @@
 		onSuggestion?: (prompt: string) => void;
 		/** Called with an option's label + scope when a question-card option is clicked. */
 		onAnswer?: (option: string, scope: string, questionSeq: number) => void;
+		/** Session that owns a generation review card. */
+		sessionId?: number | null;
+		/** Called after the user presses Generate on a review card. */
+		onReviewed?: (summary: string) => void;
 	}
 
 	let {
@@ -41,6 +45,8 @@
 		loading = false,
 		onSuggestion,
 		onAnswer,
+		sessionId = null,
+		onReviewed,
 	}: Props = $props();
 
 	let listEl = $state<HTMLDivElement | null>(null);
@@ -158,6 +164,82 @@
 		return null;
 	});
 
+	interface ReviewMedia {
+		id: number;
+		entity: 'character' | 'location' | 'item' | 'clip';
+		name: string;
+		prompt: string;
+		images?: string[];
+		audios?: string[];
+		videos?: string[];
+	}
+
+	interface OpenReview {
+		messageId: number;
+		kind: 'image' | 'video';
+		items: ReviewMedia[];
+	}
+
+	const openReview = $derived.by<OpenReview | null>(() => {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.role === 'user') return null;
+			if (m.role !== 'tool' || !m.tool_result) continue;
+			const result = m.tool_result as {
+				awaiting_review?: boolean;
+				review?: { kind?: string; items?: ReviewMedia[] };
+			};
+			const items = result.review?.items;
+			if (result.awaiting_review && Array.isArray(items) && items.length > 0) {
+				return {
+					messageId: m.id,
+					kind: result.review?.kind === 'video' ? 'video' : 'image',
+					items,
+				};
+			}
+		}
+		return null;
+	});
+
+	let reviewDrafts = $state<Record<string, string>>({});
+	let reviewBusy = $state(false);
+	let reviewError = $state('');
+	let reviewSentFor = $state<number | null>(null);
+
+	function reviewKey(item: ReviewMedia): string {
+		return `${item.entity}:${item.id}`;
+	}
+
+	function reviewPrompt(item: ReviewMedia): string {
+		return reviewDrafts[reviewKey(item)] ?? item.prompt ?? '';
+	}
+
+	function setReviewPrompt(item: ReviewMedia, value: string) {
+		reviewDrafts = { ...reviewDrafts, [reviewKey(item)]: value };
+	}
+
+	async function confirmReview() {
+		if (!openReview || sessionId == null || reviewBusy) return;
+		reviewBusy = true;
+		reviewError = '';
+		try {
+			const result = await agentApi.confirmReview(sessionId, {
+				kind: openReview.kind,
+				items: openReview.items.map((item) => ({
+					id: item.id,
+					entity: item.entity,
+					prompt: reviewPrompt(item).trim(),
+				})),
+			});
+			reviewSentFor = openReview.messageId;
+			onReviewed?.(`Queued ${result.jobs?.length ?? 0} jobs.`);
+		} catch (err) {
+			reviewError = err instanceof Error ? err.message : t('canvas.regenFailed');
+		} finally {
+			reviewBusy = false;
+		}
+	}
+
 	function answerLabel(scope: string): string {
 		if (scope === 'render') return t('agentChat.approveRender');
 		if (scope === 'destructive_replace') return t('agentChat.approveReplace');
@@ -248,6 +330,76 @@
 					result={m.tool_result}
 					phase={toolPhase(m)}
 				/>
+				{#if openReview && reviewSentFor !== openReview.messageId && m.id === openReview.messageId}
+					<div class="review-card">
+						<p class="question-text">{t('agentChat.reviewHint')}</p>
+						{#each openReview.items as item (reviewKey(item))}
+							<section class="review-item">
+								<p class="review-name">{item.name}</p>
+								<textarea
+									class="review-prompt"
+									rows="6"
+									value={reviewPrompt(item)}
+									aria-label={t('canvas.prompt')}
+									oninput={(event) =>
+										setReviewPrompt(item, (event.currentTarget as HTMLTextAreaElement).value)}
+								></textarea>
+								{#if (item.images ?? []).length > 0}
+									<div class="review-media">
+										{#each item.images ?? [] as path (path)}
+											{@const href = assetUrl(path)}
+											{#if href}
+												<img src={href} alt={item.name} />
+											{/if}
+										{/each}
+									</div>
+								{/if}
+								{#if (item.audios ?? []).length > 0}
+									<div class="review-audio">
+										{#each item.audios ?? [] as path (path)}
+											{@const href = assetUrl(path)}
+											{#if href}
+												<audio controls src={href}></audio>
+											{/if}
+										{/each}
+									</div>
+								{/if}
+								{#if (item.videos ?? []).length > 0}
+									<div class="review-media">
+										{#each item.videos ?? [] as path (path)}
+											{@const href = assetUrl(path)}
+											{#if href}
+												<!-- svelte-ignore a11y_media_has_caption -->
+												<video controls src={href}></video>
+											{/if}
+										{/each}
+									</div>
+								{/if}
+							</section>
+						{/each}
+						{#if reviewError}
+							<p class="review-error">{reviewError}</p>
+						{/if}
+						<div class="question-options">
+							<button
+								type="button"
+								class="question-option affirmative"
+								disabled={reviewBusy || sessionId == null}
+								onclick={confirmReview}
+							>
+								{t('agentChat.generateNow')}
+							</button>
+							<button
+								type="button"
+								class="question-option"
+								disabled={reviewBusy}
+								onclick={() => onSuggestion?.(t('agentChat.revisePrompt'))}
+							>
+								{t('agentChat.revise')}
+							</button>
+						</div>
+					</div>
+				{/if}
 				{#if m.tool_name === 'ask_user' && lastQuestion && m.id === messages.findLast((x) => x.role === 'tool' && x.tool_name === 'ask_user')?.id}
 					<div class="question-card">
 						{#if lastQuestion.question}
@@ -526,6 +678,67 @@
 		border: 1px solid var(--border);
 		border-left: 3px solid var(--agent, var(--accent));
 		color: var(--text-primary);
+	}
+	.review-card {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		width: 100%;
+		max-height: min(70vh, 720px);
+		overflow: auto;
+		margin: 2px 0 8px;
+		padding: 14px;
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+	}
+	.review-item {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.review-name {
+		margin: 0;
+		font-size: 12px;
+		font-weight: 650;
+		color: var(--text-secondary);
+	}
+	.review-prompt {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		min-height: 120px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--bg-surface);
+		color: var(--text-primary);
+		font: inherit;
+		font-size: 13px;
+		line-height: 1.45;
+		padding: 8px 10px;
+	}
+	.review-media {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.review-media img,
+	.review-media video,
+	.review-audio audio {
+		max-width: 100%;
+		max-height: 220px;
+		border-radius: 8px;
+		background: black;
+	}
+	.review-audio {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.review-error {
+		margin: 0;
+		color: var(--danger, #c44);
+		font-size: 12px;
 	}
 	.question-card {
 		display: flex;
