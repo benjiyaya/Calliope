@@ -21,7 +21,7 @@ from calliope.agent.continuity import (
     media_paths,
     stored_continuity_plan,
 )
-from calliope.agent.harness.log import _image_attachment_data_url
+from calliope.agent.media import _image_attachment_data_url
 from calliope.agent.llm import LLMClient
 from calliope.agent.prompts import minimax_h3_ref_fallback, scene_video_prompt
 from calliope.agent.skills_store import read_skill_file

@@ -300,20 +300,6 @@ async def patch_session(session_id: int, payload: SessionPatch) -> dict[str, Any
                 "UPDATE agent_sessions SET title = ? WHERE id = ?",
                 (payload.title, session_id),
             )
-        if payload.unlink:
-            conn.execute(
-                "UPDATE agent_sessions SET project_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (session_id,),
-            )
-        elif payload.project_id is not None:
-            if not conn.execute(
-                "SELECT id FROM projects WHERE id = ?", (payload.project_id,)
-            ).fetchone():
-                raise HTTPException(status_code=404, detail="Project not found")
-            conn.execute(
-                "UPDATE agent_sessions SET project_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (payload.project_id, session_id),
-            )
         conn.commit()
         row = conn.execute(
             "SELECT * FROM agent_sessions WHERE id = ?", (session_id,)

@@ -15,8 +15,6 @@ from calliope.agent.media import project_user_content
 from calliope.agent.runtime.types import StreamSink
 from calliope.config import settings
 
-AGENT_ID = "script"
-
 # ── JSON-action bridge (no-function-calling endpoints) ────────────────────
 # When a step returns zero tool_calls but a tools payload WAS sent, a fenced
 # ```json {"tool": name, "arguments": {...}} block (or a bare object with the

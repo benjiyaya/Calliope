@@ -653,6 +653,12 @@ class LLMClient:
             payload["tools"] = tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
+        # Same window protection the streaming path has: the tool schemas and
+        # the system prompt are invisible to the history char trim, so the
+        # reply ceiling is what keeps a long agent turn inside the window.
+        ceiling = resolve_max_tokens(_payload_messages_for_estimate(messages, tools), None)
+        if ceiling is not None:
+            payload["max_tokens"] = ceiling
         _merge_extra_body(payload, self.thinking_extra_body)
         url = f"{self.base_url}/chat/completions"
         logger.info("LLM tool-call request to %s with model %s", url, self.model)

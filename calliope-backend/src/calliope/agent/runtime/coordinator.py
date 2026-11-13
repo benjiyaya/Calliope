@@ -20,9 +20,35 @@ from calliope.agent.runtime.subagent import SubagentResult, run_subagent
 from calliope.agent.runtime.task_completion import assess_task_completion
 from calliope.agent.runtime.types import Call, Run, StreamSink, Task
 from calliope.config import settings
+from calliope.db import get_db
 
 # First try plus two retries. The call stays running until the last one settles.
 MAX_ATTEMPTS = 3
+
+
+def _pending_session_jobs(session_id: int) -> int:
+    """Count pending/running jobs stamped with this session.
+
+    Agent enqueues stamp `session_id` into the payload (the same key
+    queue_manager.cancel_by_session scans). A read-call for assets/render is
+    not "ready" while the jobs it just asked about are still in flight.
+    """
+    conn = get_db(settings.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT payload_json FROM jobs WHERE status IN ('pending', 'running')"
+        ).fetchall()
+        count = 0
+        for r in rows:
+            try:
+                payload = json.loads(r["payload_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if payload.get("session_id") == session_id:
+                count += 1
+        return count
+    finally:
+        conn.close()
 
 
 def _trim_history(history: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
@@ -132,7 +158,14 @@ async def dispatch(
                 for row in list_scene_heads(run.project_id)
                 if int(row["id"]) not in before_ids
             ]
-        gate = assess_task_completion(has_final_answer=result.finished)
+        pending_jobs = (
+            _pending_session_jobs(run.session_id)
+            if grant in ("assets", "render")
+            else 0
+        )
+        gate = assess_task_completion(
+            has_final_answer=result.finished, pending_jobs=pending_jobs
+        )
         changed = before != after
         if (write_required and changed) or (gate.ready and not write_required):
             call.status = "succeeded"
@@ -147,6 +180,11 @@ async def dispatch(
             finished=result.finished,
             label=label,
         )
+        if gate.reason == "pending_jobs":
+            note = (
+                f"{note}\n{pending_jobs} job(s) are still pending or running. "
+                "Call wait_for_jobs to await them, or state the handoff."
+            )
         prompt = f"{goal}\n\n{note}"
         history = _trim_history(
             list(result.transcript), int(settings.history_char_budget())

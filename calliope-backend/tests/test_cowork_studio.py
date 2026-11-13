@@ -1203,3 +1203,158 @@ async def test_agent_story_uses_more_than_one_model_call(board, monkeypatch):
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_plain_chat_gets_a_conversational_reply(board, monkeypatch):
+    """A message naming no studio verb gets one chat call; the sentence is the model's."""
+    scripted = Scripted(
+        [ChatTurn(content="The valley-at-dawn opening is strong. I would sharpen the fog beat.")]
+    )
+    monkeypatch.setattr(subagent_mod, "LLMClient", scripted)
+    result = await handle(
+        board["session_id"], board["project_id"], "What do you think so far?"
+    )
+    assert result.task_status == "verified"
+    assert result.call is not None
+    assert result.call.agent_id == "story"
+    assert result.text == (
+        "The valley-at-dawn opening is strong. I would sharpen the fog beat."
+    )
+    # The chat call saw the story grant's payload (beats/cast tools present).
+    assert "add_beat" in scripted.tools[0]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_chat_falls_back_to_canvas_grant(board, monkeypatch):
+    conn = get_db(settings.db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_sessions (project_id, title, status, origin)
+            VALUES (NULL, 'Sandbox chat', 'idle', 'chat')
+            """
+        )
+        session_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+    scripted = Scripted([ChatTurn(content="Hi! I can draft a story or run a workflow.")])
+    monkeypatch.setattr(subagent_mod, "LLMClient", scripted)
+    result = await handle(session_id, None, "hello there")
+    assert result.task_status == "verified"
+    assert result.call is not None
+    assert result.call.agent_id == "canvas"
+    assert "create_canvas_node" in scripted.tools[0]
+    assert result.text.startswith("Hi!")
+
+
+@pytest.mark.asyncio
+async def test_attachment_only_message_gets_a_reply(board, monkeypatch):
+    """No prose, only an image: the fallback chats and the model still sees the media."""
+    scripted = Scripted([ChatTurn(content="That reference reads as a dusk valley.")])
+    monkeypatch.setattr(subagent_mod, "LLMClient", scripted)
+    result = await handle(
+        board["session_id"],
+        board["project_id"],
+        "",
+        attachments=[{"path": str(settings.assets_dir / "ref.png"), "kind": "image"}],
+    )
+    assert result.task_status == "verified"
+    assert result.text == "That reference reads as a dusk valley."
+    assert "ref.png" in scripted.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_chat_call_pausing_on_ask_user_reports_blocked(board, monkeypatch):
+    scripted = Scripted(
+        [
+            ChatTurn(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_ask",
+                        name="ask_user",
+                        arguments={
+                            "question": "Which tone should the story take?",
+                            "options": ["Gritty", "Warm"],
+                            "scope": "info",
+                        },
+                    )
+                ],
+            )
+        ]
+    )
+    monkeypatch.setattr(subagent_mod, "LLMClient", scripted)
+    result = await handle(
+        board["session_id"], board["project_id"], "What tone fits?"
+    )
+    assert result.task_status == "blocked"
+    assert result.text == "Waiting for your answer."
+
+
+@pytest.mark.asyncio
+async def test_render_read_is_not_ready_while_session_jobs_run(board, monkeypatch):
+    """A render read-call retries until the session-stamped jobs settle."""
+    conn = get_db(settings.db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO jobs (project_id, kind, status, payload_json)
+            VALUES (?, 'video', 'running', ?)
+            """,
+            (
+                board["project_id"],
+                json.dumps({"session_id": board["session_id"], "input_values": {}}),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def settle_jobs() -> None:
+        conn = get_db(settings.db_path)
+        try:
+            conn.execute(
+                "UPDATE jobs SET status = 'done' WHERE project_id = ?",
+                (board["project_id"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    class Settling(Scripted):
+        async def chat(self, messages, tools=None, *, temperature=0.2):
+            if self.prompts:
+                settle_jobs()  # done by the time attempt 2's gate runs
+            return await super().chat(messages, tools, temperature=temperature)
+
+    scripted = Settling(
+        [
+            ChatTurn(content="Still rendering, give me a moment."),
+            ChatTurn(content="The render is done — the clip is in the queue."),
+        ]
+    )
+    monkeypatch.setattr(subagent_mod, "LLMClient", scripted)
+    result = await handle(
+        board["session_id"], board["project_id"], "wait for the video to finish"
+    )
+    assert result.task_status == "verified"
+    # Attempt 1 finished prose-only → the pending-jobs gate rejected it; the
+    # recovery note demanded wait_for_jobs; attempt 2 found the jobs settled.
+    assert "still pending or running" in scripted.prompts[1]
+    assert result.text.startswith("The render is done")
+
+
+def test_render_status_questions_schedule_reads_not_enqueues():
+    done = schedule("Is the render done yet?")
+    assert [(item.grant, item.write_required) for item in done] == [("render", False)]
+    ready = schedule("Check if the portrait is ready")
+    assert [(item.grant, item.write_required) for item in ready] == [("assets", False)]
+    # The imperative still writes — the verb leads the question word.
+    render = schedule("render scene 1")
+    assert [item.grant for item in render] == ["render"]
+    assert render[0].write_required is True
+    enqueue = schedule("generate an image for the main character")
+    assets_plans = [item for item in enqueue if item.grant == "assets"]
+    assert assets_plans and assets_plans[0].write_required is True

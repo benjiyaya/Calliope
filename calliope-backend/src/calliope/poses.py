@@ -1,6 +1,6 @@
 """Built-in pose library for the shot-builder (port of open-media's
 public/poses/authoredPoses.json, MIT). Values are the serialized mannequin-js
-v7 posture format — see harness/plugins/shot_builder.py for the entry table.
+v7 posture format — see agent/capabilities/shot_ops.py for the entry table.
 """
 from __future__ import annotations
 

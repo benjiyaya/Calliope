@@ -1,7 +1,10 @@
 """Main is the only speaker.
 
 It schedules scoped calls, then reads the table that call was allowed to
-change. The sentence returned to the user is built from that read.
+change. The sentence returned to the user is built from that read — except
+for the conversational fallback: a message that names no studio verb gets
+one chat call (story when linked, canvas when sandbox), and its sentence
+is the model's own reply.
 """
 
 from __future__ import annotations
@@ -44,12 +47,25 @@ _PROJECT = re.compile(
 )
 _ASSETS = re.compile(
     r"\b(portrait|sheet|reference image)s?\b"
-    r"|\bgenerate\b.+\b(character|location|item)s?\b.+\bimage\b",
+    r"|\bgenerate\b.+\b(character|location|item)s?\b.+\bimage\b"
+    r"|\bgenerate\b.+\bimage\b.+\b(character|location|item)s?\b",
     re.I,
 )
 _WAIT = re.compile(r"\bwait\b|when the jobs finish", re.I)
 _IMAGE_WAIT = re.compile(r"\b(image|portrait|sheet|character|location|item)s?\b", re.I)
 _VIDEO_WAIT = re.compile(r"\b(video|clip|render)s?\b", re.I)
+# A status QUESTION ("is the render done?", "check if the portrait is ready")
+# must not schedule the enqueue WRITE. The question words must also appear
+# before any imperative verb — "what did the render cost" reads, "render the
+# scene" writes.
+_RENDER_STATUS = re.compile(
+    r"\b(is|are|was|were|how|what|check|status|done|finished|ready|progress|yet)\b",
+    re.I,
+)
+_RENDER_IMPERATIVE = re.compile(
+    r"\b(generate|enqueue|make|create|produce|start|run|film|animate|re-?render|render)\b",
+    re.I,
+)
 # A @workflow mention lands in the [Calliope context] appendix as
 # workflow_id=N — that is a canvas cue even when the prose never says canvas.
 _WORKFLOW_MENTION = re.compile(r"^workflow_id=\d+", re.M)
@@ -73,6 +89,9 @@ class _CallPlan:
     grant: str
     write_required: bool
     required_tool: str | None
+    # A conversational call: the sentence comes from the model's reply, not a
+    # table read. Only synthesized by handle() when schedule() names nothing.
+    chat: bool = False
 
 
 def _script_tool(text: str) -> str | None:
@@ -164,6 +183,16 @@ def schedule(goal: str, origin: str = "chat") -> list[_CallPlan]:
     project = bool(_PROJECT.search(text))
     render = bool(_RENDER.search(text) and _RENDER_TARGET.search(text))
     preview = bool(_PREVIEW.search(text) and _RENDER_TARGET.search(text))
+    # Status question → read plan. The question word must lead the imperative
+    # ("is the render done" vs "render the scene"); when no imperative verb
+    # appears at all, any question word settles it. For a bare status question
+    # the render word itself is the target ("is the render done?" names no
+    # video/clip/scene noun).
+    status_q = _RENDER_STATUS.search(text)
+    imperative = _RENDER_IMPERATIVE.search(text)
+    status_read = bool(status_q and (not imperative or status_q.start() < imperative.start()))
+    if not render and _RENDER.search(text) and status_read:
+        render = True
     script_tool = _script_tool(text) if _SCRIPT.search(text) else None
     script_selected = bool(_SCRIPT.search(text)) and (
         script_tool is not None or not (render or preview)
@@ -181,9 +210,15 @@ def schedule(goal: str, origin: str = "chat") -> list[_CallPlan]:
     if script_selected and not project:
         _append(plans, _CallPlan("script", script_tool is not None, script_tool))
     if _ASSETS.search(text):
-        _append(plans, _CallPlan("assets", True, "enqueue_asset_jobs"))
+        if status_read and _IMAGE_WAIT.search(text):
+            _append(plans, _CallPlan("assets", False, None))
+        else:
+            _append(plans, _CallPlan("assets", True, "enqueue_asset_jobs"))
     if render:
-        _append(plans, _CallPlan("render", True, "enqueue_video_jobs"))
+        if status_read:
+            _append(plans, _CallPlan("render", False, None))
+        else:
+            _append(plans, _CallPlan("render", True, "enqueue_video_jobs"))
     elif preview:
         _append(plans, _CallPlan("render", False, None))
     if _CANVAS.search(text) or _WORKFLOW_MENTION.search(text):
@@ -259,19 +294,22 @@ async def handle(
     mentions: list[dict[str, Any]] | None = None,
 ) -> TurnResult:
     # The schedule regex reads the mentions appendix too — a @workflow pick is
-    # a canvas cue even when the prose never says "canvas".
+    # a canvas cue even when the prose never says "canvas". Attachments are
+    # deliberately NOT in the cue: their path/name lines would trip the
+    # studio-verb regexes ("portrait.png" → assets write). They reach the
+    # model as media parts via dispatch instead.
     cue = goal
     appendix = format_calliope_context(mentions)
     if appendix:
         cue = f"{goal}\n\n{appendix}"
     plans = schedule(cue, origin)
-    if not plans:
-        return TurnResult(
-            text="No studio change was requested.",
-            call=None,
-            task_status="verified",
-        )
     linked = project_id is not None and project_exists(project_id)
+    if not plans:
+        # Conversational fallback: the message named no studio verb — plain
+        # prose or attachments-only — so schedule one chat call: story reads
+        # when the session is linked, canvas tools when it is sandbox. The
+        # reply streams like any other call; its sentence is the model's own.
+        plans = [_CallPlan("story" if linked else "canvas", False, None, chat=True)]
     creating = bool(_PROJECT.search(goal or ""))
     # Canvas calls work on the sandbox canvas (get-or-create, keyed by the
     # session) — every other grant needs a linked project (story may create
@@ -321,33 +359,46 @@ async def handle(
         )
         last_call = call
         if call.status == "blocked":
-            sentences.append(
-                "Review the prompt and the reference media, then press Generate."
-            )
+            if plan.chat:
+                sentences.append(call.summary.strip() or "Waiting for your answer.")
+            else:
+                sentences.append(
+                    "Review the prompt and the reference media, then press Generate."
+                )
             status = "blocked"
             await _emit(on_task, index, "blocked", plan.grant)
             break
         if call.status != "succeeded":
             status = "failed"
-            missed_scene = (
-                plan.grant == "script"
-                and plan.required_tool == "add_scene"
-                and project_id is not None
-            )
-            if missed_scene:
-                sentences.append(_failure_line(project_id))
+            if plan.chat:
+                sentences.append("The reply could not be generated.")
             else:
-                sentences.append(_miss_line(project_id, plan.grant, session_id))
+                missed_scene = (
+                    plan.grant == "script"
+                    and plan.required_tool == "add_scene"
+                    and project_id is not None
+                )
+                if missed_scene:
+                    sentences.append(_failure_line(project_id))
+                else:
+                    sentences.append(_miss_line(project_id, plan.grant, session_id))
             await _emit(on_task, index, "failed", plan.grant)
             break
-        if plan.grant == "script" and created and project_id is not None:
+        if plan.chat:
+            sentences.append(call.summary.strip() or "Done.")
+        elif plan.grant == "script" and created and project_id is not None:
             sentences.append(_created_line(created))
         elif not plan.write_required and plan.grant == "script" and project_id is not None:
             sentences.append(_count_line(project_id))
         elif not plan.write_required:
             label, count = live_stat(project_id, plan.grant, session_id)
             noun = label[:-1] if count == 1 and label.endswith("s") else label
-            sentences.append(f"The project has {count} {noun}.")
+            if plan.required_tool == "wait_for_jobs" and call.summary.strip():
+                # "Wait for the render" ends with the model's outcome report —
+                # a job count is not what the user asked to hear.
+                sentences.append(call.summary.strip())
+            else:
+                sentences.append(f"The project has {count} {noun}.")
         else:
             sentences.append(_hit_line(project_id, plan.grant, session_id))
         await _emit(on_task, index, "verified", plan.grant)

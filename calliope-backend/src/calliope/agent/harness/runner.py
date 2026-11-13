@@ -368,6 +368,8 @@ class Runner:
         args: dict[str, Any],
         result: dict[str, Any],
     ) -> None:
+        sink = self._streams.get(session_id)
+        sink_role = getattr(sink, "role", None) or "script"
         await event_bus.publish(
             "agent.tool",
             {"session_id": session_id, "phase": "start", "tool": name, "args": args},
@@ -409,7 +411,9 @@ class Runner:
                 "tool_name": name,
                 "tool_args": args,
                 "tool_result": result,
-                "agent_name": "script",
+                # The running grant (set from task/start), never a hardcoded
+                # name — the sink's role is the only source of truth here.
+                "agent_name": sink_role,
             },
         )
         await event_bus.publish(

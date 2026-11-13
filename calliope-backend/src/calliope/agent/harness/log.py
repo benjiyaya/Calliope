@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from calliope.config import settings
@@ -180,33 +178,6 @@ def derive_plan(events: list[Event]) -> dict[str, Any] | None:
             if isinstance(index, int) and 0 <= index < len(tasks) and event.data.get("status"):
                 tasks[index]["status"] = event.data["status"]
     return plan
-
-
-def _image_attachment_data_url(path: str) -> str | None:
-    """Data URL for a reference image under assets_dir. Missing or huge files return None."""
-    if not path:
-        return None
-    target = Path(path)
-    if not target.is_file():
-        return None
-    try:
-        target.resolve().relative_to(settings.assets_dir.resolve())
-    except ValueError:
-        return None
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }.get(target.suffix.lower())
-    if mime is None:
-        return None
-    raw = target.read_bytes()
-    if len(raw) > 512_000:
-        return None
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
 
 
 def steering_after(session_id: int, seq: int) -> tuple[list[str], int]:
