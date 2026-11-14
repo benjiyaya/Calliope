@@ -1,6 +1,6 @@
-# Calliope changelog — 14 November 2026
+# Calliope 1.7.0 — agent engine rewrite and gap fixes
 
-Notes for GitHub. **Unreleased** — the current Windows zip is still **1.6.2**; this lands in the next release.
+Release **v1.7.0**, 2026-11-14. The plugin harness is gone; the agent loop is a grant-scoped studio runtime, the capabilities it dropped are restored, and plain chat converses again.
 
 ## The agent loop has been rewritten
 
