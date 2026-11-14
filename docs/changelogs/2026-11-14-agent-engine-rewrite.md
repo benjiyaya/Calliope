@@ -18,7 +18,7 @@ The first cut of the rewrite silently lost capabilities the old harness had. All
 
 - **Live streaming** — assistant tokens and per-agent reasoning stream into the chat (`agent.token` / `agent.thinking`), and token usage lands on the final message when the endpoint reports it.
 - **Multimodal attachments** — images (gated + downscaled, 4K included), videos (up to 8 evenly-spaced frames with a timestamp map), and documents (.txt/.md/.docx) reach the model, not just the event log.
-- **@workflow and @skill mentions** are consumed as context again; the composer pickers work on canvas and Build Scene.
+- **Composer mentions** — `@workflow` / `@skill` tags are consumed as context again; the pickers work on canvas and Build Scene.
 - **JSON-action bridge** — local models that can't emit function-call JSON still operate the studio (fenced `{"tool": …, "arguments": …}` replies execute through the same audited path, capped 8/turn).
 - **Hardening + history budget** — the Settings → Agent hardening rules append to every sub-agent prompt; retry transcripts trim by a character budget so a long turn can't overflow a local model's window.
 - **Build Scene poses** — the real 16-pose library is back (it was stubbed to two empty poses).
