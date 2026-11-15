@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { language, setLanguage, type Language } from '$lib/i18n.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { language, setLanguage, t, LANGUAGE_OPTIONS, type Language } from '$lib/i18n.svelte';
 </script>
 
 <select
@@ -9,14 +8,9 @@
 	aria-label={t('common.language')}
 	onchange={(e) => setLanguage(e.currentTarget.value as Language)}
 >
-	<option value="de">Deutsch</option>
-	<option value="en">English</option>
-	<option value="es">Español</option>
-	<option value="fr">Français</option>
-	<option value="ja">日本語</option>
-	<option value="ko">한국어</option>
-	<option value="ru">Русский</option>
-	<option value="zh">中文</option>
+	{#each LANGUAGE_OPTIONS as { code, label }}
+		<option value={code}>{label}</option>
+	{/each}
 </select>
 
 <style>
