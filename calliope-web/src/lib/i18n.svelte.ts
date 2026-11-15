@@ -4,15 +4,16 @@ import { es } from './i18n/es';
 import { fr } from './i18n/fr';
 import { ja } from './i18n/ja';
 import { ko } from './i18n/ko';
+import { ru } from './i18n/ru';
 import { zh } from './i18n/zh';
 
 import { storageGet, storageSet } from './storage';
 
-export type Language = 'en' | 'zh' | 'es' | 'fr' | 'de' | 'ja' | 'ko';
+export type Language = 'en' | 'zh' | 'es' | 'fr' | 'de' | 'ja' | 'ko' | 'ru';
 
 export type Dict = typeof en;
 
-const dictionaries: Record<Language, Record<string, string>> = { en, zh, es, fr, de, ja, ko };
+const dictionaries: Record<Language, Record<string, string>> = { en, zh, es, fr, de, ja, ko, ru };
 
 const STORAGE_KEY = 'calliope-lang';
 
